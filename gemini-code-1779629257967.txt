@@ -1,0 +1,32 @@
+📦 watch-auto-publisher (Thư mục gốc dự án)
+┣ 📂 frontend               <-- GIAO DIỆN WEBSITE (Nhân sự thao tác ở đây)
+┃ ┣ 📂 public               (Chứa logo, favicon, ảnh tĩnh)
+┃ ┣ 📂 src                  
+┃ ┃ ┣ 📂 components         (Các mảnh ghép giao diện: Nút bấm, Bảng dữ liệu, Form tải file Excel)
+┃ ┃ ┣ 📂 pages              (Các trang màn hình chính)
+┃ ┃ ┃ ┣ 📜 Dashboard.jsx    (Màn hình tổng quan, biểu đồ số lượng bài đã đăng)
+┃ ┃ ┃ ┣ 📜 Inventory.jsx    (Màn hình quản lý biến thể, màu mặt, loại dây)
+┃ ┃ ┃ ┣ 📜 Calendar.jsx     (Lịch đăng bài trực quan)
+┃ ┃ ┃ ┗ 📜 Settings.jsx     (Nơi dán API Key của Meta, TikTok, OpenAI)
+┃ ┃ ┣ 📂 services           (Nơi chứa các hàm gọi API xuống Backend của bạn)
+┃ ┃ ┗ 📂 styles             (CSS, màu sắc nhận diện thương hiệu)
+┃ ┗ 📜 package.json
+┃
+┣ 📂 backend                <-- BỘ NÃO XỬ LÝ (Không có giao diện, chỉ chạy ngầm)
+┃ ┣ 📂 src                  
+┃ ┃ ┣ 📂 config             (File kết nối PostgreSQL, kết nối Cloudinary/Bunny)
+┃ ┃ ┣ 📂 models             (Định nghĩa cấu trúc Database: Bảng SKU, Bảng Bài viết)
+┃ ┃ ┣ 📂 routes             (Đường dẫn API nội bộ. VD: /api/upload-excel, /api/publish)
+┃ ┃ ┣ 📂 controllers        (Nhận lệnh từ Frontend và điều phối công việc)
+┃ ┃ ┣ 📂 services           (Khu vực cốt lõi nhất - Giao tiếp với thế giới bên ngoài)
+┃ ┃ ┃ ┣ 📜 ai.service.js    (Chứa prompt và gọi API ChatGPT/Gemini để viết caption)
+┃ ┃ ┃ ┣ 📜 meta.service.js  (Chứa logic đăng bài, up ảnh lên FB, IG, Threads)
+┃ ┃ ┃ ┗ 📜 tiktok.service.js(Chứa logic up video lên TikTok)
+┃ ┃ ┗ 📂 workers            (Hệ thống công nhân chạy ngầm - Cực kỳ quan trọng)
+┃ ┃   ┣ 📜 queue.js         (Hàng đợi tin nhắn - Message Queue)
+┃ ┃   ┗ 📜 cronjob.js       (Hẹn giờ đăng bài, tạo độ trễ Delay chống Spam)
+┃ ┗ 📜 package.json
+┃
+┣ 📜 docker-compose.yml     (File khởi tạo nhanh Database PostgreSQL và Redis)
+┣ 📜 .env                   (Tuyệt mật: Chứa toàn bộ API Key, Mật khẩu Database)
+┗ 📜 README.md              (Hướng dẫn cài đặt cho lập trình viên)

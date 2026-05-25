@@ -1,0 +1,180 @@
+{
+  "name": "My workflow",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "test-ai",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -320,
+        16
+      ],
+      "id": "9bc4829a-60f8-4e5b-a581-2a223e09ca28",
+      "name": "Webhook",
+      "webhookId": "100c0b1b-1c8b-4958-8a4c-c38ad60e79b6"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "models/gemini-3-flash-preview"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "=Hãy đóng vai một chuyên gia content marketing. Viết DUY NHẤT 1 bài đăng Facebook để bán mẫu đồng hồ có mã SKU là: {{$json.body.sku}}. \n\nDưới đây là toàn bộ thông tin chi tiết về sản phẩm này (Màu sắc, Chất liệu, Giá bán...):\n{{ $json.body.productInfoText }}\n\nYêu cầu bắt buộc:\n- Viết ngắn gọn, thu hút, chốt sale tốt. Tôn lên được các ưu điểm trong phần thông tin chi tiết bên trên.\n- Có sử dụng biểu tượng cảm xúc và hashtag phù hợp.\n- Khéo léo nhắc đến \"Giá sale\" hoặc phân khúc giá (nếu có ở trên).\n- CHỈ TRẢ VỀ DUY NHẤT NỘI DUNG BÀI ĐĂNG. KHÔNG đưa ra nhiều lựa chọn (Option 1, Option 2). KHÔNG giải thích. KHÔNG có câu chào hỏi hay dặn dò dư thừa.\n"
+            }
+          ]
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.googleGemini",
+      "typeVersion": 1.2,
+      "position": [
+        224,
+        -208
+      ],
+      "id": "e6c4e45c-9459-4aae-bef8-e20afa14838a",
+      "name": "Message a model",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "zR0vwJa14WOXzdgj",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ $json.content.parts[0].text }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        560,
+        0
+      ],
+      "id": "a6dd6a07-341c-4062-91d2-eb4a7c5691b3",
+      "name": "Respond to Webhook"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.body.postMode }}",
+                    "rightValue": "ALBUM",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "0be04d3c-a81c-4d10-a51a-a34d7d542efc"
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "0e3d1ed6-3dac-4a54-a12e-f5896cf03f39",
+                    "leftValue": "={{ $json.body.postMode }}",
+                    "rightValue": "AI",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        -80,
+        16
+      ],
+      "id": "e0d7e4fe-16f3-477c-ad6d-128ced18f149",
+      "name": "Switch"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Switch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Message a model": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Switch": {
+      "main": [
+        [
+          {
+            "node": "Message a model",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "1546c185-910e-4380-b095-026bc2274522",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "b348bb898e3404395dacb3706191365e1fc8b7fc4733f557bc05abc17ae49562"
+  },
+  "id": "TT3Lv83eGNJY0JnQ",
+  "tags": []
+}
