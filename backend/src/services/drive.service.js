@@ -65,16 +65,22 @@ export const downloadFileFromDrive = async (fileId, fileName) => {
     );
 
     return new Promise((resolve, reject) => {
-      res.data
-        .on('end', () => {
-          console.log(`✅ Đã tải xong: ${destPath}`);
-          resolve(destPath);
-        })
-        .on('error', err => {
-          console.error('Lỗi khi stream tải file:', err);
-          reject(err);
-        })
-        .pipe(dest);
+      res.data.pipe(dest);
+      
+      dest.on('finish', () => {
+        console.log(`✅ Đã tải xong: ${destPath}`);
+        resolve(destPath);
+      });
+      
+      dest.on('error', err => {
+        console.error('Lỗi khi ghi file:', err);
+        reject(err);
+      });
+      
+      res.data.on('error', err => {
+        console.error('Lỗi khi stream tải file:', err);
+        reject(err);
+      });
     });
   } catch (error) {
     console.error('Lỗi khi gọi API tải file:', error.message);

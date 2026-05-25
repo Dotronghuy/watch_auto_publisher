@@ -2,7 +2,7 @@ import { publishQueue } from './workers/queue.js';
 
 export const startScheduler = async () => {
   console.log('⏰ Khởi động Scheduler hẹn giờ đăng bài (BullMQ)...');
-  
+
   // Xóa các job cũ nếu có để tránh trùng lặp
   const repeatableJobs = await publishQueue.getRepeatableJobs();
   for (const job of repeatableJobs) {

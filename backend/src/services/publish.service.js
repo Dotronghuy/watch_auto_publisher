@@ -1,6 +1,7 @@
 import axios from 'axios';
 import fs from 'fs';
 import FormData from 'form-data';
+import sharp from 'sharp';
 import { getFolderIdByName, getImagesInFolder, downloadFileFromDrive, getFoldersInFolder } from './drive.service.js';
 import { getProductInfoBySku } from './sheet.service.js';
 import { getPostedImageIds, addPostedImageId } from '../utils/history.js';
@@ -70,8 +71,55 @@ export const autoPublishRoutine = async () => {
 
     // 2. Tải tất cả ảnh về
     for (const img of selectedImages) {
-      const path = await downloadFileFromDrive(img.id, img.name);
-      localFilePaths.push(path);
+      let pathStr = await downloadFileFromDrive(img.id, img.name);
+      
+      // Nếu là ảnh AI, xử lý trực tiếp bằng Node.js để kiểm soát độ chính xác tuyệt đối 1024x1024
+      if (postMode === 'AI') {
+        const bgRemovedPath = pathStr.replace(/\.[^/.]+$/, "_rmbg.png");
+        const finalPaddedPath = pathStr.replace(/\.[^/.]+$/, "_1024.png");
+        
+        try {
+          console.log(`Đang gọi API remove.bg để gọt phông nền cho ${img.name}...`);
+          const rmBgFormData = new FormData();
+          rmBgFormData.append('size', 'auto');
+          rmBgFormData.append('image_file', fs.readFileSync(pathStr), {
+            filename: path.basename(pathStr),
+            contentType: pathStr.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg'
+          });
+          
+          const rmbgResponse = await axios.post('https://api.remove.bg/v1.0/removebg', rmBgFormData, {
+            headers: {
+              ...rmBgFormData.getHeaders(),
+              'X-Api-Key': (process.env.REMOVE_BG_API_KEY || '').trim()
+            },
+            responseType: 'arraybuffer',
+          });
+          
+          fs.writeFileSync(bgRemovedPath, rmbgResponse.data);
+          
+          console.log(`Đang ép kích thước ảnh thành hình vuông 1024x1024 cho OpenAI...`);
+          await sharp(bgRemovedPath)
+            .resize(1024, 1024, {
+              fit: 'contain',
+              background: { r: 255, g: 255, b: 255, alpha: 0 }
+            })
+            .toFormat('png')
+            .toFile(finalPaddedPath);
+            
+          // Cập nhật lại đường dẫn để gửi n8n ảnh 1024x1024 này
+          pathStr = finalPaddedPath;
+        } catch (rmbgErr) {
+          let errorMsg = rmbgErr.message;
+          if (rmbgErr.response && rmbgErr.response.data) {
+            try {
+              errorMsg = rmbgErr.response.data.toString('utf8');
+            } catch (e) { }
+          }
+          console.log(`⚠️ Lỗi khi xóa nền bằng remove.bg: ${errorMsg}. Vẫn tiếp tục dùng ảnh gốc.`);
+        }
+      }
+      
+      localFilePaths.push(pathStr);
     }
 
     // 3. Gửi toàn bộ dữ liệu (và File ảnh) sang Webhook của n8n
@@ -90,7 +138,9 @@ export const autoPublishRoutine = async () => {
       
       // Nếu là chế độ AI (1 ảnh AVT), gửi trực tiếp file ảnh vật lý sang n8n để n8n tự tách nền
       if (postMode === 'AI' && localFilePaths.length === 1) {
-        n8nFormData.append('image', fs.createReadStream(localFilePaths[0]));
+        n8nFormData.append('image', fs.readFileSync(localFilePaths[0]), {
+          filename: path.basename(localFilePaths[0])
+        });
       }
       
       console.log('Đang gửi dữ liệu sang n8n để AI xử lý...');
@@ -99,6 +149,9 @@ export const autoPublishRoutine = async () => {
       });
       
       const resData = n8nResponse.data;
+      console.log('\n--- N8N RAW RESPONSE ---');
+      console.log(JSON.stringify(resData, null, 2));
+      console.log('------------------------\n');
       postContent = resData.content || resData.text || resData.message || (typeof resData === 'string' ? resData : JSON.stringify(resData));
       
       // 4. Nếu n8n trả về kết quả ảnh AI đã ghép xong (Base64 hoặc URL)
