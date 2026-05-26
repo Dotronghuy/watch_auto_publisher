@@ -1,7 +1,13 @@
 node_modules/
 .env
 .DS_Store
-backend/chrome_data*/
 backend/cookies.json
 *.db-shm
 *.db-wal
+
+# Vẫn đồng bộ chrome_data lên Git nhưng bỏ qua các thư mục Rác/Cache để tránh phình to Repo
+backend/chrome_data*/Default/Cache/
+backend/chrome_data*/Default/Code Cache/
+backend/chrome_data*/Default/Service Worker/CacheStorage/
+backend/chrome_data*/Crashpad/
+backend/chrome_data*/GrShaderCache/
