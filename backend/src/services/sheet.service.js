@@ -106,3 +106,73 @@ export const updateProductPostInfo = async (sku, postId) => {
     console.error('Lỗi khi ghi lịch sử vào Google Sheets:', error.message);
   }
 };
+
+export const getAllProductsPostInfo = async () => {
+  try {
+    const res = await sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'A:AK',
+    });
+
+    const rows = res.data.values;
+    if (!rows || rows.length === 0) return [];
+
+    const headers = rows[0];
+    const skuIndex = headers.indexOf('Mã sản phẩm');
+    const postIdIndex = headers.indexOf('Post ID');
+    const dateIndex = headers.indexOf('Ngày đăng');
+    let cycleIndex = headers.indexOf('Chu kỳ đăng (phút)');
+
+    if (skuIndex === -1) return [];
+
+    // Tự động tạo cột Chu kỳ đăng nếu chưa có
+    if (cycleIndex === -1) {
+      await sheets.spreadsheets.values.update({
+        spreadsheetId: SPREADSHEET_ID,
+        range: 'AK1',
+        valueInputOption: 'USER_ENTERED',
+        requestBody: { values: [['Chu kỳ đăng (phút)']] }
+      });
+      cycleIndex = 36; // Cột AK
+    }
+
+    const products = [];
+    for (let i = 1; i < rows.length; i++) {
+      const row = rows[i];
+      if (row[skuIndex]) {
+        products.push({
+          rowIndex: i + 1,
+          sku: row[skuIndex],
+          postId: postIdIndex !== -1 ? row[postIdIndex] : null,
+          postDate: dateIndex !== -1 ? row[dateIndex] : null,
+          cycleMinutes: cycleIndex !== -1 && row[cycleIndex] ? parseInt(row[cycleIndex], 10) : 5, // Mặc định 5 phút
+        });
+      }
+    }
+    return products;
+  } catch (error) {
+    console.error('Lỗi khi lấy thông tin post từ Sheets:', error.message);
+    return [];
+  }
+};
+
+export const clearExpiredPostInfo = async (rowIndices) => {
+  if (!rowIndices || rowIndices.length === 0) return;
+  try {
+    const data = rowIndices.map(rowIndex => ({
+      range: `AI${rowIndex}:AJ${rowIndex}`,
+      values: [['', '']]
+    }));
+
+    await sheets.spreadsheets.values.batchUpdate({
+      spreadsheetId: SPREADSHEET_ID,
+      requestBody: {
+        valueInputOption: 'USER_ENTERED',
+        data: data
+      }
+    });
+    console.log(`✅ Đã dọn dẹp ngày đăng trên Sheets cho ${rowIndices.length} SKU (đã hết cooldown nhưng ko bốc trúng).`);
+  } catch (error) {
+    console.error('Lỗi khi xóa lịch sử hết hạn trên Sheets:', error.message);
+  }
+};

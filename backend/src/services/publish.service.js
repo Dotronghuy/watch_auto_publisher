@@ -3,7 +3,7 @@ import fs from 'fs';
 import FormData from 'form-data';
 import sharp from 'sharp';
 import { getFolderIdByName, getImagesInFolder, downloadFileFromDrive, getFoldersInFolder } from './drive.service.js';
-import { getProductInfoBySku, updateProductPostInfo } from './sheet.service.js';
+import { getProductInfoBySku, updateProductPostInfo, getAllProductsPostInfo, clearExpiredPostInfo } from './sheet.service.js';
 import { getPostedImageIds, addPostedImageId } from '../utils/history.js';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -17,6 +17,21 @@ const ROOT_DRIVE_FOLDER_ID = process.env.ROOT_DRIVE_FOLDER_ID || '1MFAy8z4kghRCT
 
 export const autoPublishRoutine = async () => {
   console.log('🤖 Bắt đầu tiến trình tự động đăng bài (GIAI ĐOẠN 3)...');
+  
+  const cleanTempDirectory = () => {
+    const tempDir = path.join(__dirname, '../../temp_images');
+    if (fs.existsSync(tempDir)) {
+      const files = fs.readdirSync(tempDir);
+      for (const file of files) {
+        if (file !== '.gitkeep') {
+          try {
+            fs.unlinkSync(path.join(tempDir, file));
+          } catch (e) {}
+        }
+      }
+    }
+  };
+  
   let localFilePaths = [];
   
   try {
@@ -24,7 +39,53 @@ export const autoPublishRoutine = async () => {
     if (skuFolders.length === 0) throw new Error('Không tìm thấy thư mục SKU nào trong Drive!');
 
     const postedIds = await getPostedImageIds();
-    const shuffledSkus = skuFolders.sort(() => 0.5 - Math.random());
+    
+    // --- MỚI: Kiểm tra Cooldown từ Google Sheets ---
+    console.log('Đang kiểm tra lịch sử đăng bài (Cooldown) từ Google Sheets...');
+    const allProductsInfo = await getAllProductsPostInfo();
+    const nowMs = Date.now();
+    
+    const eligibleSkus = [];
+    const expiredButUnpickedRows = [];
+    
+    // Hàm parse ngày giờ định dạng HH:mm:ss DD/MM/YYYY
+    const parseVietnameseDate = (dateString) => {
+        if (!dateString) return 0;
+        const parts = dateString.split(' ');
+        if (parts.length !== 2) return 0;
+        const [timePart, datePart] = parts;
+        const [hour, min, sec] = timePart.split(':').map(Number);
+        const [day, month, year] = datePart.split('/').map(Number);
+        return new Date(year, month - 1, day, hour, min, sec).getTime();
+    };
+
+    for (const skuFolder of skuFolders) {
+        const productInfo = allProductsInfo.find(p => p.sku === skuFolder.name);
+        
+        if (productInfo && productInfo.postDate) {
+            const lastPostTime = parseVietnameseDate(productInfo.postDate);
+            // Tính theo phút (minutes) thay vì ngày như yêu cầu test của user
+            const cycleMs = productInfo.cycleMinutes * 60 * 1000;
+            const timePassedMs = nowMs - lastPostTime;
+            
+            if (timePassedMs < cycleMs) {
+                console.log(`⏳ Bỏ qua SKU ${skuFolder.name}: Mới đăng gần đây (cần chờ thêm khoảng ${Math.ceil((cycleMs - timePassedMs)/60000)} phút).`);
+                continue; // Chưa đủ thời gian chờ -> Bỏ qua
+            } else {
+                // Đã đủ thời gian chờ (hết cooldown), cho phép vào danh sách bốc thăm
+                // Nếu lát nữa ko bốc trúng thì sẽ đem đi clear thời gian trên Sheets
+                expiredButUnpickedRows.push(productInfo.rowIndex);
+            }
+        }
+        eligibleSkus.push(skuFolder);
+    }
+    
+    if (eligibleSkus.length === 0) {
+        throw new Error('Tất cả các mã SKU đều đang trong thời gian chờ (Cooldown). Không có mã nào hợp lệ để đăng!');
+    }
+    
+    // Trộn ngẫu nhiên danh sách hợp lệ
+    const shuffledSkus = eligibleSkus.sort(() => 0.5 - Math.random());
     
     const folderTypes = ['0_Anh_AVT', '1_Anh_Hang', '2_Anh_Tu_Chup'];
     let selectedImages = [];
@@ -65,7 +126,20 @@ export const autoPublishRoutine = async () => {
     }
 
     if (selectedImages.length === 0) {
-      throw new Error('Đã hết sạch ảnh mới chưa đăng trong tất cả các mã SKU. Cần thêm ảnh mới vào Drive!');
+      throw new Error('Đã hết sạch ảnh mới chưa đăng trong tất cả các mã SKU hợp lệ.');
+    }
+    
+    // Loại bỏ SKU vừa được bốc ra khỏi danh sách cần clear trên Sheets
+    const pickedProductInfo = allProductsInfo.find(p => p.sku === selectedSku.name);
+    if (pickedProductInfo) {
+        const indexToKeep = expiredButUnpickedRows.indexOf(pickedProductInfo.rowIndex);
+        if (indexToKeep !== -1) expiredButUnpickedRows.splice(indexToKeep, 1);
+    }
+    
+    // Dọn dẹp (Xóa) lịch sử những mã SKU ko được chọn
+    if (expiredButUnpickedRows.length > 0) {
+        console.log(`🧹 Đang xóa lịch sử đăng của ${expiredButUnpickedRows.length} SKU đã hết hạn chờ để ưu tiên cho lần sau...`);
+        await clearExpiredPostInfo(expiredButUnpickedRows);
     }
 
     console.log(`=> Đã chọn [Chế độ ${postMode}] - SKU: ${selectedSku.name} - Số lượng ảnh: ${selectedImages.length}`);
@@ -223,18 +297,14 @@ export const autoPublishRoutine = async () => {
       await addPostedImageId(img.id);
     }
     
-    // 7. Xóa file tạm
-    localFilePaths.forEach(p => {
-      if (fs.existsSync(p)) fs.unlinkSync(p);
-    });
+    // 7. Dọn sạch toàn bộ thư mục temp_images để tránh tích tụ file rác (ảnh gốc, rmbg, resize, chatgpt...)
+    cleanTempDirectory();
     
     return { success: true, postId: postId, sku: selectedSku.name };
 
   } catch (error) {
     // Dọn rác nếu lỗi
-    localFilePaths.forEach(p => {
-      if (fs.existsSync(p)) fs.unlinkSync(p);
-    });
+    cleanTempDirectory();
     console.error('❌ Tiến trình tự động thất bại:', error.message);
     throw error;
   }

@@ -1,6 +1,6 @@
-2026/05/26-16:15:01.760 22e8 Reusing MANIFEST C:\Users\Admin\Downloads\watch_auto_publisher-master\backend\chrome_data_chatgpt\Default\Local Storage\leveldb/MANIFEST-000001
-2026/05/26-16:15:01.764 22e8 Recovering log #10
-2026/05/26-16:15:01.765 22e8 Reusing old log C:\Users\Admin\Downloads\watch_auto_publisher-master\backend\chrome_data_chatgpt\Default\Local Storage\leveldb/000010.log 
-2026/05/26-16:16:01.769 1530 Level-0 table #14: started
-2026/05/26-16:16:01.772 1530 Level-0 table #14: 18594 bytes OK
-2026/05/26-16:16:01.773 1530 Delete type=0 #10
+2026/05/26-21:37:00.644 1d64 Reusing MANIFEST C:\Users\Admin\Downloads\watch-auto-publisher\backend\chrome_data_chatgpt\Default\Local Storage\leveldb/MANIFEST-000001
+2026/05/26-21:37:00.652 1d64 Recovering log #7
+2026/05/26-21:37:00.655 1d64 Reusing old log C:\Users\Admin\Downloads\watch-auto-publisher\backend\chrome_data_chatgpt\Default\Local Storage\leveldb/000007.log 
+2026/05/26-21:38:00.678 5b48 Level-0 table #11: started
+2026/05/26-21:38:00.686 5b48 Level-0 table #11: 29138 bytes OK
+2026/05/26-21:38:00.687 5b48 Delete type=0 #7

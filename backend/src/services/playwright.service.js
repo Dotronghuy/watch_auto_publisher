@@ -268,8 +268,24 @@ export const generateTextOnGemini = async (prompt, imagePath = null) => {
         await page.keyboard.insertText(prompt); // Chèn text trực tiếp như người dùng paste nội dung
         await page.waitForTimeout(1000);
         
-        console.log('🚀 Nhấn Enter gửi yêu cầu...');
-        await page.keyboard.press('Enter');
+        console.log('🚀 Đang gửi yêu cầu...');
+        // Hủy bôi đen đoạn text vừa dán để tránh việc bấm Enter làm xóa text
+        await page.keyboard.press('ArrowRight');
+        await page.waitForTimeout(500);
+
+        try {
+            // Thử click nút Send của Gemini (nút có aria-label chứa chữ Send)
+            const sendBtn = page.locator('button[aria-label*="Send" i]').first();
+            if (await sendBtn.isVisible({ timeout: 1000 })) {
+                await sendBtn.click();
+                console.log('✅ Đã click nút Send.');
+            } else {
+                console.log('⚠️ Không tìm thấy nút Send, sẽ thử dùng phím Enter.');
+                await page.keyboard.press('Enter');
+            }
+        } catch(e) {
+            await page.keyboard.press('Enter');
+        }
         
         console.log('⏳ Đang chờ Gemini sinh nội dung (có thể mất 15-30 giây)...');
         

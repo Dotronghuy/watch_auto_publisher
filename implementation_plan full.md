@@ -1,5 +1,11 @@
 # BẢN ĐỒ LỘ TRÌNH (ROADMAP): WATCH AUTO PUBLISHER Lên Đỉnh Cao
 
+mai : test lại cái tạo ảnh AI, tìm hướng đi mới 
+
+Kéo ra xong, bạn cần tạo 1 tài khoản trên trang web remove.bg để lấy cái API Key (miễn phí). Lấy xong thì báo tôi để tôi chỉ bạn cách điền thông số vào cục HTTP Request nhé!
+
+lệnh:git pull
+
 Dự án này không chỉ đơn thuần là một tool đăng bài, mà tôi sẽ thiết kế nó trở thành một **Hệ sinh thái Marketing tự động hoàn toàn**, hoạt động không khác gì một đội ngũ Media, Content và Ads chuyên nghiệp.
 
 Dưới đây là toàn bộ các Giai đoạn (Phases) đã đi qua và những Giai đoạn nâng cấp cực khủng sắp tới:
@@ -34,9 +40,15 @@ Dưới đây là toàn bộ các Giai đoạn (Phases) đã đi qua và những
 
 - **Instagram (Tự động):** Tự động resize ảnh vuông hoặc 4:5, tự động gắn đống Hashtag "mồi" do AI nghĩ ra.
 - **Threads:** Phân tách Content thành các chuỗi hội thoại ngắn gọn, tạo trend thảo luận.
-- **TikTok (Biến Ảnh thành Video):** *Nâng cấp thêm!* Hệ thống sẽ dùng API của các dịch vụ dựng video để ghép ảnh thành 1 đoạn video ngắn có nhạc nền mặn mòi rồi đẩy thẳng lên TikTok.
 
----
+## 🚀 Giai đoạn 4.5: Bành Trướng Đế Chế Video Ngắn (Short-form Video)
+*Chinh phục kỷ nguyên Video: Tận dụng luồng Video có sẵn từ Drive để đánh chiếm các nền tảng Top 1 hiện nay.*
+
+- **TikTok (Tự động càn quét):** Hệ thống sẽ tự động quét thư mục `video_doc` (video dọc) hoặc `video_ngang` trên Drive của từng mã SKU. Gemini sẽ đóng vai trò "Chiến thần Review" để nghĩ ra các dòng Caption cực "cuốn", kèm theo bộ Hashtag đang lên xu hướng để đẩy video thẳng lên kênh TikTok.
+- **FB Reels (Tận dụng phễu Facebook):** Cùng một video từ Drive, hệ thống sẽ tự động phân phối sang tính năng thước phim (Reels) của Facebook Fanpage. Thuật toán phân phối Reels đang được Meta cực kỳ ưu ái, giúp cày view tự nhiên và tiếp cận lượng khách khổng lồ chưa hề follow Page.
+- **IG Reels (Phủ sóng tệp khách hàng trẻ, sang):** Song song với FB Reels, video sẽ được "bơm" trực tiếp lên Instagram Reels. Hệ thống API sẽ lo toàn bộ khâu render Video Container và tự động đăng tải kèm theo Content sang trọng, phù hợp với "vibe" của mạng Instagram.
+
+
 
 ## 🚀 Giai đoạn 5: Giao Diện Quản Trị Trung Tâm (Frontend React)
 *Từ bỏ màn hình đen Terminal rườm rà, chúng ta sẽ có 1 trang Web xịn xò quản lý:*
