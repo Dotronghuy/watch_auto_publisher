@@ -3,10 +3,11 @@ import fs from 'fs';
 import FormData from 'form-data';
 import sharp from 'sharp';
 import { getFolderIdByName, getImagesInFolder, downloadFileFromDrive, getFoldersInFolder } from './drive.service.js';
-import { getProductInfoBySku } from './sheet.service.js';
+import { getProductInfoBySku, updateProductPostInfo } from './sheet.service.js';
 import { getPostedImageIds, addPostedImageId } from '../utils/history.js';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { generateBackgroundOnChatGPT, generateTextOnGemini } from './playwright.service.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -122,72 +123,50 @@ export const autoPublishRoutine = async () => {
       localFilePaths.push(pathStr);
     }
 
-    // 3. Gửi toàn bộ dữ liệu (và File ảnh) sang Webhook của n8n
+    // 3. Sử dụng Playwright để xử lý AI (Tạo ảnh & Viết Content)
     let postContent = '';
     try {
       const productInfo = await getProductInfoBySku(selectedSku.name);
       const productInfoText = productInfo ? Object.entries(productInfo).map(([k, v]) => `${k}: ${v}`).join('\n') : '';
       
-      const n8nFormData = new FormData();
-      n8nFormData.append('filename', selectedImages[0].name);
-      n8nFormData.append('sku', selectedSku.name);
-      n8nFormData.append('productInfoText', productInfoText);
-      n8nFormData.append('postMode', postMode);
-      n8nFormData.append('imageCount', selectedImages.length.toString());
-      if (productInfo) n8nFormData.append('productInfo', JSON.stringify(productInfo));
-      
-      // Nếu là chế độ AI (1 ảnh AVT), gửi trực tiếp file ảnh vật lý sang n8n để n8n tự tách nền
+      // 3.1 NẾU LÀ CHẾ ĐỘ AI -> Gọi ChatGPT vẽ nền (Sinh 4-6 ảnh)
+      let aiGeneratedImagePaths = [];
       if (postMode === 'AI' && localFilePaths.length === 1) {
-        n8nFormData.append('image', fs.readFileSync(localFilePaths[0]), {
-          filename: path.basename(localFilePaths[0])
-        });
-      }
-      
-      console.log('Đang gửi dữ liệu sang n8n để AI xử lý...');
-      const n8nResponse = await axios.post(N8N_WEBHOOK_URL, n8nFormData, {
-        headers: { ...n8nFormData.getHeaders() }
-      });
-      
-      const resData = n8nResponse.data;
-      console.log('\n--- N8N RAW RESPONSE ---');
-      console.log(JSON.stringify(resData, null, 2));
-      console.log('------------------------\n');
-      postContent = resData.content || resData.text || resData.message || (typeof resData === 'string' ? resData : JSON.stringify(resData));
-      
-      // 4. Nếu n8n trả về kết quả ảnh AI đã ghép xong (Base64 hoặc URL)
-      if (postMode === 'AI') {
-        const newImagePath = path.join(__dirname, `../../temp_images/n8n_ai_${Date.now()}.jpg`);
-        let hasNewImage = false;
-
-        if (resData.imageBase64) {
-          // n8n trả về dạng Base64
-          const base64Data = resData.imageBase64.replace(/^data:image\/\w+;base64,/, "");
-          fs.writeFileSync(newImagePath, Buffer.from(base64Data, 'base64'));
-          hasNewImage = true;
-        } else if (resData.imageUrl) {
-          // n8n trả về dạng đường dẫn tải xuống
-          const imgRes = await axios.get(resData.imageUrl, { responseType: 'stream' });
-          const writer = fs.createWriteStream(newImagePath);
-          imgRes.data.pipe(writer);
-          await new Promise((resolve, reject) => {
-            writer.on('finish', resolve);
-            writer.on('error', reject);
-          });
-          hasNewImage = true;
-        }
-
-        if (hasNewImage) {
-          if (fs.existsSync(localFilePaths[0])) fs.unlinkSync(localFilePaths[0]); // Xóa ảnh gốc
-          localFilePaths[0] = newImagePath; // Cập nhật lại đường dẫn ảnh để đăng lên FB
-          console.log('✅ Đã nhận được ảnh AI ghép phông nền từ n8n!');
+        try {
+          const imgPrompt = `Đây là hình ảnh một chiếc đồng hồ đã tách nền. Hãy giữ nguyên chiếc đồng hồ và tạo cho nó một phông nền mới cực kỳ sang trọng (như bàn đá cẩm thạch, vân gỗ cao cấp). Không được làm biến dạng chiếc đồng hồ.`;
+          
+          const numAiImages = Math.floor(Math.random() * 3) + 4; // Ngẫu nhiên 4, 5 hoặc 6 ảnh
+          console.log(`🎨 [Nhánh AI] Yêu cầu ChatGPT vẽ ${numAiImages} bức ảnh liên tiếp...`);
+          
+          aiGeneratedImagePaths = await generateBackgroundOnChatGPT(localFilePaths[0], imgPrompt, numAiImages);
+          
+          // Xóa ảnh gốc vì không cần thiết đăng ảnh gốc nữa
+          if (fs.existsSync(localFilePaths[0])) fs.unlinkSync(localFilePaths[0]);
+          
+          // Đổi mảng localFilePaths thành các ảnh AI vừa vẽ (để lát đăng Facebook thành Album)
+          localFilePaths = [...aiGeneratedImagePaths];
+        } catch (pwError) {
+          console.log(`⚠️ Lỗi Playwright tạo ảnh: ${pwError.message}. Sẽ đăng ảnh gốc.`);
         }
       }
       
-      if (!postContent || postContent === 'undefined') {
-        postContent = `[Đăng Tự Động] Khám phá ngay mẫu đồng hồ ${selectedSku.name} tuyệt đẹp.`;
+      // 3.2 GỌI GEMINI PLAYWRIGHT ĐỂ VIẾT CONTENT
+      try {
+          // Báo cho user biết nhánh nào đang chạy
+          console.log(`🤖 [Nhánh ${postMode}] Gửi ảnh sang Gemini để viết Content...`);
+          
+          const textPrompt = `Hãy đóng vai một chuyên gia content marketing. Phân tích bức ảnh đồng hồ này và viết DUY NHẤT 1 bài đăng Facebook ngắn gọn, hấp dẫn để bán mẫu đồng hồ có mã SKU là: ${selectedSku.name}.\nDưới đây là thông tin kỹ thuật của sản phẩm:\n${productInfoText}\nChỉ trả về nội dung bài viết, không kèm giải thích. Dùng các hashtag phù hợp.`;
+          
+          // Truyền 1 bức ảnh ngẫu nhiên (ảnh gốc hoặc 1 trong các ảnh vừa vẽ) sang cho Gemini
+          const randomGeminiImg = localFilePaths[Math.floor(Math.random() * localFilePaths.length)];
+          postContent = await generateTextOnGemini(textPrompt, randomGeminiImg);
+      } catch (geminiError) {
+          console.log(`⚠️ Lỗi Playwright Gemini: ${geminiError.message}. Dùng nội dung dự phòng.`);
+          postContent = `[Đăng Tự Động] Khám phá ngay siêu phẩm đồng hồ ${selectedSku.name} tuyệt đẹp.`;
       }
-    } catch (n8nError) {
-      console.log(`⚠️ Lỗi kết nối n8n: ${n8nError.message}. Dùng nội dung và ảnh dự phòng.`);
+      
+    } catch (e) {
+      console.log(`⚠️ Lỗi trích xuất thông tin: ${e.message}. Dùng nội dung dự phòng.`);
       postContent = `[Đăng Tự Động] Siêu phẩm đồng hồ ${selectedSku.name}.`;
     }
 
@@ -235,6 +214,9 @@ export const autoPublishRoutine = async () => {
     }
 
     console.log(`✅ Đã đăng thành công lên FB (Post ID: ${postId})`);
+    
+    // Lưu Post ID và Ngày đăng lên Google Sheets
+    await updateProductPostInfo(selectedSku.name, postId);
     
     // 6. Lưu ID tất cả ảnh vào lịch sử
     for (const img of selectedImages) {

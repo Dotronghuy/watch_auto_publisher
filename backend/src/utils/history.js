@@ -35,10 +35,10 @@ const runQuery = (sql, params = []) => {
 export const getPostedImageIds = async () => {
   try {
     const now = Date.now();
-    const ONE_DAY_MS = 24 * 60 * 60 * 1000;
-    const limitTimestamp = now - ONE_DAY_MS;
+    const THREE_DAYS_MS = 3 * 24 * 60 * 60 * 1000;
+    const limitTimestamp = now - THREE_DAYS_MS;
 
-    // Lấy các ID đã đăng trong vòng 24h
+    // Lấy các ID đã đăng trong vòng 3 ngày
     const rows = await runQuery(
       'SELECT id FROM posted_images WHERE timestamp > ?',
       [limitTimestamp]
@@ -65,9 +65,9 @@ export const addPostedImageId = async (id) => {
           return reject(err);
         }
 
-        // Dọn dẹp bản ghi cũ (trên 2 ngày)
-        const TWO_DAYS_MS = 2 * 24 * 60 * 60 * 1000;
-        const deleteLimit = now - TWO_DAYS_MS;
+        // Dọn dẹp bản ghi cũ (trên 4 ngày)
+        const FOUR_DAYS_MS = 4 * 24 * 60 * 60 * 1000;
+        const deleteLimit = now - FOUR_DAYS_MS;
         db.run('DELETE FROM posted_images WHERE timestamp < ?', [deleteLimit], (deleteErr) => {
           if (deleteErr) console.error('Lỗi khi dọn dẹp DB:', deleteErr);
           resolve();

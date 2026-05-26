@@ -1,11 +1,5 @@
 # BẢN ĐỒ LỘ TRÌNH (ROADMAP): WATCH AUTO PUBLISHER Lên Đỉnh Cao
 
-tối sẽ hỏi cái  này : Switch (đầu 1) -> HTTP Request -> OpenAI (Generate Image) -> Edit Image -> Gemini -> Respond to Webhook.
-
-Kéo ra xong, bạn cần tạo 1 tài khoản trên trang web remove.bg để lấy cái API Key (miễn phí). Lấy xong thì báo tôi để tôi chỉ bạn cách điền thông số vào cục HTTP Request nhé!
-
-
-
 Dự án này không chỉ đơn thuần là một tool đăng bài, mà tôi sẽ thiết kế nó trở thành một **Hệ sinh thái Marketing tự động hoàn toàn**, hoạt động không khác gì một đội ngũ Media, Content và Ads chuyên nghiệp.
 
 Dưới đây là toàn bộ các Giai đoạn (Phases) đã đi qua và những Giai đoạn nâng cấp cực khủng sắp tới:
