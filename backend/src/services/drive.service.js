@@ -48,6 +48,21 @@ export const getImagesInFolder = async (folderId) => {
   }
 };
 
+// Hàm lấy danh sách video trong 1 thư mục
+export const getVideosInFolder = async (folderId) => {
+  try {
+    const res = await drive.files.list({
+      q: `'${folderId}' in parents and (mimeType contains 'video/') and trashed=false`,
+      fields: 'files(id, name, mimeType, size)',
+      orderBy: 'createdTime desc', 
+    });
+    return res.data.files;
+  } catch (error) {
+    console.error('Lỗi khi lấy danh sách video:', error.message);
+    throw error;
+  }
+};
+
 // Hàm tải file từ Drive về máy tính (Stream)
 export const downloadFileFromDrive = async (fileId, fileName) => {
   const tempDir = path.join(__dirname, '../../temp_images');

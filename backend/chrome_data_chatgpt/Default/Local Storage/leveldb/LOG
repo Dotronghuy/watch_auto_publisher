@@ -1,6 +1,0 @@
-2026/05/26-21:37:00.644 1d64 Reusing MANIFEST C:\Users\Admin\Downloads\watch-auto-publisher\backend\chrome_data_chatgpt\Default\Local Storage\leveldb/MANIFEST-000001
-2026/05/26-21:37:00.652 1d64 Recovering log #7
-2026/05/26-21:37:00.655 1d64 Reusing old log C:\Users\Admin\Downloads\watch-auto-publisher\backend\chrome_data_chatgpt\Default\Local Storage\leveldb/000007.log 
-2026/05/26-21:38:00.678 5b48 Level-0 table #11: started
-2026/05/26-21:38:00.686 5b48 Level-0 table #11: 29138 bytes OK
-2026/05/26-21:38:00.687 5b48 Delete type=0 #7

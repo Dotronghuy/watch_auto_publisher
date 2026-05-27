@@ -1,4 +1,2 @@
-// TODO: Connect to Threads API
-export const publishToThreads = async (content, imageUrl) => {
-  // Logic to post
-};
+// Re-export từ meta.service.js để backward compatible
+export { publishToThreads, publishThreadChain } from './meta.service.js';
