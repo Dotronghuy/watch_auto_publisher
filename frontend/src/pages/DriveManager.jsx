@@ -12,6 +12,9 @@ const DriveManager = () => {
   const [totalPages, setTotalPages] = useState(0);
   const [searchInput, setSearchInput] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
+  const [syncedAt, setSyncedAt] = useState(null);
+  const [syncLabel, setSyncLabel] = useState('Chưa đồng bộ');
+  const [isSyncing, setIsSyncing] = useState(false);
 
   useEffect(() => {
     const timeoutId = setTimeout(() => {
@@ -21,6 +24,24 @@ const DriveManager = () => {
     return () => clearTimeout(timeoutId);
   }, [searchInput]);
 
+  // Cập nhật nhãn "X giây/phút trước" mỗi giây
+  useEffect(() => {
+    const formatRelative = (date) => {
+      if (!date) return 'Chưa đồng bộ';
+      const diffMs = Date.now() - new Date(date).getTime();
+      const diffSec = Math.floor(diffMs / 1000);
+      if (diffSec < 5) return 'Đang đồng bộ...';
+      if (diffSec < 60) return `Đã đồng bộ ${diffSec} giây trước`;
+      const diffMin = Math.floor(diffSec / 60);
+      if (diffMin < 60) return `Đã đồng bộ ${diffMin} phút trước`;
+      const diffH = Math.floor(diffMin / 60);
+      return `Đã đồng bộ ${diffH} giờ trước`;
+    };
+    setSyncLabel(formatRelative(syncedAt));
+    const tick = setInterval(() => setSyncLabel(formatRelative(syncedAt)), 1000);
+    return () => clearInterval(tick);
+  }, [syncedAt]);
+
   useEffect(() => {
     setLoading(true);
     fetch(`http://localhost:3000/api/products?page=${page}&limit=${limit}&search=${encodeURIComponent(searchTerm)}`)
@@ -29,6 +50,7 @@ const DriveManager = () => {
         setProducts(data.data);
         setTotal(data.total);
         setTotalPages(data.totalPages);
+        if (data.syncedAt) setSyncedAt(data.syncedAt);
         setLoading(false);
       })
       .catch(err => {
@@ -78,30 +100,37 @@ const DriveManager = () => {
             <span>TRẠNG THÁI ĐỒNG BỘ</span>
           </div>
           <div className="stat-value-group mt-1">
-            <span className="status-badge connected"><span className="dot"></span> Đã đồng bộ 2 phút trước</span>
+            <span className={`status-badge ${syncedAt ? 'connected' : 'disconnected'}`}>
+              <span className="dot"></span>
+              {isSyncing ? (
+                <><RefreshCw size={10} style={{ display: 'inline', marginRight: 4, animation: 'spin 1s linear infinite' }} /> Đang kết nối Google Sheet...</>
+              ) : syncLabel}
+            </span>
           </div>
         </div>
 
         <div className="stat-col action-col">
-          <button className="btn-primary w-full justify-center" onClick={async () => {
+          <button className="btn-primary w-full justify-center" disabled={isSyncing} onClick={async () => {
+            setIsSyncing(true);
             Swal.fire({
               title: 'Đang đồng bộ',
               text: 'Hệ thống đang kéo dữ liệu mới nhất từ Google Sheets...',
-              icon: 'info',
-              toast: true,
-              position: 'top-end',
-              showConfirmButton: false,
-              timer: 3000,
-              background: 'var(--color-surface)',
-              color: 'var(--color-text)'
+              icon: 'info', toast: true, position: 'top-end',
+              showConfirmButton: false, timer: 2000,
+              background: 'var(--color-surface)', color: 'var(--color-text)'
             });
             try {
-              await fetch('http://localhost:3000/api/trigger-sync', { method: 'POST' });
-              setTimeout(() => {
-                Swal.fire('Thành công', 'Đã đồng bộ xong dữ liệu từ Sheet!', 'success');
-              }, 2000);
+              const res = await fetch('http://localhost:3000/api/trigger-sync', { method: 'POST' });
+              const json = await res.json();
+              if (json.syncedAt) setSyncedAt(json.syncedAt);
+              // Reload data
+              setPage(1);
+              setSearchTerm(prev => prev + '');
+              Swal.fire('Đã đồng bộ!', 'Dữ liệu mới nhất đã được tải về.', 'success');
             } catch (e) {
               Swal.fire('Lỗi', 'Không thể kết nối đến Backend', 'error');
+            } finally {
+              setIsSyncing(false);
             }
           }}>
             <RefreshCw size={16} className="mr-2" /> ĐỒNG BỘ NGAY TỪ SHEET

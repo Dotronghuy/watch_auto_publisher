@@ -60,9 +60,11 @@ const CalendarPage = () => {
         const itemDate = new Date(item.timestamp);
         itemDate.setHours(0, 0, 0, 0);
         if (itemDate.getTime() === dTime) {
+          // item có thể có sku, name, hoặc chỉ có id
+          const label = item.sku || item.name || item.productName || `#${item.id?.slice(-6) || '?'}`;
           events.push({
             type: 'linkedin',
-            text: `Đã đăng: ${item.sku}`,
+            text: `Đã đăng: ${label}`,
             platform: 'History',
             isPast: true
           });

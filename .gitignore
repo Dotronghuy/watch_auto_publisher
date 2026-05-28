@@ -22,3 +22,12 @@ posted_history.json
 # IDE / OS
 .vscode/
 Thumbs.db
+
+# ─── File nhạy cảm (credentials / token) — KHÔNG push lên GitHub ───
+backend/config/credentials.json
+backend/config/oauth2_credentials.json
+backend/config/oauth2_token.json
+
+# Ảnh mẫu (file lớn, không cần push)
+Image_mau/
+

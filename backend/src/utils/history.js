@@ -51,6 +51,17 @@ export const getPostedImageIds = async () => {
   }
 };
 
+// Hàm mới: Lấy toàn bộ lịch sử (dùng cho Dashboard biểu đồ)
+export const getAllPostedHistory = async () => {
+  try {
+    const rows = await runQuery('SELECT id, timestamp FROM posted_images');
+    return rows;
+  } catch (error) {
+    console.error('Lỗi khi lấy dữ liệu lịch sử từ DB:', error);
+    return [];
+  }
+};
+
 export const addPostedImageId = async (id) => {
   return new Promise((resolve, reject) => {
     const now = Date.now();

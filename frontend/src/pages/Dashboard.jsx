@@ -88,7 +88,7 @@ const Dashboard = () => {
           </div>
         </div>
 
-        <div className="stat-card glass glow-primary">
+        <div className="stat-card glass glow-primary" onClick={() => navigate('/drive')} style={{cursor: 'pointer'}}>
           <div className="stat-header">
             <h3>DUNG LƯỢNG ĐÃ DÙNG</h3>
             <div className="stat-icon-wrapper orange">

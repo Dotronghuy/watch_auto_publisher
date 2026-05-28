@@ -1,5 +1,4 @@
 import { Activity, Database, Link2, RefreshCw, AlertTriangle, CheckCircle2, Clock } from 'lucide-react';
-import { BarChart, Bar, XAxis, ResponsiveContainer, Tooltip, Legend } from 'recharts';
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Swal from 'sweetalert2';
@@ -28,11 +27,7 @@ const DrivePage = () => {
     Swal.fire({ title: 'Thành công', text: 'Đã kích hoạt đồng bộ dữ liệu.', icon: 'success', background: 'var(--color-surface)', color: 'white' });
   };
 
-  const performanceData = stats ? [
-    { name: 'Likes', Facebook: stats.totalPosts * 150, Instagram: stats.totalPosts * 180, LinkedIn: stats.totalPosts * 45 },
-    { name: 'Shares', Facebook: stats.totalPosts * 25, Instagram: stats.totalPosts * 10, LinkedIn: stats.totalPosts * 15 },
-    { name: 'Comments', Facebook: stats.totalPosts * 40, Instagram: stats.totalPosts * 60, LinkedIn: stats.totalPosts * 20 },
-  ] : [];
+
 
   return (
     <div className="drive-page">
@@ -51,31 +46,51 @@ const DrivePage = () => {
           </div>
           
           <div className="system-metrics">
-            <div className="metric-box">
+            <div
+              className="metric-box"
+              onClick={() => navigate('/workflow')}
+              style={{ cursor: 'pointer', transition: 'transform 0.2s, box-shadow 0.2s' }}
+              onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-2px)'; e.currentTarget.style.boxShadow = '0 8px 24px rgba(16,185,129,0.25)'; }}
+              onMouseLeave={e => { e.currentTarget.style.transform = 'none'; e.currentTarget.style.boxShadow = 'none'; }}
+            >
               <div className="metric-header">
                 <span>LUỒNG ĐANG HOẠT ĐỘNG</span>
                 <div className="metric-icon green-bg"><Activity size={14} /></div>
               </div>
               <div className="metric-value">
                 <h2>{stats ? stats.activeWorkflows : 0}</h2>
-                <span className="trend positive">&uarr;</span>
+                <span className="of-total" style={{ color: '#6ee7b7', fontSize: '11px' }}>
+                  🔗 Xem luồng công việc ↗
+                </span>
               </div>
               <div className="progress-bar-container mt-2">
                 <div className="progress-bar-fill green" style={{width: `${stats ? (stats.activeWorkflows > 0 ? 100 : 0) : 0}%`}}></div>
               </div>
             </div>
 
-            <div className="metric-box">
+            <div
+              className="metric-box"
+              onClick={() => window.open('https://drive.google.com/drive/folders/1MFAy8z4kghRCT4Z8tGsvVAqk_I02UCHl', '_blank')}
+              style={{ cursor: 'pointer', transition: 'transform 0.2s, box-shadow 0.2s' }}
+              onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-2px)'; e.currentTarget.style.boxShadow = '0 8px 24px rgba(99,102,241,0.25)'; }}
+              onMouseLeave={e => { e.currentTarget.style.transform = 'none'; e.currentTarget.style.boxShadow = 'none'; }}
+            >
               <div className="metric-header">
-                <span>DUNG LƯỢNG DATABASE</span>
+                <span>DUNG LƯỢNG DRIVE</span>
                 <div className="metric-icon blue-bg"><Database size={14} /></div>
               </div>
               <div className="metric-value">
-                <h2>{stats ? stats.storageUsed : 0} <span className="unit">GB</span></h2>
-                <span className="of-total">Thực tế</span>
+                <h2>
+                  {stats ? stats.storageUsed : 0}
+                  <span className="unit" style={{ fontSize: '0.5em', marginLeft: '4px' }}>GB</span>
+                  <span style={{ fontSize: '0.32em', color: 'var(--color-text-dim)', marginLeft: '8px', fontWeight: 400 }}>/ {stats?.storageLimit || 2048} GB</span>
+                </h2>
+                <span className="of-total" style={{ color: '#6ee7b7', fontSize: '11px' }}>
+                  🔗 Mở Google Drive ↗
+                </span>
               </div>
-              <div className="progress-bar-container mt-2">
-                <div className="progress-bar-fill blue" style={{width: '20%'}}></div>
+              <div className="progress-bar-container mt-2" title={`${stats ? ((stats.storageUsed / (stats.storageLimit || 2048)) * 100).toFixed(1) : 0}% đã dùng`}>
+                <div className="progress-bar-fill blue" style={{ width: `${stats ? Math.min(100, (stats.storageUsed / (stats.storageLimit || 2048)) * 100) : 0}%` }}></div>
               </div>
             </div>
           </div>
@@ -114,17 +129,10 @@ const DrivePage = () => {
             <h3>Phân tích Hiệu suất Bài đăng</h3>
           </div>
         </div>
-        <div className="chart-wrapper">
-          <ResponsiveContainer width="100%" height={300}>
-            <BarChart data={performanceData} margin={{ top: 20, right: 30, left: -20, bottom: 5 }}>
-              <XAxis dataKey="name" stroke="var(--color-text-dim)" tickLine={false} axisLine={false} />
-              <Tooltip cursor={{fill: 'rgba(255,255,255,0.05)'}} contentStyle={{backgroundColor: 'var(--color-surface)', border: 'none', borderRadius: '8px'}} />
-              <Legend iconType="square" align="right" verticalAlign="top" wrapperStyle={{top: -40}} />
-              <Bar dataKey="Facebook" fill="#A3C2FF" radius={[4, 4, 0, 0]} barSize={40} />
-              <Bar dataKey="Instagram" fill="#FF9EBB" radius={[4, 4, 0, 0]} barSize={40} />
-              <Bar dataKey="LinkedIn" fill="#4ADE80" radius={[4, 4, 0, 0]} barSize={40} />
-            </BarChart>
-          </ResponsiveContainer>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: 200, gap: 12, color: 'var(--color-text-muted)' }}>
+          <Activity size={40} style={{ opacity: 0.3 }} />
+          <p style={{ margin: 0, fontSize: 14 }}>Dữ liệu hiệu suất sẽ hiển thị ở đây sau khi tích hợp API thống kê.</p>
+          <p style={{ margin: 0, fontSize: 12, opacity: 0.6 }}>Tính năng đang phát triển (Phase 3)</p>
         </div>
       </div>
 

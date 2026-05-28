@@ -24,16 +24,51 @@ const NODE_HEIGHT_PUBLISH = 110;
 
 const Workflow = () => {
   const [logs, setLogs] = useState([]);
-  const [imageGallery, setImageGallery] = useState([]); // mảng ảnh từng thêm vào
-  const [carouselIdx, setCarouselIdx] = useState(0);   // ảnh đang xem
+  const [imageGallery, setImageGallery] = useState([]);
+  const [carouselIdx, setCarouselIdx] = useState(0);
   const [previewText, setPreviewText] = useState(null);
   const [isGPTActive, setIsGPTActive] = useState(false);
   const [nodes, setNodes] = useState(INITIAL_NODES);
   const [prompts, setPrompts] = useState(INITIAL_PROMPTS);
   const [editingPrompt, setEditingPrompt] = useState(null);
+  const [mdFileName, setMdFileName] = useState(null);      // tên file .md đã upload
+  const [mdUploading, setMdUploading] = useState(false);   // đang upload
+  const mdFileInputRef = useRef(null);                      // hidden file input
+  // Canvas transform state
+  const [transform, setTransform] = useState({ x: 0, y: 0, scale: 1 });
   const terminalEndRef = useRef(null);
   const canvasRef = useRef(null);
-  const dragging = useRef(null);
+  const dragging = useRef(null);   // { nodeId, startX, startY }
+  const panning  = useRef(null);   // { startX, startY, originX, originY }
+  const spaceHeld = useRef(false);
+
+  // ─── UPLOAD FILE .MD ───
+  const handleMdFileChange = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!file.name.endsWith('.md')) {
+      Swal.fire({ title: 'Sai định dạng', text: 'Vui lòng chọn file có đuôi .md', icon: 'warning', background: 'var(--color-surface)', color: 'white' });
+      return;
+    }
+    setMdUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append('mdFile', file);
+      const res = await fetch('http://localhost:3000/api/upload-prompt-md', { method: 'POST', body: formData });
+      const data = await res.json();
+      if (res.ok) {
+        setMdFileName(file.name);
+        Swal.fire({ title: '✅ Tải lên thành công!', text: `File "${file.name}" đã được cập nhật. Tool sẽ dùng prompt từ file này.`, icon: 'success', background: 'var(--color-surface)', color: 'white', timer: 3000, showConfirmButton: false });
+      } else {
+        throw new Error(data.message || 'Upload thất bại');
+      }
+    } catch (err) {
+      Swal.fire({ title: 'Lỗi upload', text: err.message, icon: 'error', background: 'var(--color-surface)', color: 'white' });
+    } finally {
+      setMdUploading(false);
+      e.target.value = ''; // reset để chọn lại cùng file vẫn trigger
+    }
+  };
 
   useEffect(() => {
     const eventSource = new EventSource('http://localhost:3000/api/logs/stream');
@@ -61,32 +96,100 @@ const Workflow = () => {
     return () => eventSource.close();
   }, []);
 
-  // ───────────────── DRAG & DROP ─────────────────
+  // ─── DRAG NODE ───
   const onMouseDown = useCallback((e, nodeId) => {
     if (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT' || e.target.tagName === 'BUTTON' || e.target.closest('button')) return;
+    if (spaceHeld.current) return; // để pan xử lý
     e.preventDefault();
-    const canvas = canvasRef.current.getBoundingClientRect();
+    e.stopPropagation();
+    // startX/Y là vị trí chuột trong toạ độ "world" (trước scale)
     dragging.current = {
       nodeId,
-      startX: e.clientX - nodes[nodeId].x,
-      startY: e.clientY - nodes[nodeId].y,
+      startX: (e.clientX - transform.x) / transform.scale - nodes[nodeId].x,
+      startY: (e.clientY - transform.y) / transform.scale - nodes[nodeId].y,
     };
-  }, [nodes]);
+  }, [nodes, transform]);
 
+  // ─── PAN + DRAG + ZOOM ───
   useEffect(() => {
+    const onKeyDown = (e) => {
+      if (e.code === 'Space' && e.target.tagName !== 'TEXTAREA' && e.target.tagName !== 'INPUT') {
+        e.preventDefault();
+        spaceHeld.current = true;
+        if (canvasRef.current) canvasRef.current.style.cursor = 'grab';
+      }
+    };
+    const onKeyUp = (e) => {
+      if (e.code === 'Space') {
+        spaceHeld.current = false;
+        panning.current = null;
+        if (canvasRef.current) canvasRef.current.style.cursor = '';
+      }
+    };
+
     const onMouseMove = (e) => {
+      if (panning.current) {
+        const dx = e.clientX - panning.current.startX;
+        const dy = e.clientY - panning.current.startY;
+        // Capture trước khi setTransform chạy async (tránh lỗi null ref)
+        const originX = panning.current.originX;
+        const originY = panning.current.originY;
+        setTransform(prev => ({ ...prev, x: originX + dx, y: originY + dy }));
+        return;
+      }
       if (!dragging.current) return;
       const { nodeId, startX, startY } = dragging.current;
-      setNodes(prev => ({
-        ...prev,
-        [nodeId]: { ...prev[nodeId], x: Math.max(0, e.clientX - startX), y: Math.max(0, e.clientY - startY) }
-      }));
+      const wx = (e.clientX - transform.x) / transform.scale - startX;
+      const wy = (e.clientY - transform.y) / transform.scale - startY;
+      setNodes(prev => ({ ...prev, [nodeId]: { ...prev[nodeId], x: Math.max(0, wx), y: Math.max(0, wy) } }));
     };
-    const onMouseUp = () => { dragging.current = null; };
+
+    const onMouseDownGlobal = (e) => {
+      if (spaceHeld.current) {
+        if (canvasRef.current) canvasRef.current.style.cursor = 'grabbing';
+        panning.current = { startX: e.clientX, startY: e.clientY, originX: transform.x, originY: transform.y };
+      }
+    };
+
+    const onMouseUp = () => {
+      dragging.current = null;
+      panning.current = null;
+      if (canvasRef.current && spaceHeld.current) canvasRef.current.style.cursor = 'grab';
+    };
+
+    // Zoom bằng scroll
+    const onWheel = (e) => {
+      if (!canvasRef.current) return;
+      e.preventDefault();
+      const rect = canvasRef.current.getBoundingClientRect();
+      const mx = e.clientX - rect.left; // vị trí chuột trong canvas
+      const my = e.clientY - rect.top;
+      const delta = e.deltaY < 0 ? 1.1 : 0.9;
+      setTransform(prev => {
+        const newScale = Math.min(3, Math.max(0.2, prev.scale * delta));
+        // zoom vào điểm dưới chuột
+        const newX = mx - (mx - prev.x) * (newScale / prev.scale);
+        const newY = my - (my - prev.y) * (newScale / prev.scale);
+        return { x: newX, y: newY, scale: newScale };
+      });
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
     window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mousedown', onMouseDownGlobal);
     window.addEventListener('mouseup', onMouseUp);
-    return () => { window.removeEventListener('mousemove', onMouseMove); window.removeEventListener('mouseup', onMouseUp); };
-  }, []);
+    canvasRef.current?.addEventListener('wheel', onWheel, { passive: false });
+    const ref = canvasRef.current;
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keyup', onKeyUp);
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mousedown', onMouseDownGlobal);
+      window.removeEventListener('mouseup', onMouseUp);
+      ref?.removeEventListener('wheel', onWheel);
+    };
+  }, [transform]);
 
   // ───────────────── TÍNH TOÁN CÁC ĐIỂM NỐI ─────────────────
   // Port xuất phải của Node (right-center)
@@ -149,39 +252,63 @@ const Workflow = () => {
           <input type="text" placeholder="Tìm kiếm luồng, node..." />
           <span className="shortcut">⌘K</span>
         </div>
+        <span style={{ fontSize: '11px', color: 'var(--color-text-dim)', marginLeft: '12px' }}>
+          💡 Giữ <kbd style={{ background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.2)', borderRadius: '4px', padding: '1px 5px', fontSize: '10px' }}>Space</kbd> + kéo • Scroll để zoom
+        </span>
       </div>
 
       <div className="workflow-content">
         <div className="canvas-area" ref={canvasRef}>
-          {/* ───── SVG ĐƯỜNG NỐI ───── */}
-          <svg style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', zIndex: 1, pointerEvents: 'none' }}>
-            {/* Nhánh 1: Source → GPT (active) */}
-            <path d={cubicPath(path1_from, path1_to)} className="path-line active-path" />
-            <circle cx={path1_to.x} cy={path1_to.y} r="3" fill="var(--color-primary)" />
 
-            {/* Nhánh 2: Source → Gemini (ảnh gốc - dim) */}
-            <path d={cubicPath(path2_from, path2_to)} className="path-line" strokeDasharray="6 3" />
-            <circle cx={path2_to.x} cy={path2_to.y} r="3" fill="var(--color-text-dim)" />
+          {/* ── ZOOM CONTROLS ── */}
+          <div style={{ position: 'absolute', bottom: 16, left: 16, zIndex: 100, display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <button onClick={() => setTransform(p => ({ ...p, scale: Math.min(3, +(p.scale * 1.2).toFixed(2)) }))} style={{ width: 32, height: 32, borderRadius: 8, background: 'rgba(30,30,30,0.9)', border: '1px solid rgba(255,255,255,0.15)', color: '#fff', cursor: 'pointer', fontSize: 18, display: 'flex', alignItems: 'center', justifyContent: 'center' }} title="Phóng to">+</button>
+            <button onClick={() => setTransform(p => ({ ...p, scale: Math.max(0.2, +(p.scale * 0.8).toFixed(2)) }))} style={{ width: 32, height: 32, borderRadius: 8, background: 'rgba(30,30,30,0.9)', border: '1px solid rgba(255,255,255,0.15)', color: '#fff', cursor: 'pointer', fontSize: 22, display: 'flex', alignItems: 'center', justifyContent: 'center', lineHeight: 1 }} title="Thu nhỏ">−</button>
+            <button onClick={() => setTransform({ x: 0, y: 0, scale: 1 })} style={{ width: 32, height: 32, borderRadius: 8, background: 'rgba(255,77,141,0.18)', border: '1px solid rgba(255,77,141,0.35)', color: 'var(--color-primary)', cursor: 'pointer', fontSize: 12, display: 'flex', alignItems: 'center', justifyContent: 'center' }} title="Đặt lại">1:1</button>
+          </div>
 
-            {/* Nhánh 3: Source → Gemini (video - dim) */}
-            <path d={cubicPath(path3_from, path3_to)} className="path-line" strokeDasharray="6 3" opacity="0.5" />
-            <circle cx={path3_to.x} cy={path3_to.y} r="3" fill="var(--color-text-dim)" opacity="0.5" />
+          {/* ── ZOOM LEVEL INDICATOR ── */}
+          <div style={{ position: 'absolute', bottom: 16, left: 58, zIndex: 100, fontSize: '11px', color: 'var(--color-text-dim)', background: 'rgba(0,0,0,0.4)', padding: '4px 8px', borderRadius: 6, border: '1px solid rgba(255,255,255,0.08)' }}>
+            {Math.round(transform.scale * 100)}%
+          </div>
 
-            {/* GPT → Gemini */}
-            <path d={cubicPath(pathGPT_from, pathGPT_to)} className="path-line active-path" />
-            <circle cx={pathGPT_to.x} cy={pathGPT_to.y} r="3" fill="var(--color-primary)" />
+          {/* ── SINGLE CANVAS CONTAINER (SVG + Nodes) ── */}
+          <div style={{
+            position: 'absolute', top: 0, left: 0,
+            width: '4000px', height: '4000px',
+            transformOrigin: '0 0',
+            transform: `translate(${transform.x}px, ${transform.y}px) scale(${transform.scale})`,
+          }}>
+            {/* SVG đường nối */}
+            <svg style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', overflow: 'visible', pointerEvents: 'none' }}>
+              {/* Nhánh 1: Source → GPT (active) */}
+              <path d={cubicPath(path1_from, path1_to)} className="path-line active-path" />
+              <circle cx={path1_to.x} cy={path1_to.y} r="4" fill="var(--color-primary)" />
 
-            {/* Gemini → Publish */}
-            <path d={cubicPath(pathPub_from, pathPub_to)} className="path-line" />
-          </svg>
+              {/* Nhánh 2: Source → Gemini (ảnh gốc - dim) */}
+              <path d={cubicPath(path2_from, path2_to)} className="path-line dim-path" />
+              <circle cx={path2_to.x} cy={path2_to.y} r="3" fill="rgba(160,160,180,0.5)" />
 
-          <div className="canvas-grid">
-            {/* ───── NODE 1: NGUỒN DỮ LIỆU ───── */}
-            <div
-              className="node-card drive-node"
-              style={{ top: source.y, left: source.x, cursor: 'grab' }}
-              onMouseDown={e => onMouseDown(e, 'source')}
-            >
+              {/* Nhánh 3: Source → Gemini (video - faint) */}
+              <path d={cubicPath(path3_from, path3_to)} className="path-line faint-path" />
+              <circle cx={path3_to.x} cy={path3_to.y} r="3" fill="rgba(120,120,140,0.35)" />
+
+              {/* GPT → Gemini */}
+              <path d={cubicPath(pathGPT_from, pathGPT_to)} className="path-line active-path" />
+              <circle cx={pathGPT_to.x} cy={pathGPT_to.y} r="4" fill="var(--color-primary)" />
+
+              {/* Gemini → Publish */}
+              <path d={cubicPath(pathPub_from, pathPub_to)} className="path-line dim-path" />
+              <circle cx={pathPub_to.x} cy={pathPub_to.y} r="3" fill="rgba(160,160,180,0.5)" />
+            </svg>
+
+            {/* Nối node cards */}
+            <div style={{ position: 'relative', width: '100%', height: '100%' }}>
+              <div
+                className="node-card drive-node"
+                style={{ top: source.y, left: source.x, cursor: 'grab' }}
+                onMouseDown={e => onMouseDown(e, 'source')}
+              >
               <div className="node-header"><Cloud size={14} className="blue" /> Nguồn Dữ Liệu<div className="toggle active"></div></div>
               <div className="node-body">
                 <div className="field">
@@ -198,9 +325,9 @@ const Workflow = () => {
               <div className="port" style={{top:'30%', right:'-5px', background:'var(--color-primary)'}} title="Nhánh 1 AVT"></div>
               <div className="port" style={{top:'60%', right:'-5px'}} title="Nhánh 2 Ảnh Thật"></div>
               <div className="port" style={{top:'90%', right:'-5px', opacity:0.5}} title="Nhánh 3 Video"></div>
-            </div>
+            </div>{/* end node source */}
 
-            {/* ───── NODE 2: GPT-4 VISION ───── */}
+              {/* ───── NODE 2: GPT-4 VISION ───── */}
             <div
               className={`node-card gpt-node ${isGPTActive ? 'active-glow' : ''}`}
               style={{ top: gpt.y, left: gpt.x, cursor: 'grab' }}
@@ -221,10 +348,22 @@ const Workflow = () => {
                   )}
                 </div>
                 <div className="field">
-                  <label>File Tham khảo (.md)</label>
-                  <button className="btn-upload-md" onClick={() => Swal.fire({title:'Sắp ra mắt', text:'Tính năng đính kèm file .md hướng dẫn AI đang được xây dựng!', icon:'info', background:'var(--color-surface)', color:'white'})}>
-                    <UploadCloud size={12} /> Đính kèm file .md
+                  <label>File Prompt hướng dẫn AI (.md)</label>
+                  <input ref={mdFileInputRef} type="file" accept=".md" style={{display:'none'}} onChange={handleMdFileChange} />
+                  <button
+                    className="btn-upload-md"
+                    onClick={() => mdFileInputRef.current?.click()}
+                    disabled={mdUploading}
+                    title="Chọn file .md để cập nhật prompt hướng dẫn AI tạo ảnh"
+                  >
+                    <UploadCloud size={12} />
+                    {mdUploading ? ' Đang tải...' : mdFileName ? ` ${mdFileName}` : ' Chọn file .md'}
                   </button>
+                  {mdFileName && (
+                    <div style={{fontSize:'10px', color:'var(--color-primary)', marginTop:4, display:'flex', alignItems:'center', gap:4}}>
+                      ✅ Đang dùng: <span style={{color:'var(--color-text-dim)'}}>{mdFileName}</span>
+                    </div>
+                  )}
                 </div>
               </div>
               <div className="port" style={{top:'50%', right:'-5px'}} title="Output → Gemini"></div>
@@ -264,10 +403,21 @@ const Workflow = () => {
                   )}
                 </div>
                 <div className="field mt-2">
-                  <label>File Tham khảo (.md)</label>
-                  <button className="btn-upload-md" onClick={() => Swal.fire({title:'Sắp ra mắt', text:'Tính năng đính kèm file .md hướng dẫn AI đang được xây dựng!', icon:'info', background:'var(--color-surface)', color:'white'})}>
-                    <UploadCloud size={12} /> Đính kèm file .md
+                  <label>File Prompt hướng dẫn AI (.md)</label>
+                  <button
+                    className="btn-upload-md"
+                    onClick={() => mdFileInputRef.current?.click()}
+                    disabled={mdUploading}
+                    title="Chọn file .md để cập nhật prompt hướng dẫn AI"
+                  >
+                    <UploadCloud size={12} />
+                    {mdUploading ? ' Đang tải...' : mdFileName ? ` ${mdFileName}` : ' Chọn file .md'}
                   </button>
+                  {mdFileName && (
+                    <div style={{fontSize:'10px', color:'var(--color-primary)', marginTop:4}}>
+                      ✅ <span style={{color:'var(--color-text-dim)'}}>{mdFileName}</span>
+                    </div>
+                  )}
                 </div>
               </div>
               <div className="port" style={{top:'50%', right:'-5px'}} title="Output → Publisher"></div>
@@ -290,9 +440,10 @@ const Workflow = () => {
                   </div>
                 </div>
               </div>
-            </div>
-          </div>
-        </div>
+            </div>{/* end node publish */}
+            </div>{/* end nodes relative wrapper */}
+          </div>{/* end single canvas container */}
+        </div>{/* end canvas-area */}
 
         {/* ───── LIVE MONITOR SIDEBAR ───── */}
         <div className="live-monitor-sidebar glass">

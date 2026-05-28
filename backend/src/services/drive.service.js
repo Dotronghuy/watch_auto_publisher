@@ -116,3 +116,60 @@ export const getFoldersInFolder = async (parentId) => {
     throw error;
   }
 };
+
+// Hàm tính tổng dung lượng THẬT - dùng BFS song song (nhanh hơn đệ quy tuần tự 10-20x)
+export const getDriveFolderSize = async (rootFolderId) => {
+  let totalBytes = 0;
+  const CONCURRENCY = 10; // Xử lý tối đa 10 folder cùng lúc
+
+  // BFS queue
+  let queue = [rootFolderId];
+
+  while (queue.length > 0) {
+    // Lấy batch hiện tại (tối đa CONCURRENCY folder)
+    const batch = queue.splice(0, CONCURRENCY);
+
+    // Xử lý tất cả folder trong batch song song
+    const results = await Promise.all(
+      batch.map(async (folderId) => {
+        let bytes = 0;
+        const subFolderIds = [];
+
+        try {
+          // Lấy tất cả file trong folder (có pagination)
+          let pageToken = null;
+          do {
+            const params = {
+              q: `'${folderId}' in parents and trashed=false`,
+              fields: 'nextPageToken, files(id, size, mimeType)',
+              pageSize: 1000,
+            };
+            if (pageToken) params.pageToken = pageToken;
+
+            const res = await drive.files.list(params);
+            for (const file of res.data.files) {
+              if (file.mimeType === 'application/vnd.google-apps.folder') {
+                subFolderIds.push(file.id); // Đưa subfolder vào queue
+              } else {
+                bytes += parseInt(file.size || '0', 10);
+              }
+            }
+            pageToken = res.data.nextPageToken;
+          } while (pageToken);
+        } catch (error) {
+          console.warn(`⚠️ Bỏ qua folder ${folderId}:`, error.message);
+        }
+
+        return { bytes, subFolderIds };
+      })
+    );
+
+    // Tổng hợp kết quả và thêm subfolder vào queue
+    for (const r of results) {
+      totalBytes += r.bytes;
+      queue.push(...r.subFolderIds);
+    }
+  }
+
+  return totalBytes;
+};

@@ -233,10 +233,57 @@ export const autoPublishRoutine = async (signal) => {
       let aiGeneratedImagePaths = [];
       if (postMode === 'AI' && localFilePaths.length === 1) {
         try {
-          const imgPrompt = `Đây là hình ảnh một chiếc đồng hồ đã tách nền. Hãy giữ nguyên chiếc đồng hồ và tạo cho nó một phông nền mới cực kỳ sang trọng (như bàn đá cẩm thạch, vân gỗ cao cấp). Không được làm biến dạng chiếc đồng hồ.`;
+          // Đọc prompt từ file hướng dẫn .md (nếu có), fallback về prompt mặc định
+          const promptGuidePath = path.join(__dirname, '../../config/gpt_image_prompt.md');
+          let imgPrompt;
 
-          const numAiImages = Math.floor(Math.random() * 3) + 4; // Ngẫu nhiên 4, 5 hoặc 6 ảnh
-          console.log(`🎨 [Nhánh AI] Yêu cầu ChatGPT vẽ ${numAiImages} bức ảnh liên tiếp...`);
+          if (fs.existsSync(promptGuidePath)) {
+            const mdContent = fs.readFileSync(promptGuidePath, 'utf8');
+
+            // Detect giới tính từ mã SKU
+            const skuUpper = (selectedSku?.name || '').toUpperCase();
+            let genderTag = 'NEUTRAL';
+            if (/G\d*$|G[^A-Z]|\d+G/.test(skuUpper)) genderTag = 'MALE';
+            else if (/L\d*$|L[^A-Z]|\d+L/.test(skuUpper)) genderTag = 'FEMALE';
+            console.log(`🔍 [Nhánh AI] SKU: ${selectedSku?.name} → Giới tính phát hiện: ${genderTag}`);
+
+            // Lấy đúng phần [MALE], [FEMALE] hoặc [NEUTRAL] từ file .md
+            // Tách toàn bộ các mục "English instruction for GPT" có label tương ứng
+            const sectionRegex = new RegExp(
+              `\\[${genderTag}\\][\\s\\S]*?(?=\\n## \\[|$)`, 'i'
+            );
+            const sectionMatch = mdContent.match(sectionRegex);
+            const searchContent = sectionMatch ? sectionMatch[0] : mdContent;
+
+            // Parse tất cả các scene instructions trong section đó
+            const sceneMatches = [...searchContent.matchAll(
+              /\*\*English instruction for GPT:\*\*\s*>\s*([\s\S]*?)(?=\n---|\n###|\n## |$)/g
+            )];
+
+            // Lọc bỏ các PLACEHOLDER chưa có nội dung thật
+            const validScenes = sceneMatches
+              .map(m => m[1].trim())
+              .filter(s => !s.startsWith('PLACEHOLDER'));
+
+            if (validScenes.length > 0) {
+              const sceneText = validScenes[Math.floor(Math.random() * validScenes.length)];
+              const genderNote = genderTag === 'MALE'
+                ? 'The person in the scene must have MASCULINE hands and appearance (male wrist, male clothing).'
+                : genderTag === 'FEMALE'
+                  ? 'The person in the scene must have FEMININE hands and appearance (female wrist, manicured nails, female clothing).'
+                  : '';
+              imgPrompt = `This is a luxury watch with transparent background (background already removed). Composite this exact watch into the following lifestyle scene:\n\n${sceneText}\n\n${genderNote}\n\nCRITICAL RULES:\n- Do NOT redraw, redesign, or modify the watch in any way.\n- Keep the watch dial, hands, case, bracelet, brand text, and colors EXACTLY as in the provided image.\n- Lighting must be consistent between the watch and the environment.\n- Output: photorealistic, 4K commercial product photography quality.`;
+              console.log(`📋 [Nhánh AI] Cảnh [${genderTag}] được chọn: ${sceneText.slice(0, 70)}...`);
+            } else {
+              // Fallback: nếu không có scene nào hợp lệ trong section → dùng NEUTRAL hoặc toàn bộ
+              console.log(`⚠️ [Nhánh AI] Không có cảnh ${genderTag} hợp lệ, chuyển sang NEUTRAL.`);
+              imgPrompt = `This is a luxury watch image with the background removed. Place this exact watch into a high-end lifestyle flat lay scene on white marble with luxury props. CRITICAL: Do NOT alter the watch design — preserve every detail exactly as shown. Photorealistic, 4K quality.`;
+            }
+          } else {
+            // Prompt mặc định nếu không có file .md
+            imgPrompt = `This is a luxury watch image with the background removed. Place this exact watch into a high-end lifestyle scene. CRITICAL: Do NOT alter the watch design in any way — preserve every detail exactly as shown. Photorealistic, 4K quality.`;
+            console.log(`⚠️ [Nhánh AI] Không tìm thấy file gpt_image_prompt.md, dùng prompt mặc định.`);
+          }
 
           aiGeneratedImagePaths = await generateBackgroundOnChatGPT(localFilePaths[0], imgPrompt, numAiImages);
 

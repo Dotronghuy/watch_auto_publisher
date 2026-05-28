@@ -5,12 +5,67 @@ import { fileURLToPath } from 'url';
 import axios from 'axios';
 import Papa from 'papaparse';
 import dotenv from 'dotenv';
+import { google } from 'googleapis';
+import multer from 'multer';
 import { startScheduler } from '../scheduler.js';
 import { openLoginHelper } from '../services/playwright.service.js';
 import { autoPublishRoutine } from '../services/publish.service.js';
 import { publishQueue } from '../workers/queue.js';
 import { recentActivities, addActivity } from '../utils/activity.js';
+import { getAllPostedHistory } from '../utils/history.js';
 import logEmitter from '../utils/liveLog.js';
+
+// Cache dung lượng Drive (cache 10 phút)
+let driveStorageCache = { usedGB: 0, limitGB: 0, updatedAt: 0 };
+const DRIVE_CACHE_TTL = 10 * 60 * 1000;
+
+// Hàm lấy dung lượng tổng tài khoản Google Drive qua OAuth2
+const getOAuth2DriveStorage = async () => {
+  // Lấy token từ .env hoặc từ file oauth2_token.json
+  const refreshToken = process.env.DRIVE_REFRESH_TOKEN;
+  
+  // Sửa lỗi đường dẫn: __dirname ở đây là backend/src/routes, nên phải lùi 2 cấp (../../) để ra backend/
+  const tokenPath = path.join(__dirname, '../../config/oauth2_token.json');
+  const credPath = path.join(__dirname, '../../config/oauth2_credentials.json');
+
+  if (!refreshToken && !fs.existsSync(tokenPath)) {
+    console.warn('⚠️ Không tìm thấy refresh token trong .env và file', tokenPath);
+    return null;
+  }
+
+  try {
+    let clientId, clientSecret;
+    if (fs.existsSync(credPath)) {
+      const creds = JSON.parse(fs.readFileSync(credPath, 'utf8'));
+      const c = creds.installed || creds.web;
+      clientId = c.client_id;
+      clientSecret = c.client_secret;
+    } else {
+      // Dùng env vars nếu có
+      clientId = process.env.GOOGLE_CLIENT_ID;
+      clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+    }
+    if (!clientId) return null;
+
+    const oAuth2Client = new google.auth.OAuth2(clientId, clientSecret, 'http://localhost:3333');
+    const token = refreshToken
+      ? { refresh_token: refreshToken }
+      : JSON.parse(fs.readFileSync(tokenPath, 'utf8'));
+    oAuth2Client.setCredentials(token);
+
+    const drive = google.drive({ version: 'v3', auth: oAuth2Client });
+    const about = await drive.about.get({ fields: 'storageQuota' });
+    const q = about.data.storageQuota;
+
+    return {
+      usedGB: parseFloat((parseInt(q.usage || '0') / 1024 / 1024 / 1024).toFixed(2)),
+      limitGB: q.limit ? parseFloat((parseInt(q.limit) / 1024 / 1024 / 1024).toFixed(0)) : 0,
+    };
+  } catch (err) {
+    console.warn('⚠️ OAuth2 Drive quota error:', err.message);
+    return null;
+  }
+};
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -41,15 +96,9 @@ logEmitter.on('log', (logData) => {
 // 1. Dashboard Stats
 router.get('/dashboard', async (req, res) => {
   try {
-    // A. Lấy tổng bài đã đăng từ lịch sử
-    const historyPath = path.join(__dirname, '../../posted_history.json');
-    let totalPosts = 0;
-    let historyData = [];
-    if (fs.existsSync(historyPath)) {
-      const data = fs.readFileSync(historyPath, 'utf8');
-      historyData = JSON.parse(data);
-      totalPosts = historyData.length;
-    }
+    // A. Lấy tổng bài đã đăng từ lịch sử (đọc từ SQLite DB)
+    const historyData = await getAllPostedHistory();
+    const totalPosts = historyData.length;
 
     // B. Tính biểu đồ dựa vào tham số timeRange
     const timeRange = req.query.timeRange || '7days';
@@ -93,11 +142,11 @@ router.get('/dashboard', async (req, res) => {
         chartData.push({ name: dayNames[i], value: counts[i] });
       }
     } else {
-      // Mặc định 7days: Tuần hiện tại T2-CN
-      const dayOfWeek = curr.getDay() || 7; 
-      for (let i = 1; i <= 7; i++) {
-        const d = new Date();
-        d.setDate(curr.getDate() - dayOfWeek + i);
+      // Mặc định 7days: 7 ngày gần nhất (bao gồm hôm nay)
+      for (let i = 6; i >= 0; i--) {
+        const d = new Date(curr);
+        d.setDate(curr.getDate() - i);
+        const dayOfWeek = d.getDay();
         const dateStr = `${d.getDate().toString().padStart(2, '0')}/${(d.getMonth() + 1).toString().padStart(2, '0')}`;
         
         let value = 0;
@@ -109,15 +158,33 @@ router.get('/dashboard', async (req, res) => {
             value++;
           }
         });
-        chartData.push({ name: `${dayNames[i-1]} (${dateStr})`, value: value });
+        chartData.push({ name: `${dayNames[(dayOfWeek || 7) - 1]} (${dateStr})`, value: value });
       }
     }
 
-    // C. Tính dung lượng Google Drive (Kết nối với tài khoản thật)
-    // Hiện tại set cứng bằng số thực tế của Google Drive user cung cấp
-    const storageUsedGB = 212.36;
+    // C. Lấy dung lượng THẬT tổng tài khoản Google Drive (giống số hiển thị trên drive.google.com)
+    let storageUsedGB = 0;
+    let storageLimitGB = 0;
+    try {
+      const now = Date.now();
+      if (now - driveStorageCache.updatedAt > DRIVE_CACHE_TTL) {
+        const result = await Promise.race([
+          getOAuth2DriveStorage(),
+          new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 10000))
+        ]);
+        if (result) {
+          driveStorageCache = { usedGB: result.usedGB, limitGB: result.limitGB, updatedAt: now };
+          console.log(`✅ Drive quota: ${result.usedGB} GB / ${result.limitGB} GB`);
+        }
+      }
+      storageUsedGB = driveStorageCache.usedGB;
+      storageLimitGB = driveStorageCache.limitGB;
+    } catch (driveErr) {
+      console.warn('⚠️ Không lấy được Drive quota:', driveErr.message);
+    }
 
-    // D. Tính số luồng đang chạy
+
+    // D. Tính số luồng đang chạy (Sử dụng số luồng thật sự đang xử lý ngầm từ BullMQ)
     let activeWorkers = 0;
     try {
       const active = await publishQueue.getActiveCount();
@@ -126,7 +193,6 @@ router.get('/dashboard', async (req, res) => {
     } catch (e) {
       // Ignored if Redis is down
     }
-
     // E. Đọc cài đặt kết nối mạng xã hội
     let connectedSocials = { facebook: true, instagram: true, threads: false, tiktok: false };
     if (fs.existsSync(settingsPath)) {
@@ -142,6 +208,7 @@ router.get('/dashboard', async (req, res) => {
       totalPosts: totalPosts,
       successRate: 100, // Hardcode 100% Opt vì hiện chưa có cơ chế log bài lỗi
       storageUsed: storageUsedGB,
+      storageLimit: storageLimitGB,
       chartData: chartData,
       socialHealth: { connected: connectedCount, total: 4, platforms: connectedSocials },
       dbHealth: 100,
@@ -206,7 +273,8 @@ router.get('/products', async (req, res) => {
       total: LIVE_PRODUCTS.length,
       page,
       limit,
-      totalPages: Math.ceil(LIVE_PRODUCTS.length / limit)
+      totalPages: Math.ceil(LIVE_PRODUCTS.length / limit),
+      syncedAt: new Date().toISOString() // Thời điểm thực tế lấy dữ liệu từ Sheet
     });
 
   } catch (error) {
@@ -217,7 +285,7 @@ router.get('/products', async (req, res) => {
 
 // 3. Nút Đồng bộ Sheet
 router.post('/trigger-sync', (req, res) => {
-  res.json({ success: true, message: 'Đã kích hoạt đồng bộ.' });
+  res.json({ success: true, message: 'Đã kích hoạt đồng bộ.', syncedAt: new Date().toISOString() });
 });
 
 // 4. Nút Chạy Auto Ngay - Gọi hàm THẬT
@@ -386,17 +454,29 @@ router.post('/settings', async (req, res) => {
 });
 
 // 8. API lấy Lịch sử đăng bài (Cho trang Lịch)
-router.get('/history', (req, res) => {
+router.get('/history', async (req, res) => {
   try {
-    const historyPath = path.join(__dirname, '../../posted_history.json');
-    if (fs.existsSync(historyPath)) {
-      const data = fs.readFileSync(historyPath, 'utf8');
-      res.json(JSON.parse(data));
-    } else {
-      res.json([]);
-    }
+    const historyData = await getAllPostedHistory();
+    res.json(historyData);
   } catch (err) {
     res.json([]);
+  }
+});
+// 9. Upload file .md prompt hướng dẫn AI
+const mdUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 2 * 1024 * 1024 } }); // max 2MB
+router.post('/upload-prompt-md', mdUpload.single('mdFile'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ message: 'Không có file nào được gửi lên.' });
+    if (!req.file.originalname.endsWith('.md')) {
+      return res.status(400).json({ message: 'Chỉ chấp nhận file .md' });
+    }
+    const savePath = path.join(__dirname, '../../config/gpt_image_prompt.md');
+    fs.writeFileSync(savePath, req.file.buffer);
+    console.log(`📄 [Upload] Đã cập nhật file prompt: ${req.file.originalname} (${req.file.size} bytes)`);
+    res.json({ success: true, message: 'Cập nhật thành công', filename: req.file.originalname, size: req.file.size });
+  } catch (err) {
+    console.error('❌ Lỗi upload .md:', err);
+    res.status(500).json({ message: 'Lỗi server: ' + err.message });
   }
 });
 
