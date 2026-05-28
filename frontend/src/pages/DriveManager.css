@@ -1,0 +1,151 @@
+.drive-manager {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+}
+
+.top-stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  padding: var(--space-6);
+  border-radius: var(--radius-md);
+  gap: var(--space-6);
+}
+
+.stat-col {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.action-col {
+  justify-content: center;
+}
+
+.stat-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.stat-title span {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  color: var(--color-text-muted);
+}
+
+.sheet-link {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 14px;
+  color: var(--color-info);
+  text-decoration: none;
+  font-weight: 500;
+  margin-top: 4px;
+}
+
+.sheet-link:hover {
+  text-decoration: underline;
+}
+
+.data-table-section {
+  padding: var(--space-6);
+  border-radius: var(--radius-md);
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+}
+
+.table-header-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: var(--space-6);
+}
+
+.table-actions {
+  display: flex;
+  gap: var(--space-3);
+}
+
+.search-box {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  background-color: var(--color-canvas);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  padding: 6px 12px;
+}
+
+.search-box input {
+  background: transparent;
+  border: none;
+  color: var(--color-text-main);
+  outline: none;
+  font-size: 12px;
+  width: 200px;
+}
+
+.table-container {
+  overflow-x: auto;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th, td {
+  padding: var(--space-4);
+  text-align: left;
+  font-size: 12px;
+  border-bottom: 1px solid var(--border-light);
+}
+
+th {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  color: var(--color-text-muted);
+}
+
+tr:hover td {
+  background-color: rgba(255,255,255,0.02);
+}
+
+.font-mono { font-family: var(--font-mono); }
+.text-xs { font-size: 11px; }
+.text-muted { color: var(--color-text-dim); }
+.text-center { text-align: center; }
+.font-semibold { font-weight: 600; }
+
+.table-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: var(--space-6);
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+
+.pagination {
+  display: flex;
+  gap: var(--space-3);
+}
+
+.pagination span {
+  cursor: pointer;
+  transition: color 0.2s;
+}
+
+.pagination span:hover {
+  color: var(--color-text-main);
+}
+
+.pagination .active {
+  color: var(--color-primary);
+  font-weight: 600;
+}

@@ -10,15 +10,26 @@ import { fileURLToPath } from 'url';
 import { generateBackgroundOnChatGPT, generateTextOnGemini } from './playwright.service.js';
 import { publishToInstagram, publishCarouselToInstagram, publishFBReels, publishIGReels } from './meta.service.js';
 import { addMusicToVideo } from './video.service.js';
+import { addActivity } from '../utils/activity.js';
+import { liveLog } from '../utils/liveLog.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const settingsPath = path.join(__dirname, '../config/settings.json');
 
 const N8N_WEBHOOK_URL = process.env.N8N_WEBHOOK_URL || 'http://127.0.0.1:5678/webhook-test/test-ai';
 const ROOT_DRIVE_FOLDER_ID = process.env.ROOT_DRIVE_FOLDER_ID || '1MFAy8z4kghRCT4Z8tGsvVAqk_I02UCHl';
 
-export const autoPublishRoutine = async () => {
-  console.log('🤖 Bắt đầu tiến trình tự động đăng bài (GIAI ĐOẠN 3)...');
+export const autoPublishRoutine = async (signal) => {
+  const checkAbort = () => {
+    if (signal && signal.aborted) {
+      const err = new Error('Lưồng bị dừng theo yêu cầu của người dùng.');
+      err.name = 'AbortError';
+      throw err;
+    }
+  };
+
+  liveLog('🤖 Bắt đầu tiến trình tự động đăng bài...', 'info', 'System');
 
   const cleanTempDirectory = () => {
     const tempDir = path.join(__dirname, '../../temp_images');
@@ -42,9 +53,10 @@ export const autoPublishRoutine = async () => {
 
     const postedIds = await getPostedImageIds();
 
-    // --- MỚI: Kiểm tra Cooldown từ Google Sheets ---
-    console.log('Đang kiểm tra lịch sử đăng bài (Cooldown) từ Google Sheets...');
+    liveLog('Đang kiểm tra lịch sử đăng bài từ Google Sheets...', 'typing', 'Google Sheets');
     const allProductsInfo = await getAllProductsPostInfo();
+
+    checkAbort(); // ---- Dừng an toàn sau khi lấy dữ liệu Sheet ----
     const nowMs = Date.now();
 
     const eligibleSkus = [];
@@ -83,13 +95,14 @@ export const autoPublishRoutine = async () => {
     }
 
     if (eligibleSkus.length === 0) {
-      throw new Error('Tất cả các mã SKU đều đang trong thời gian chờ (Cooldown). Không có mã nào hợp lệ để đăng!');
+      liveLog('⚠️ Tất cả các mã SKU đang trong thời gian chờ (Cooldown). Không có mã nào hợp lệ!', 'error', 'Google Sheets');
+      throw new Error('Tất cả các mã SKU đang trong thời gian chờ (Cooldown). Không có mã nào hợp lệ để đăng!');
     }
 
     // Trộn ngẫu nhiên danh sách hợp lệ
     const shuffledSkus = eligibleSkus.sort(() => 0.5 - Math.random());
 
-    const folderTypes = ['3_Video_Doc'];
+    const folderTypes = ['0_Anh_AVT', '1_Anh_Hang', '2_Anh_Tu_Chup', '3_Video_Doc'];
     let selectedImages = [];
     let selectedSku = null;
     let postMode = 'SINGLE'; // SINGLE (AI), ALBUM, hoặc REELS
@@ -153,7 +166,9 @@ export const autoPublishRoutine = async () => {
       await clearExpiredPostInfo(expiredButUnpickedRows);
     }
 
-    console.log(`=> Đã chọn [Chế độ ${postMode}] - SKU: ${selectedSku.name} - Số lượng ảnh: ${selectedImages.length}`);
+    liveLog(`✅ Đã chọn [Chế độ ${postMode}] - SKU: ${selectedSku.name} - Số lượng: ${selectedImages.length} ảnh`, 'highlight', 'Google Drive');
+
+    checkAbort(); // ---- Dừng an toàn sau khi chọn ảnh/video ----
 
     // 2. Tải tất cả ảnh về
     for (const img of selectedImages) {
@@ -285,6 +300,36 @@ export const autoPublishRoutine = async () => {
     if (!pageToken) throw new Error('Thiếu FB_PAGE_ACCESS_TOKEN');
 
     let postId = null;
+    
+    // Hàm trợ giúp để tính toán thời gian delay IG
+    const getIgDelayMs = () => {
+      try {
+        if (fs.existsSync(settingsPath)) {
+          const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+          // Nếu đang ở chế độ test thì KHÔNG áp dụng IG delay
+          if (settings.mode === 'test') return 0;
+          const min = parseInt(settings.igDelayMin) || 0;
+          const max = parseInt(settings.igDelayMax) || min;
+          if (min <= 0) return 0;
+          const randomMinutes = min + Math.random() * (max - min);
+          return Math.round(randomMinutes * 60 * 1000);
+        }
+      } catch (e) {}
+      return 0; // Mặc định 0 nếu lỗi (không chờ)
+    };
+    
+    // Hàm sleep hỗ trợ AbortSignal - có thể bị dừng giữa chừng
+    const sleep = (ms, abortSignal) => new Promise((resolve, reject) => {
+      const timer = setTimeout(resolve, ms);
+      if (abortSignal) {
+        abortSignal.addEventListener('abort', () => {
+          clearTimeout(timer);
+          const err = new Error('Sleep bị dừng theo yêu cầu.');
+          err.name = 'AbortError';
+          reject(err);
+        }, { once: true });
+      }
+    });
 
     if (postMode === 'REELS') {
       let finalVideoPath = localFilePaths[0];
@@ -314,6 +359,12 @@ export const autoPublishRoutine = async () => {
 
       // ĐĂNG VIDEO REELS LÊN INSTAGRAM (Bơm thẳng file nội bộ)
       try {
+         const delayMs = getIgDelayMs();
+         if (delayMs > 0) {
+             console.log(`⏳ Đang chờ ${delayMs / 60000} phút trước khi đẩy video sang IG (Chống spam)...`);
+             await sleep(delayMs);
+         }
+         
          console.log(`🚀 Đang đẩy trực tiếp Video từ ổ cứng sang IG Reels...`);
          
          // Thêm vòng lặp Retry phòng khi IG bị lỗi máy chủ nội bộ
@@ -366,6 +417,11 @@ export const autoPublishRoutine = async () => {
         console.log(`✅ Lấy thành công Public URL từ FB để đẩy sang IG: ${publicUrl}`);
 
         // Đăng lên Instagram
+        const delayMs = getIgDelayMs();
+        if (delayMs > 0) {
+            console.log(`⏳ Đang chờ ${delayMs / 60000} phút trước khi đẩy ảnh sang IG...`);
+            await sleep(delayMs);
+        }
         await publishToInstagram(postContent, publicUrl);
       } catch (igErr) {
         console.log(`⚠️ Lỗi khi đăng 1 ảnh lên Instagram: ${igErr.response?.data?.error?.message || igErr.message}`);
@@ -411,6 +467,11 @@ export const autoPublishRoutine = async () => {
       // Đăng lên Instagram Carousel
       if (publicUrls.length >= 2) {
         try {
+          const delayMs = getIgDelayMs();
+          if (delayMs > 0) {
+              console.log(`⏳ Đang chờ ${delayMs / 60000} phút trước khi đẩy Album sang IG...`);
+              await sleep(delayMs);
+          }
           console.log(`✅ Đang đẩy ${publicUrls.length} ảnh sang Instagram Carousel...`);
           await publishCarouselToInstagram(postContent, publicUrls);
         } catch (igErr) {
@@ -420,6 +481,9 @@ export const autoPublishRoutine = async () => {
     }
 
     console.log(`✅ Đã đăng thành công lên FB (Post ID: ${postId})`);
+    
+    // Đẩy lịch sử lên giao diện Dashboard
+    addActivity(`Đăng thành công sản phẩm ${selectedSku.name} lên Fanpage!`, 'success');
 
     // Lưu Post ID và Ngày đăng lên Google Sheets
     await updateProductPostInfo(selectedSku.name, postId);

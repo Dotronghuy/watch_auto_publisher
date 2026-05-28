@@ -1,0 +1,112 @@
+.calendar-page {
+  display: flex;
+  height: 100%;
+  gap: var(--space-6);
+}
+
+.calendar-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.calendar-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: var(--space-6);
+}
+
+.month-selector {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+
+.month-selector h2 {
+  font-size: 20px;
+  font-weight: 600;
+  min-width: 150px;
+  text-align: center;
+}
+
+.calendar-actions {
+  display: flex;
+  gap: var(--space-3);
+}
+
+.calendar-grid {
+  flex: 1;
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  grid-template-rows: auto repeat(5, 1fr);
+  background-color: var(--border-light);
+  gap: 1px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.day-header {
+  background-color: var(--color-surface);
+  padding: var(--space-3);
+  text-align: center;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  color: var(--color-text-muted);
+}
+
+.calendar-cell {
+  background-color: var(--color-surface);
+  padding: var(--space-2);
+  min-height: 100px;
+  display: flex;
+  flex-direction: column;
+  transition: background-color 0.2s;
+}
+
+.calendar-cell:hover {
+  background-color: var(--color-surface-hover);
+}
+
+.calendar-cell.dim .date-number {
+  color: var(--color-text-muted);
+  opacity: 0.5;
+}
+
+.calendar-cell.today {
+  background-color: rgba(255, 77, 141, 0.05);
+}
+
+.calendar-cell.today .date-number {
+  color: var(--color-primary);
+  font-weight: 700;
+}
+
+.date-number {
+  font-size: 13px;
+  font-weight: 500;
+  margin-bottom: var(--space-2);
+}
+
+.events-container {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.event-badge {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  font-weight: 500;
+  padding: 4px 6px;
+  border-radius: 4px;
+}
+
+.event-badge.twitter { background-color: rgba(29, 155, 240, 0.15); color: #1d9bf0; }
+.event-badge.instagram { background-color: rgba(225, 48, 108, 0.15); color: #e1306c; }
+.event-badge.linkedin { background-color: rgba(10, 102, 194, 0.15); color: #0a66c2; }
+.event-badge.facebook { background-color: rgba(24, 119, 242, 0.15); color: #1877f2; }

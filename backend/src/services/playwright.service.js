@@ -3,6 +3,7 @@ import stealth from 'puppeteer-extra-plugin-stealth';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
+import { liveLog } from '../utils/liveLog.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -14,9 +15,10 @@ export const generateBackgroundOnChatGPT = async (imagePath, prompt, count = 1) 
     const userDataDir = path.join(__dirname, '../../chrome_data_chatgpt');
     
     console.log('🚀 Khởi động trình duyệt ảo (Sử dụng Persistent Profile)...');
-    // Mở trình duyệt với Profile được lưu lại, không cần dùng cookies.json nữa
+    // headless: false + ẩn ra ngoài màn hình để tránh bị ChatGPT detect
     const context = await chromium.launchPersistentContext(userDataDir, { 
         headless: false,
+        args: ['--window-position=-32000,-32000', '--window-size=1280,720'],
         viewport: { width: 1280, height: 720 }
     });
     
@@ -55,8 +57,30 @@ export const generateBackgroundOnChatGPT = async (imagePath, prompt, count = 1) 
             }
         }
         
-        // Đảm bảo ô nhập prompt đã sẵn sàng
-        await page.waitForSelector('#prompt-textarea', { state: 'visible', timeout: 30000 });
+        // Đảm bảo ô nhập prompt đã sẵn sàng - thư nhiều selector vì ChatGPT hay đổi UI
+        const PROMPT_SELECTORS = [
+            '#prompt-textarea',
+            'div[contenteditable="true"][data-lexical-editor]',
+            'div[contenteditable="true"]',
+            'p[data-placeholder]',
+        ];
+
+        let promptLocator = null;
+        console.log('🔍 Đang tìm ô nhập liệu ChatGPT...');
+        for (const sel of PROMPT_SELECTORS) {
+            try {
+                await page.waitForSelector(sel, { state: 'visible', timeout: 8000 });
+                promptLocator = page.locator(sel).first();
+                console.log(`✅ Tìm thấy ô nhập liệu bằng selector: ${sel}`);
+                break;
+            } catch (e) {
+                console.log(`⚠️ Không tìm thấy: ${sel}, thử selector tiếp theo...`);
+            }
+        }
+
+        if (!promptLocator) {
+            throw new Error('Không tìm thấy ô nhập liệu ChatGPT! Giao diện có thể đã thay đổi hoặc tài khoản chưa đăng nhập.');
+        }
 
         console.log('📤 Đang tìm nút Upload và tải ảnh gốc lên...');
         const fileInput = await page.$('input[type="file"]');
@@ -78,11 +102,15 @@ export const generateBackgroundOnChatGPT = async (imagePath, prompt, count = 1) 
             
             if (i === 0) {
                 console.log(`✍️ Đang gõ prompt gốc...`);
-                await page.fill('#prompt-textarea', prompt);
+                await promptLocator.click();
+                await page.waitForTimeout(300);
+                await promptLocator.fill(prompt);
             } else {
                 console.log(`✍️ Đang gõ prompt biến thể...`);
-                const followUpPrompt = "Hãy tạo thêm 1 bức ảnh khác với bối cảnh tương tự nhưng thay đổi góc nhìn, cách bài trí hoặc ánh sáng một chút. Khung cảnh vẫn phải thật sang trọng.";
-                await page.fill('#prompt-textarea', followUpPrompt);
+                const followUpPrompt = "Hãy tạo thêm 1 bức ảnh khác với bối cảnh tương tự nhưng thay đổi góc nhìn, cách bài trí hoặc ánh sáng một chút. Không gian vẫn phải thật sang trọng.";
+                await promptLocator.click();
+                await page.waitForTimeout(300);
+                await promptLocator.fill(followUpPrompt);
             }
             
             await page.waitForTimeout(1000);
@@ -154,7 +182,18 @@ export const generateBackgroundOnChatGPT = async (imagePath, prompt, count = 1) 
             
             const outputPath = path.join(__dirname, `../../temp_images/chatgpt_ai_${i}_${Date.now()}.png`);
             fs.writeFileSync(outputPath, Buffer.from(imageBuffer));
-            console.log(`🎉 HOÀN THÀNH ẢNH ${i + 1}: ${outputPath}`);
+            const fileName = path.basename(outputPath);
+            const imageUrl = `http://localhost:3000/images/${fileName}`;
+
+            console.log(`🎉 HOÀN THÀNH ẢNH ${i + 1}/${count}: ${outputPath}`);
+            
+            // Gửi ngay lên Live Monitor để hiển thị carousel
+            liveLog(
+              `🖼️ Ảnh ${i + 1}/${count} đã được sinh xong!`,
+              'success',
+              'GPT-4 Vision',
+              { image: imageUrl, imageIndex: i + 1, imageTotal: count }
+            );
             
             outputPaths.push(outputPath);
             
@@ -187,8 +226,10 @@ export const generateTextOnGemini = async (prompt, imagePath = null) => {
     const userDataDir = path.join(__dirname, '../../chrome_data_gemini');
     
     console.log('🚀 Khởi động trình duyệt ảo (Gemini Profile)...');
+    // headless: false + ẩn ra ngoài màn hình để tránh bị Gemini detect
     const context = await chromium.launchPersistentContext(userDataDir, { 
         headless: false,
+        args: ['--window-position=-32000,-32000', '--window-size=1280,720'],
         viewport: { width: 1280, height: 720 }
     });
     
@@ -320,6 +361,14 @@ export const generateTextOnGemini = async (prompt, imagePath = null) => {
         }
         
         console.log('🎉 HOÀN THÀNH: Đã lấy được nội dung từ Gemini!');
+
+        // Gửi nội dung lên Live Monitor để hiển thị phần Gemini Content
+        liveLog(
+          `✅ Gemini đã viết xong nội dung (${finalText.length} ký tự)!`,
+          'success',
+          'Gemini 1.5 Pro',
+          { textPreview: finalText }
+        );
         
         await page.waitForTimeout(2000);
         await context.close();
@@ -334,4 +383,45 @@ export const generateTextOnGemini = async (prompt, imagePath = null) => {
         await context.close();
         throw error;
     }
+};
+
+export const openLoginHelper = async (provider) => {
+    console.log(`\n--- BẮT ĐẦU ĐĂNG NHẬP THỦ CÔNG: ${provider.toUpperCase()} ---`);
+    let userDataDir = '';
+    let targetUrl = '';
+    
+    if (provider === 'chatgpt') {
+        userDataDir = path.join(__dirname, '../../chrome_data_chatgpt');
+        targetUrl = 'https://chatgpt.com';
+    } else if (provider === 'gemini') {
+        userDataDir = path.join(__dirname, '../../chrome_data_gemini');
+        targetUrl = 'https://gemini.google.com/app';
+    } else {
+        throw new Error('Provider không hợp lệ');
+    }
+    
+    if (fs.existsSync(userDataDir)) {
+        fs.rmSync(userDataDir, { recursive: true, force: true });
+        console.log(`🗑️ Đã xoá profile cũ của ${provider}`);
+    }
+    
+    console.log(`🚀 Khởi động trình duyệt (Headless: FALSE) cho ${provider}...`);
+    const context = await chromium.launchPersistentContext(userDataDir, { 
+        headless: false,
+        viewport: { width: 1280, height: 720 }
+    });
+    
+    const page = context.pages().length > 0 ? context.pages()[0] : await context.newPage();
+    
+    console.log(`🌐 Đang mở trang: ${targetUrl}`);
+    await page.goto(targetUrl, { waitUntil: 'domcontentloaded' });
+    console.log('⏳ Trình duyệt đang mở! Vui lòng đăng nhập vào tài khoản trên cửa sổ trình duyệt.');
+    console.log('💡 KHI ĐĂNG NHẬP THÀNH CÔNG VÀ QUA ĐƯỢC CAPTCHA, HÃY TỰ TẮT CỬA SỔ TRÌNH DUYỆT ĐỂ LƯU PROFILE!');
+    
+    return new Promise((resolve) => {
+        context.on('close', () => {
+            console.log(`✅ Đã đóng trình duyệt. Profile ${provider} đã được lưu thành công!`);
+            resolve(true);
+        });
+    });
 };

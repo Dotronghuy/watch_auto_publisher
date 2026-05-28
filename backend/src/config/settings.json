@@ -1,0 +1,9 @@
+{
+  "timeSlots": [],
+  "igDelay": 10,
+  "delayUnit": "minutes",
+  "mode": "test",
+  "testInterval": "1",
+  "igDelayMin": 10,
+  "igDelayMax": 20
+}

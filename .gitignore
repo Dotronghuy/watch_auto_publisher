@@ -1,6 +1,24 @@
 node_modules/
 .env
 .DS_Store
+
+# Chrome profile data (đăng nhập ChatGPT / Gemini)
 backend/chrome_data*/
+
+# Ảnh tạm sinh ra trong quá trình chạy
+backend/temp_images/
+
+# Database SQLite
+*.db
 *.db-shm
 *.db-wal
+
+# File lịch sử đăng bài
+posted_history.json
+
+# File log / debug
+*.log
+
+# IDE / OS
+.vscode/
+Thumbs.db
