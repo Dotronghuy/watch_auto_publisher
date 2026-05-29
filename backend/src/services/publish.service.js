@@ -16,14 +16,30 @@ import { liveLog } from '../utils/liveLog.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const settingsPath = path.join(__dirname, '../config/settings.json');
+const geminiTemplatePath = path.join(__dirname, '../../config/gemini-prompt-template.md');
 
 const N8N_WEBHOOK_URL = process.env.N8N_WEBHOOK_URL || 'http://127.0.0.1:5678/webhook-test/test-ai';
 const ROOT_DRIVE_FOLDER_ID = process.env.ROOT_DRIVE_FOLDER_ID || '1MFAy8z4kghRCT4Z8tGsvVAqk_I02UCHl';
 
-export const autoPublishRoutine = async (signal) => {
+let globalStopController = new AbortController();
+let isRoutineRunning = false;
+
+export const getIsRunning = () => isRoutineRunning;
+
+export const resetGlobalStop = () => {
+  globalStopController = new AbortController();
+  return globalStopController.signal;
+};
+export const triggerGlobalStop = () => {
+  globalStopController.abort();
+};
+
+export const autoPublishRoutine = async () => {
+  isRoutineRunning = true;
+
   const checkAbort = () => {
-    if (signal && signal.aborted) {
-      const err = new Error('Lưồng bị dừng theo yêu cầu của người dùng.');
+    if (globalStopController.signal.aborted) {
+      const err = new Error('Luồng bị dừng theo yêu cầu của người dùng.');
       err.name = 'AbortError';
       throw err;
     }
@@ -225,6 +241,8 @@ export const autoPublishRoutine = async (signal) => {
 
     // 3. Sử dụng Playwright để xử lý AI (Tạo ảnh & Viết Content)
     let postContent = '';
+    let fbContent = '';
+    let igContent = '';
     try {
       const productInfo = await getProductInfoBySku(selectedSku.name);
       const productInfoText = productInfo ? Object.entries(productInfo).map(([k, v]) => `${k}: ${v}`).join('\n') : '';
@@ -236,6 +254,9 @@ export const autoPublishRoutine = async (signal) => {
           // Đọc prompt từ file hướng dẫn .md (nếu có), fallback về prompt mặc định
           const promptGuidePath = path.join(__dirname, '../../config/gpt_image_prompt.md');
           let imgPrompt;
+
+          const numAiImages = Math.floor(Math.random() * 5) + 4; // Sinh ngẫu nhiên từ 4-8 ảnh
+          let imgPromptsArray = [];
 
           if (fs.existsSync(promptGuidePath)) {
             const mdContent = fs.readFileSync(promptGuidePath, 'utf8');
@@ -266,26 +287,36 @@ export const autoPublishRoutine = async (signal) => {
               .filter(s => !s.startsWith('PLACEHOLDER'));
 
             if (validScenes.length > 0) {
-              const sceneText = validScenes[Math.floor(Math.random() * validScenes.length)];
+              // Xáo trộn mảng validScenes để lấy ngẫu nhiên các cảnh khác nhau
+              const shuffledScenes = [...validScenes].sort(() => 0.5 - Math.random());
+              // Nếu số lượng yêu cầu lớn hơn số cảnh có sẵn, có thể bị trùng, nhưng thường md file có 19 cảnh nên thoải mái
+              const selectedScenes = shuffledScenes.slice(0, numAiImages);
+
               const genderNote = genderTag === 'MALE'
                 ? 'The person in the scene must have MASCULINE hands and appearance (male wrist, male clothing).'
                 : genderTag === 'FEMALE'
                   ? 'The person in the scene must have FEMININE hands and appearance (female wrist, manicured nails, female clothing).'
                   : '';
-              imgPrompt = `This is a luxury watch with transparent background (background already removed). Composite this exact watch into the following lifestyle scene:\n\n${sceneText}\n\n${genderNote}\n\nCRITICAL RULES:\n- Do NOT redraw, redesign, or modify the watch in any way.\n- Keep the watch dial, hands, case, bracelet, brand text, and colors EXACTLY as in the provided image.\n- Lighting must be consistent between the watch and the environment.\n- Output: photorealistic, 4K commercial product photography quality.`;
-              console.log(`📋 [Nhánh AI] Cảnh [${genderTag}] được chọn: ${sceneText.slice(0, 70)}...`);
+              
+              imgPromptsArray = selectedScenes.map(sceneText => {
+                return `This is a luxury watch with transparent background (background already removed). Composite this exact watch into the following lifestyle scene:\n\n${sceneText}\n\n${genderNote}\n\nCRITICAL RULES:\n- Do NOT redraw, redesign, or modify the watch in any way.\n- Keep the watch dial, hands, case, bracelet, brand text, and colors EXACTLY as in the provided image.\n- Lighting must be consistent between the watch and the environment.\n- Output: photorealistic, 4K commercial product photography quality.`;
+              });
+              
+              console.log(`📋 [Nhánh AI] Đã chọn ${imgPromptsArray.length} cảnh ${genderTag} khác nhau từ file .md!`);
             } else {
               // Fallback: nếu không có scene nào hợp lệ trong section → dùng NEUTRAL hoặc toàn bộ
               console.log(`⚠️ [Nhánh AI] Không có cảnh ${genderTag} hợp lệ, chuyển sang NEUTRAL.`);
-              imgPrompt = `This is a luxury watch image with the background removed. Place this exact watch into a high-end lifestyle flat lay scene on white marble with luxury props. CRITICAL: Do NOT alter the watch design — preserve every detail exactly as shown. Photorealistic, 4K quality.`;
+              const fallbackPrompt = `This is a luxury watch image with the background removed. Place this exact watch into a high-end lifestyle flat lay scene on white marble with luxury props. CRITICAL: Do NOT alter the watch design — preserve every detail exactly as shown. Photorealistic, 4K quality.`;
+              imgPromptsArray = Array(numAiImages).fill(fallbackPrompt);
             }
           } else {
             // Prompt mặc định nếu không có file .md
-            imgPrompt = `This is a luxury watch image with the background removed. Place this exact watch into a high-end lifestyle scene. CRITICAL: Do NOT alter the watch design in any way — preserve every detail exactly as shown. Photorealistic, 4K quality.`;
+            const defaultPrompt = `This is a luxury watch image with the background removed. Place this exact watch into a high-end lifestyle scene. CRITICAL: Do NOT alter the watch design in any way — preserve every detail exactly as shown. Photorealistic, 4K quality.`;
+            imgPromptsArray = Array(numAiImages).fill(defaultPrompt);
             console.log(`⚠️ [Nhánh AI] Không tìm thấy file gpt_image_prompt.md, dùng prompt mặc định.`);
           }
 
-          aiGeneratedImagePaths = await generateBackgroundOnChatGPT(localFilePaths[0], imgPrompt, numAiImages);
+          aiGeneratedImagePaths = await generateBackgroundOnChatGPT(localFilePaths[0], imgPromptsArray, globalStopController.signal);
 
           // Xóa ảnh gốc vì không cần thiết đăng ảnh gốc nữa
           if (fs.existsSync(localFilePaths[0])) fs.unlinkSync(localFilePaths[0]);
@@ -293,23 +324,77 @@ export const autoPublishRoutine = async (signal) => {
           // Đổi mảng localFilePaths thành các ảnh AI vừa vẽ (để lát đăng Facebook thành Album)
           localFilePaths = [...aiGeneratedImagePaths];
         } catch (pwError) {
+          // Nếu lỗi do lệnh STOP → dừng ngay, không tiếp tục
+          if (globalStopController.signal.aborted) {
+            liveLog('⏹️ Đã dừng tiến trình theo yêu cầu.', 'error', 'System');
+            throw pwError;
+          }
           console.log(`⚠️ Lỗi Playwright tạo ảnh: ${pwError.message}. Sẽ đăng ảnh gốc.`);
         }
       }
 
-      // 3.2 GỌI GEMINI PLAYWRIGHT ĐỂ VIẾT CONTENT
+      // 3.2 ĐỌC TEMPLATE VÀ GỌI GEMINI ĐỂ VIẾT CONTENT
       try {
         console.log(`🤖 [Nhánh ${postMode}] Gửi ảnh sang Gemini để viết Content...`);
 
-        let textPrompt = `Hãy đóng vai một chuyên gia content marketing. Phân tích bức ảnh đồng hồ này và viết DUY NHẤT 1 bài đăng Facebook ngắn gọn, hấp dẫn để bán mẫu đồng hồ có mã SKU là: ${selectedSku.name}.\nDưới đây là thông tin kỹ thuật của sản phẩm:\n${productInfoText}\nChỉ trả về nội dung bài viết, không kèm giải thích. Dùng các hashtag phù hợp.`;
-        let targetImgPathForGemini = localFilePaths[Math.floor(Math.random() * localFilePaths.length)];
+        // Detect giới tính từ SKU để điền vào template
+        const skuUp = (selectedSku?.name || '').toUpperCase();
+        let genderLabel = 'Unisex';
+        if (/\dG$|G\d|\dG\d/.test(skuUp)) genderLabel = 'Nam (Male)';
+        else if (/\dL$|L\d|\dL\d/.test(skuUp)) genderLabel = 'Nữ (Female)';
+
+        // Đọc và parse template từ file .md
+        let fbPromptFinal = null;
+        let igPromptFinal = null;
+        let reelsPromptFinal = null;
+
+        if (fs.existsSync(geminiTemplatePath)) {
+          const templateRaw = fs.readFileSync(geminiTemplatePath, 'utf8');
+
+          // Đọc thêm tài liệu hướng dẫn phụ (nếu có upload)
+          let additionalContext = '';
+          const marketingPath = path.join(__dirname, '../../config/watch-marketing-content.md');
+          if (fs.existsSync(marketingPath)) {
+            additionalContext += `\n\n--- QUY TẮC MARKETING BỔ SUNG ---\n${fs.readFileSync(marketingPath, 'utf8')}`;
+          }
+          const personaPath = path.join(__dirname, '../../config/customer-persona.md');
+          if (fs.existsSync(personaPath)) {
+            additionalContext += `\n\n--- CHÂN DUNG KHÁCH HÀNG BỔ SUNG ---\n${fs.readFileSync(personaPath, 'utf8')}`;
+          }
+
+          // Hàm điền placeholder vào template và nhúng tài liệu
+          const fillTemplate = (tmpl) => tmpl
+            .replace(/\{\{SKU\}\}/g, selectedSku.name)
+            .replace(/\{\{PRODUCT_INFO\}\}/g, productInfoText || 'Không có thông tin')
+            .replace(/\{\{GENDER\}\}/g, genderLabel) + additionalContext;
+
+          // Parse section FB_AND_IG
+          const fbIgMatch = templateRaw.match(/## FB_AND_IG_PROMPT_TEMPLATE\s*\n([\s\S]*?)(?=\n---\n## |\n## REELS_|$)/);
+          if (fbIgMatch) fbPromptFinal = fillTemplate(fbIgMatch[1].trim());
+
+          // Parse section REELS
+          const reelsMatch = templateRaw.match(/## REELS_PROMPT_TEMPLATE\s*\n([\s\S]*?)(?=\n---\n## |$)/);
+          if (reelsMatch) reelsPromptFinal = fillTemplate(reelsMatch[1].trim());
+
+          console.log(`📋 [Gemini] Đã đọc template từ gemini-prompt-template.md (gender: ${genderLabel})`);
+        } else {
+          console.log(`⚠️ Không tìm thấy gemini-prompt-template.md, dùng prompt dự phòng.`);
+        }
+
+        let targetImgPathForGemini = null;
+        if (postMode === 'AI') {
+          targetImgPathForGemini = localFilePaths[Math.floor(Math.random() * localFilePaths.length)];
+        } else {
+          targetImgPathForGemini = localFilePaths[0]; // Nhánh thường: lấy ảnh đầu tiên
+        }
         let tempImgDownloaded = null;
 
-        // Riêng nhánh REELS: Lấy tạm 1 ảnh từ thư mục 1_Anh_Hang hoặc 2_Anh_Tu_Chup để cho Gemini nhìn
         if (postMode === 'REELS') {
-          textPrompt = `Hãy đóng vai một chuyên gia content marketing/Tiktok creator. Viết một đoạn caption ngắn giật tít, cực kỳ cuốn hút cho một video Reels giới thiệu chiếc đồng hồ có mã SKU là: ${selectedSku.name}.\nDưới đây là thông tin kỹ thuật của sản phẩm:\n${productInfoText}\nChỉ trả về caption, không kèm kịch bản hình ảnh. Dùng nhiều hashtag đang lên xu hướng (#dongho, #luxury, #reels...).`;
+          // REELS: Dùng REELS template (hoặc fallback)
+          const reelsFallback = `Hãy đóng vai TikTok creator. Viết caption ngắn giật tít cho video Reels giới thiệu đồng hồ SKU ${selectedSku.name}. Chỉ trả về caption, dùng hashtag #iwcarnivalvietnam #iwcarnival #donghoiwcarnival và các hashtag trending.`;
+          const reelsPrompt = reelsPromptFinal || reelsFallback;
 
-          // Tìm ảnh mẫu để gửi Gemini
+          // Tìm ảnh mẫu để gửi Gemini cho REELS
           const sampleFolders = ['1_Anh_Hang', '2_Anh_Tu_Chup'];
           for (const sFolder of sampleFolders) {
             const sFolderId = await getFolderIdByName(sFolder, selectedSku.id);
@@ -323,21 +408,71 @@ export const autoPublishRoutine = async (signal) => {
               }
             }
           }
-        }
 
-        postContent = await generateTextOnGemini(textPrompt, targetImgPathForGemini);
+          const reelsContent = await generateTextOnGemini(reelsPrompt, targetImgPathForGemini);
+          fbContent = reelsContent;
+          igContent = reelsContent; // Reels dùng chung 1 caption
+
+        } else {
+          // POST THƯỜNG: Dùng FB_AND_IG template — Gemini trả về 2 section
+          const fallbackPrompt = `Hãy viết 2 bài theo đúng format:\n## FACEBOOK:\n[Bài FB 80-150 từ, sang trọng, có hashtag #iwcarnivalvietnam #iwcarnival #donghoiwcarnival]\n## INSTAGRAM:\n[Caption IG 15-35 từ, góc nhìn KHÁC bài FB, có hashtag #iwcarnivalvietnam #iwcarnival #donghoiwcarnival]\nSản phẩm: đồng hồ SKU ${selectedSku.name}. Không kèm giải thích.`;
+          const combinedPrompt = fbPromptFinal || fallbackPrompt;
+
+          const combinedOutput = await generateTextOnGemini(combinedPrompt, targetImgPathForGemini);
+
+          // Parse FB và IG từ output của Gemini
+          // Hỗ trợ nhiều dạng format: ## FACEBOOK:, **FACEBOOK:**, FACEBOOK:, # FACEBOOK:
+          const fbMatch2 = combinedOutput.match(/(?:#{1,3}\s*|\*{0,2})FACEBOOK:?\*{0,2}\s*\n([\s\S]*?)(?=\n(?:#{1,3}\s*|\*{0,2})INSTAGRAM:?|$)/i);
+          const igMatch2 = combinedOutput.match(/(?:#{1,3}\s*|\*{0,2})INSTAGRAM:?\*{0,2}\s*\n([\s\S]*?)$/i);
+
+          if (fbMatch2 && igMatch2) {
+            fbContent = fbMatch2[1].trim();
+            igContent = igMatch2[1].trim();
+            console.log(`✅ [Gemini] Parse thành công: FB (${fbContent.length} ký tự) | IG (${igContent.length} ký tự)`);
+          } else {
+            // Fallback: nếu không parse được, tách thủ công theo từ khóa INSTAGRAM
+            console.log(`⚠️ [Gemini] Regex chính không match. Output gốc: ${combinedOutput.substring(0, 200)}...`);
+            const splitIdx = combinedOutput.search(/INSTAGRAM/i);
+            if (splitIdx !== -1) {
+              // Tìm dòng sau chữ INSTAGRAM:
+              const afterIG = combinedOutput.slice(splitIdx).replace(/^INSTAGRAM:?\s*/i, '');
+              const beforeIG = combinedOutput.slice(0, splitIdx).replace(/^.*?FACEBOOK:?\s*/is, '');
+              fbContent = beforeIG.trim() || combinedOutput;
+              igContent = afterIG.trim() || combinedOutput;
+              console.log(`⚠️ [Gemini] Dùng fallback split: FB (${fbContent.length} ký tự) | IG (${igContent.length} ký tự)`);
+            } else {
+              fbContent = combinedOutput;
+              igContent = combinedOutput;
+              console.log(`⚠️ [Gemini] Không tìm thấy INSTAGRAM — dùng chung 1 nội dung.`);
+            }
+          }
+        }
 
         // Xóa ảnh tạm nếu có dùng cho REELS
         if (tempImgDownloaded && fs.existsSync(tempImgDownloaded)) {
           fs.unlinkSync(tempImgDownloaded);
         }
 
+        postContent = fbContent; // postContent = FB content (dùng cho Facebook)
+
       } catch (geminiError) {
+        // Nếu lỗi do lệnh STOP → dừng ngay, không tiếp tục
+        if (globalStopController.signal.aborted) {
+          liveLog('⏹️ Đã dừng tiến trình Gemini theo yêu cầu.', 'error', 'System');
+          throw geminiError;
+        }
         console.log(`⚠️ Lỗi Playwright Gemini: ${geminiError.message}. Dùng nội dung dự phòng.`);
-        postContent = `[Đăng Tự Động] Khám phá ngay siêu phẩm đồng hồ ${selectedSku.name} tuyệt đẹp.`;
+        fbContent = `[Đăng Tự Động] Khám phá ngay siêu phẩm đồng hồ ${selectedSku.name} tuyệt đẹp. #iwcarnivalvietnam #iwcarnival #donghoiwcarnival`;
+        igContent = fbContent;
+        postContent = fbContent;
       }
 
     } catch (e) {
+      // Nếu lỗi do lệnh STOP → dừng ngay
+      if (globalStopController.signal.aborted) {
+        liveLog('⏹️ Tiến trình đã bị dừng hoàn toàn.', 'error', 'System');
+        throw e;
+      }
       console.log(`⚠️ Lỗi trích xuất thông tin: ${e.message}. Dùng nội dung dự phòng.`);
       postContent = `[Đăng Tự Động] Siêu phẩm đồng hồ ${selectedSku.name}.`;
     }
@@ -408,8 +543,8 @@ export const autoPublishRoutine = async (signal) => {
       try {
          const delayMs = getIgDelayMs();
          if (delayMs > 0) {
-             console.log(`⏳ Đang chờ ${delayMs / 60000} phút trước khi đẩy video sang IG (Chống spam)...`);
-             await sleep(delayMs);
+             liveLog(`⏳ Đang chờ ${(delayMs / 60000).toFixed(2)} phút trước khi đẩy video sang IG (Chống spam)...`, 'typing', 'System');
+             await sleep(delayMs, globalStopController.signal);
          }
          
          console.log(`🚀 Đang đẩy trực tiếp Video từ ổ cứng sang IG Reels...`);
@@ -418,7 +553,7 @@ export const autoPublishRoutine = async (signal) => {
          let igSuccess = false;
          for (let i = 1; i <= 3; i++) {
              try {
-                 await publishIGReels(finalVideoPath, postContent);
+                 await publishIGReels(finalVideoPath, igContent);
                  igSuccess = true;
                  break; // Thành công thì thoát vòng lặp
              } catch (igErr) {
@@ -463,13 +598,13 @@ export const autoPublishRoutine = async (signal) => {
         const publicUrl = imgMetaRes.data.images[0].source;
         console.log(`✅ Lấy thành công Public URL từ FB để đẩy sang IG: ${publicUrl}`);
 
-        // Đăng lên Instagram
+        // Đăng lên Instagram với IG content riêng
         const delayMs = getIgDelayMs();
         if (delayMs > 0) {
-            console.log(`⏳ Đang chờ ${delayMs / 60000} phút trước khi đẩy ảnh sang IG...`);
-            await sleep(delayMs);
+            liveLog(`⏳ Đang chờ ${(delayMs / 60000).toFixed(2)} phút trước khi đẩy ảnh sang IG...`, 'typing', 'System');
+            await sleep(delayMs, globalStopController.signal);
         }
-        await publishToInstagram(postContent, publicUrl);
+        await publishToInstagram(igContent, publicUrl);
       } catch (igErr) {
         console.log(`⚠️ Lỗi khi đăng 1 ảnh lên Instagram: ${igErr.response?.data?.error?.message || igErr.message}`);
       }
@@ -516,11 +651,11 @@ export const autoPublishRoutine = async (signal) => {
         try {
           const delayMs = getIgDelayMs();
           if (delayMs > 0) {
-              console.log(`⏳ Đang chờ ${delayMs / 60000} phút trước khi đẩy Album sang IG...`);
-              await sleep(delayMs);
+              liveLog(`⏳ Đang chờ ${(delayMs / 60000).toFixed(2)} phút trước khi đẩy Album sang IG...`, 'typing', 'System');
+              await sleep(delayMs, globalStopController.signal);
           }
-          console.log(`✅ Đang đẩy ${publicUrls.length} ảnh sang Instagram Carousel...`);
-          await publishCarouselToInstagram(postContent, publicUrls);
+          console.log(`✅ Đang đẩy ${publicUrls.length} ảnh sang Instagram Carousel (nội dung IG riêng)...`);
+          await publishCarouselToInstagram(igContent, publicUrls);
         } catch (igErr) {
           console.log(`⚠️ Lỗi đăng Carousel Instagram: ${igErr.response?.data?.error?.message || igErr.message}`);
         }
@@ -550,5 +685,7 @@ export const autoPublishRoutine = async (signal) => {
     cleanTempDirectory();
     console.error('❌ Tiến trình tự động thất bại:', error.response?.data || error.message);
     throw error;
+  } finally {
+    isRoutineRunning = false; // Luôn reset trạng thái khi kết thúc (dù thành công, lỗi hay bị abort)
   }
 };

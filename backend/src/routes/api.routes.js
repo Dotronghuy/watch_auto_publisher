@@ -8,8 +8,9 @@ import dotenv from 'dotenv';
 import { google } from 'googleapis';
 import multer from 'multer';
 import { startScheduler } from '../scheduler.js';
+import { autoPublishRoutine, resetGlobalStop, triggerGlobalStop, getIsRunning } from '../services/publish.service.js';
+import { getProductInfoBySku } from '../services/sheet.service.js';
 import { openLoginHelper } from '../services/playwright.service.js';
-import { autoPublishRoutine } from '../services/publish.service.js';
 import { publishQueue } from '../workers/queue.js';
 import { recentActivities, addActivity } from '../utils/activity.js';
 import { getAllPostedHistory } from '../utils/history.js';
@@ -75,14 +76,15 @@ const router = express.Router();
 
 // Lưu trữ các client SSE đang kết nối
 let clients = [];
+let logHistory = [];
 
 // ------- STOP SIGNAL -------
 // Khi stopSignal.aborted === true, autoPublishRoutine sẽ dừng ở bước an toàn tiếp theo
-let stopController = new AbortController();
-export const getStopSignal = () => stopController.signal;
 
 // Hàm gửi log tới tất cả các client đang xem Live Monitor
 export const sendLogToClients = (logData) => {
+  logHistory.push(logData);
+  if (logHistory.length > 300) logHistory.shift(); // Giữ tối đa 300 sự kiện gần nhất
   clients.forEach(client => {
     client.res.write(`data: ${JSON.stringify(logData)}\n\n`);
   });
@@ -184,15 +186,8 @@ router.get('/dashboard', async (req, res) => {
     }
 
 
-    // D. Tính số luồng đang chạy (Sử dụng số luồng thật sự đang xử lý ngầm từ BullMQ)
-    let activeWorkers = 0;
-    try {
-      const active = await publishQueue.getActiveCount();
-      const waiting = await publishQueue.getWaitingCount();
-      activeWorkers = active + waiting;
-    } catch (e) {
-      // Ignored if Redis is down
-    }
+    // D. Trạng thái luồng đang chạy — dùng flag in-process (chính xác ngay lập tức)
+    const activeWorkers = getIsRunning() ? 1 : 0;
     // E. Đọc cài đặt kết nối mạng xã hội
     let connectedSocials = { facebook: true, instagram: true, threads: false, tiktok: false };
     if (fs.existsSync(settingsPath)) {
@@ -291,11 +286,11 @@ router.post('/trigger-sync', (req, res) => {
 // 4. Nút Chạy Auto Ngay - Gọi hàm THẬT
 router.post('/trigger-workflow', async (req, res) => {
   // Reset stop signal trước mỗi lần chạy mới
-  stopController = new AbortController();
+  resetGlobalStop();
   addActivity('Bắt đầu luồng Auto đăng bài (AI Workflow)', 'info');
   sendLogToClients({ time: new Date().toLocaleTimeString(), sender: 'System', message: '🚀 Bắt đầu luồng thực tế...', type: 'info' });
 
-  autoPublishRoutine(stopController.signal)
+  autoPublishRoutine()
     .then(() => {
       sendLogToClients({ time: new Date().toLocaleTimeString(), sender: 'System', message: '✅ Luồng kết thúc thành công!', type: 'success' });
       addActivity('Luồng Auto kết thúc thành công', 'success');
@@ -311,12 +306,25 @@ router.post('/trigger-workflow', async (req, res) => {
   res.json({ success: true, message: 'Luồng thật đã được khởi động!' });
 });
 
-// 4b. Dừng Luồng
-router.post('/stop-workflow', (req, res) => {
-  stopController.abort();
-  console.log('⏹️ Nhận lệnh Dừng từ Frontend. Đã gửi AbortSignal.');
-  sendLogToClients({ time: new Date().toLocaleTimeString(), sender: 'System', message: '⏹️ Nhận lệnh dừng. Đang chờ kết thúc bước hiện tại an toàn...', type: 'highlight' });
-  res.json({ success: true, message: 'Đã gửi tín hiệu dừng.' });
+// 4b. Dừng Luồng NGAY LẬP TỨC (Abrupt Stop)
+router.post('/stop-workflow', async (req, res) => {
+  triggerGlobalStop(); // Phát tín hiệu abort ngay lập tức
+  console.log('⏹️ Nhận lệnh DỪNG NGAY từ Frontend. Đang hủy toàn bộ...');
+  sendLogToClients({ time: new Date().toLocaleTimeString(), sender: 'System', message: '⏹️ Đã nhận lệnh DỪNG. Hủy toàn bộ tiến trình ngay lập tức!', type: 'error' });
+
+  // Xóa sạch tất cả job đang chờ trong hàng đợi BullMQ
+  try {
+    await publishQueue.drain(true); // Drain: hủy tất cả job đang chờ (waiting + delayed)
+    const active = await publishQueue.getActive();
+    for (const job of active) {
+      await job.discard(); // Đánh dấu job đang chạy là thất bại ngay
+    }
+    console.log('✅ Đã drain queue và discard tất cả active jobs.');
+  } catch (e) {
+    console.log('⚠️ Không thể drain queue:', e.message);
+  }
+
+  res.json({ success: true, message: 'Đã dừng toàn bộ ngay lập tức.' });
 });
 
 // 5. Server-Sent Events (SSE) Endpoint cho Live Monitor
@@ -331,6 +339,11 @@ router.get('/logs/stream', (req, res) => {
   const clientId = Date.now();
   const newClient = { id: clientId, res };
   clients.push(newClient);
+
+  // Gửi lịch sử log cũ trước (nếu có)
+  if (logHistory.length > 0) {
+    res.write(`data: ${JSON.stringify({ type: 'history', logs: logHistory })}\n\n`);
+  }
 
   // Gửi tin nhắn khởi tạo
   res.write(`data: ${JSON.stringify({ time: new Date().toLocaleTimeString(), sender: 'System', message: 'Đã kết nối Live Monitor. Đang chờ sự kiện...', type: 'info' })}\n\n`);
@@ -462,21 +475,90 @@ router.get('/history', async (req, res) => {
     res.json([]);
   }
 });
-// 9. Upload file .md prompt hướng dẫn AI
-const mdUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 2 * 1024 * 1024 } }); // max 2MB
-router.post('/upload-prompt-md', mdUpload.single('mdFile'), async (req, res) => {
+// 9. Upload file .md — Tách riêng theo node, hỗ trợ nhiều file mỗi node
+const mdUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } }); // max 5MB mỗi file
+
+// Liệt kê các file .md hiện có của từng node
+router.get('/prompt-md-files/:nodeId', (req, res) => {
+  const { nodeId } = req.params;
+  const validNodes = ['gpt', 'gemini'];
+  if (!validNodes.includes(nodeId)) return res.status(400).json({ message: 'nodeId không hợp lệ' });
+
   try {
-    if (!req.file) return res.status(400).json({ message: 'Không có file nào được gửi lên.' });
-    if (!req.file.originalname.endsWith('.md')) {
-      return res.status(400).json({ message: 'Chỉ chấp nhận file .md' });
-    }
-    const savePath = path.join(__dirname, '../../config/gpt_image_prompt.md');
-    fs.writeFileSync(savePath, req.file.buffer);
-    console.log(`📄 [Upload] Đã cập nhật file prompt: ${req.file.originalname} (${req.file.size} bytes)`);
-    res.json({ success: true, message: 'Cập nhật thành công', filename: req.file.originalname, size: req.file.size });
+    const configDir = path.join(__dirname, '../../config');
+    const nodePrefix = nodeId === 'gpt' ? 'gpt_' : 'gemini_';
+    // Liệt kê tất cả file .md trong config thuộc node đó (theo prefix)
+    const nodeFileMap = {
+      gpt: ['gpt_image_prompt.md'],
+      gemini: ['gemini-prompt-template.md', 'watch-marketing-content.md', 'customer-persona.md']
+    };
+    const expectedFiles = nodeFileMap[nodeId];
+    const files = expectedFiles
+      .filter(f => fs.existsSync(path.join(configDir, f)))
+      .map(f => {
+        const stat = fs.statSync(path.join(configDir, f));
+        return { name: f, size: stat.size, updatedAt: stat.mtime };
+      });
+    res.json({ files });
   } catch (err) {
-    console.error('❌ Lỗi upload .md:', err);
-    res.status(500).json({ message: 'Lỗi server: ' + err.message });
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// Upload 1 hoặc nhiều file .md vào node
+router.post('/upload-prompt-md/:nodeId', mdUpload.array('mdFiles', 10), async (req, res) => {
+  const { nodeId } = req.params;
+  const validNodes = ['gpt', 'gemini'];
+  if (!validNodes.includes(nodeId)) return res.status(400).json({ message: 'nodeId không hợp lệ' });
+  if (!req.files || req.files.length === 0) return res.status(400).json({ message: 'Không có file nào được gửi lên.' });
+
+  const configDir = path.join(__dirname, '../../config');
+  const saved = [];
+  const errors = [];
+
+  for (const file of req.files) {
+    if (!file.originalname.endsWith('.md')) {
+      errors.push(`${file.originalname}: chỉ chấp nhận .md`);
+      continue;
+    }
+    try {
+      // Lưu file bằng tên gốc vào thư mục config
+      const savePath = path.join(configDir, file.originalname);
+      fs.writeFileSync(savePath, file.buffer);
+      console.log(`📄 [Upload/${nodeId}] Đã lưu: ${file.originalname} (${file.size} bytes)`);
+      saved.push({ name: file.originalname, size: file.size });
+    } catch (e) {
+      errors.push(`${file.originalname}: ${e.message}`);
+    }
+  }
+
+  res.json({
+    success: saved.length > 0,
+    saved,
+    errors,
+    message: `Đã lưu ${saved.length} file${errors.length ? `, ${errors.length} lỗi` : ''}.`
+  });
+});
+
+// Xoá 1 file .md khỏi node
+router.delete('/prompt-md-files/:nodeId/:filename', (req, res) => {
+  const { nodeId, filename } = req.params;
+  const validNodes = ['gpt', 'gemini'];
+  // Danh sách file cốt lõi không được xoá
+  const coreFiles = ['gpt_image_prompt.md', 'gemini-prompt-template.md'];
+
+  if (!validNodes.includes(nodeId)) return res.status(400).json({ message: 'nodeId không hợp lệ' });
+  if (coreFiles.includes(filename)) return res.status(403).json({ message: `File "${filename}" là file cốt lõi, không thể xoá qua UI.` });
+  if (!filename.endsWith('.md') || filename.includes('..')) return res.status(400).json({ message: 'Tên file không hợp lệ.' });
+
+  try {
+    const filePath = path.join(__dirname, '../../config', filename);
+    if (!fs.existsSync(filePath)) return res.status(404).json({ message: 'File không tồn tại.' });
+    fs.unlinkSync(filePath);
+    console.log(`🗑️ [Delete/${nodeId}] Đã xoá: ${filename}`);
+    res.json({ success: true, message: `Đã xoá ${filename}` });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
   }
 });
 

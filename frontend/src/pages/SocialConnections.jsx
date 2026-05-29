@@ -6,7 +6,7 @@ import './SocialConnections.css';
 
 const SocialConnections = () => {
   const [timeSlots, setTimeSlots] = useState([]);
-  const [newTime, setNewTime] = useState('08:00');
+  const [newTime, setNewTime] = useState('');
   const [mode, setMode] = useState('real');
   const [testInterval, setTestInterval] = useState(5);
   const [igDelayMin, setIgDelayMin] = useState(10);
@@ -35,7 +35,7 @@ const SocialConnections = () => {
       .then(data => {
         setMode(data.mode || 'real');
         setTestInterval(data.testInterval || 5);
-        setTimeSlots(data.timeSlots || ["08:00", "11:30", "20:00"]);
+        setTimeSlots(Array.isArray(data.timeSlots) ? data.timeSlots : []);
         setIgDelayMin(data.igDelayMin || 10);
         setIgDelayMax(data.igDelayMax || 20);
         if (data.connectedSocials) {
@@ -137,14 +137,52 @@ const SocialConnections = () => {
     setIsResettingAI(null);
   };
 
+  const autoSaveSettings = async (updates) => {
+    try {
+      await fetch('http://localhost:3000/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updates)
+      });
+    } catch (e) {
+      console.error('Lỗi auto save:', e);
+    }
+  };
+
   const addTimeSlot = () => {
-    if (!timeSlots.includes(newTime)) {
-      setTimeSlots([...timeSlots, newTime].sort());
+    // Validate 24h format HH:mm
+    const timeRegex = /^([01]?[0-9]|2[0-3]):[0-5][0-9]$/;
+    if (newTime && timeRegex.test(newTime)) {
+      let formattedTime = newTime;
+      if (formattedTime.length === 4) formattedTime = '0' + formattedTime; // pad 8:30 to 08:30
+      
+      if (!timeSlots.includes(formattedTime)) {
+        const updated = [...timeSlots, formattedTime].sort();
+        setTimeSlots(updated);
+        setNewTime(''); // Reset ô nhập sau khi thêm
+        autoSaveSettings({ timeSlots: updated });
+      } else {
+        setNewTime(''); // Đã tồn tại thì reset thôi
+      }
+    } else if (newTime) {
+      Swal.fire({
+        title: 'Sai định dạng',
+        text: 'Vui lòng nhập đúng định dạng 24h (VD: 08:30, 14:00)',
+        icon: 'error',
+        background: 'var(--color-surface)',
+        color: 'white',
+        toast: true,
+        position: 'top-end',
+        showConfirmButton: false,
+        timer: 3000
+      });
     }
   };
 
   const removeTimeSlot = (time) => {
-    setTimeSlots(timeSlots.filter(t => t !== time));
+    const updated = timeSlots.filter(t => t !== time);
+    setTimeSlots(updated);
+    autoSaveSettings({ timeSlots: updated });
   };
   return (
     <div className="social-connections">
@@ -262,8 +300,8 @@ const SocialConnections = () => {
               <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px'}}>
                 <h4 style={{fontSize: '13px', margin: 0}}>🕒 Cấu hình Tần suất</h4>
                 <div style={{display: 'flex', gap: '8px', background: 'var(--color-surface)', borderRadius: '4px', padding: '2px'}}>
-                  <button className={`btn-ghost ${mode === 'real' ? 'active' : ''}`} style={{padding: '4px 8px', fontSize: '11px', background: mode === 'real' ? 'rgba(255,255,255,0.1)' : 'transparent'}} onClick={() => setMode('real')}>Đăng Thật</button>
-                  <button className={`btn-ghost ${mode === 'test' ? 'active' : ''}`} style={{padding: '4px 8px', fontSize: '11px', background: mode === 'test' ? 'rgba(255,255,255,0.1)' : 'transparent'}} onClick={() => setMode('test')}>Đăng Test</button>
+                  <button className={`btn-ghost ${mode === 'real' ? 'active' : ''}`} style={{padding: '4px 8px', fontSize: '11px', background: mode === 'real' ? 'rgba(255,255,255,0.1)' : 'transparent'}} onClick={() => { setMode('real'); autoSaveSettings({ mode: 'real' }); }}>Đăng Thật</button>
+                  <button className={`btn-ghost ${mode === 'test' ? 'active' : ''}`} style={{padding: '4px 8px', fontSize: '11px', background: mode === 'test' ? 'rgba(255,255,255,0.1)' : 'transparent'}} onClick={() => { setMode('test'); autoSaveSettings({ mode: 'test' }); }}>Đăng Test</button>
                 </div>
               </div>
 
@@ -278,14 +316,30 @@ const SocialConnections = () => {
                     ))}
                   </div>
                   <div style={{display: 'flex', gap: '8px'}}>
-                    <input type="time" value={newTime} onChange={e => setNewTime(e.target.value)} style={{background: 'var(--color-canvas)', border: '1px solid var(--border-light)', color: 'white', padding: '6px 10px', borderRadius: '4px'}} />
+                    <input 
+                      type="text" 
+                      placeholder="VD: 14:30"
+                      maxLength="5"
+                      value={newTime} 
+                      onChange={e => {
+                        let val = e.target.value.replace(/[^\d:]/g, '');
+                        if (val.length === 2 && !val.includes(':') && e.target.value.length > newTime.length) {
+                          val += ':';
+                        }
+                        setNewTime(val);
+                      }}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter') addTimeSlot();
+                      }}
+                      style={{background: 'var(--color-canvas)', border: '1px solid var(--border-light)', color: 'white', padding: '6px 10px', borderRadius: '4px', width: '85px', textAlign: 'center'}} 
+                    />
                     <button className="btn-outline" onClick={addTimeSlot} style={{padding: '6px 12px'}}><Plus size={14} /> Thêm</button>
                   </div>
                 </>
               ) : (
                 <div style={{display: 'flex', alignItems: 'center', gap: '12px', background: 'rgba(255,255,255,0.05)', padding: '12px', borderRadius: '6px'}}>
                   <span style={{fontSize: '12px'}}>Cứ mỗi</span>
-                  <input type="number" value={testInterval} onChange={e => setTestInterval(e.target.value)} min="1" style={{background: 'var(--color-canvas)', border: '1px solid var(--border-light)', color: 'white', padding: '6px 10px', borderRadius: '4px', width: '70px', textAlign: 'center'}} />
+                  <input type="number" value={testInterval} onChange={e => setTestInterval(e.target.value)} onBlur={() => autoSaveSettings({ testInterval })} min="1" style={{background: 'var(--color-canvas)', border: '1px solid var(--border-light)', color: 'white', padding: '6px 10px', borderRadius: '4px', width: '70px', textAlign: 'center'}} />
                   <span style={{fontSize: '12px'}}>phút đăng 1 bài</span>
                 </div>
               )}
@@ -298,9 +352,9 @@ const SocialConnections = () => {
                 {mode === 'test' ? 'Không áp dụng khoảng trễ ngẫu nhiên trong chế độ Đăng Test.' : 'Random thời gian đăng lên IG sau khi đã lên bài trên FB.'}
               </p>
               <div style={{display: 'flex', gap: '8px', alignItems: 'center', background: 'rgba(255,255,255,0.05)', padding: '12px', borderRadius: '6px'}}>
-                <input type="number" value={igDelayMin} onChange={e => setIgDelayMin(e.target.value)} min="0" style={{background: 'var(--color-canvas)', border: '1px solid var(--border-light)', color: 'white', padding: '6px 10px', borderRadius: '4px', width: '70px', textAlign: 'center'}} disabled={mode === 'test'} />
+                <input type="number" value={igDelayMin} onChange={e => setIgDelayMin(e.target.value)} onBlur={() => autoSaveSettings({ igDelayMin })} min="0" style={{background: 'var(--color-canvas)', border: '1px solid var(--border-light)', color: 'white', padding: '6px 10px', borderRadius: '4px', width: '70px', textAlign: 'center'}} disabled={mode === 'test'} />
                 <span style={{color: 'var(--color-text-muted)', fontSize: '13px'}}>đến</span>
-                <input type="number" value={igDelayMax} onChange={e => setIgDelayMax(e.target.value)} min="0" style={{background: 'var(--color-canvas)', border: '1px solid var(--border-light)', color: 'white', padding: '6px 10px', borderRadius: '4px', width: '70px', textAlign: 'center'}} disabled={mode === 'test'} />
+                <input type="number" value={igDelayMax} onChange={e => setIgDelayMax(e.target.value)} onBlur={() => autoSaveSettings({ igDelayMax })} min="0" style={{background: 'var(--color-canvas)', border: '1px solid var(--border-light)', color: 'white', padding: '6px 10px', borderRadius: '4px', width: '70px', textAlign: 'center'}} disabled={mode === 'test'} />
                 <span style={{fontSize: '13px'}}>Phút</span>
               </div>
             </div>

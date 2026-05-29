@@ -1,6 +1,6 @@
 # GPT Image Generation Prompt Guide — Đồng Hồ Lifestyle
-# Version 4.0 — 19 phong cách trực tiếp từ 19 ảnh mẫu 
-# Không logo, không watermark
+# Version 5.0 — Tối ưu phong cách CHÂN THỰC (Realistic Lifestyle)
+# Loại bỏ hoàn toàn các concept "giả trân", "tay khổng lồ", "khay nhung", "cờ vua".
 
 ## NGUYÊN TẮC PHÁT HIỆN GIỚI TÍNH TỪ MÃ SKU
 
@@ -14,284 +14,389 @@
 
 1. **TUYỆT ĐỐI KHÔNG** vẽ lại, thiết kế lại, hoặc thay đổi chiếc đồng hồ bất kỳ cách nào.
 2. Mặt đồng hồ, kim, vỏ, dây đeo, logo thương hiệu, màu sắc — giữ **CHÍNH XÁC 100%** như ảnh gốc.
-3. **Bảo toàn toàn bộ chữ trên mặt đồng hồ** — tên thương hiệu (I&W, Carnival, Cadisen, v.v.), các số, ký tự, logo trên dial phải giữ nguyên hoàn toàn.
-4. **KHÔNG thêm bất kỳ logo studio, watermark hay chữ nào vào nền ảnh hoặc góc ảnh** — nhưng KHÔNG được xóa chữ/logo vốn có trên chiếc đồng hồ.
-5. Ánh sáng phải nhất quán và tự nhiên. Chất lượng: **4K, photorealistic, commercial grade**.
-6. Tay phải phù hợp giới tính theo SKU.
+3. **KHÔNG thêm bất kỳ logo studio, watermark hay chữ nào vào nền ảnh**.
+4. Ánh sáng phải nhất quán và tự nhiên. Chất lượng: **4K, photorealistic, commercial grade, smartphone candid camera style**.
+5. Tay phải kích thước bình thường, chân thực, không được to khổng lồ một cách phi lý.
+6. Hạn chế tối đa các hành động "nâng niu bằng hai tay" hoặc "kẹp đồng hồ". Ưu tiên ĐEO TRÊN TAY hoặc ĐẶT TRÊN MẶT PHẲNG (Flat lay).
 
 
 ---
 
 ## [MALE] CẢNH DÀNH CHO ĐỒNG HỒ NAM (SKU chứa G)
 
-### MALE-1 — Đeo cổ tay nam + áo len chunky xám + nền trắng xám mờ
-
+### MALE-1 — Đeo trên tay + áo len xám + quán cafe (Giống ảnh gốc khách ưng ý)
 **English instruction for GPT:**
-> Photorealistic close-up lifestyle photo of a luxury men's watch worn on a masculine wrist. The man wears a chunky grey ribbed knit sweater, sleeve naturally pushed up. Camera angle: low and close, angled slightly upward toward the watch. Background is soft blurred neutral tones — white or light grey wall bokeh, suggesting an indoor home setting. Natural side daylight. The wrist shows light natural hair. Portrait orientation. Ultra-sharp watch dial. No text, no logo, no watermark anywhere in the image. Commercial watch photography style.
+> Photorealistic lifestyle photo looking down at a man's wrist wearing a luxury watch. The wrist rests naturally across a black sports or leather bag. To the right of the wrist: a white Starbucks paper cup with coffee. The man wears a grey ribbed chunky knit sweater. Camera: directly overhead, flat lay style, shot on iPhone style. Moody mixed lighting. Portrait orientation. Ultra-sharp watch. No text, no logo, no watermark added. Streetwear luxury lifestyle photography.
 
 ---
 
-### MALE-2 — Flat lay trên túi MCM nâu + ví da đen + nhẫn + nước hoa
-
+### MALE-2 — Đeo trên tay + gõ bàn phím Macbook + cốc cafe
 **English instruction for GPT:**
-> Photorealistic lifestyle flat lay photo of a luxury men's watch placed diagonally on top of a cognac/tan MCM monogram leather crossbody bag. Beside the watch: a black leather folded wallet, a silver ornate ring placed nearby, and a dark black cologne bottle partially visible and blurred in the background. Shot from above at a slight diagonal angle. Neutral cool daylight lighting. Naturally arranged, editorial style. No text, no logo, no watermark in image. Portrait orientation. Ultra-sharp watch. High-end men's lifestyle photography.
+> Photorealistic lifestyle close-up of a masculine wrist wearing a luxury watch. The hand is casually resting on the palm rest of a silver laptop (Macbook style), fingers touching the keyboard. Beside the laptop, a blurred white ceramic coffee mug. The man wears a casual dark blue or black long-sleeve shirt. Natural window light coming from the side. Very realistic everyday office/cafe lifestyle. Portrait orientation. Ultra-sharp watch. No text, no watermark.
 
 ---
 
-### MALE-3 — Tay nam cầm đồng hồ nghiêng 45° + nhẫn Chrome Hearts + nền tối ấm
-
+### MALE-3 — Đeo trên tay + Vô lăng ô tô
 **English instruction for GPT:**
-> Photorealistic lifestyle photo of a man's hands holding a luxury watch, tilting the dial toward the camera at approximately 45 degrees so the face is clearly visible. The hand has a bold silver Chrome Hearts-style ornamental ring on one finger. Background is warm dark bokeh — deep brown and amber tones of an indoor table setting. Natural side lighting illuminates the dial. Portrait orientation. Ultra-sharp watch face and case. No text, no logo, no watermark anywhere. Commercial watch photography.
+> Photorealistic first-person view lifestyle photo of a man's wrist wearing a luxury watch, casually resting his hand on the black leather steering wheel of a premium car. The background shows blurred street or dashboard details. Natural sunlight illuminating the watch dial. The man wears a crisp white dress shirt cuff and a dark suit jacket sleeve. Highly realistic everyday luxury driving scene. Portrait orientation. Ultra-sharp watch. No text, no watermark.
 
 ---
 
-### MALE-4 — Đồng hồ dựng nghiêng trong lòng túi MCM nâu + phụ kiện đen mờ phía sau
-
+### MALE-4 — Flat lay + Túi da nam MCM + Ví + Chìa khóa
 **English instruction for GPT:**
-> Photorealistic lifestyle photo of a luxury men's watch propped upright at a diagonal angle, resting inside or against the open flap of a tan MCM leather bag. Behind and around the watch: dark black leather accessories (wallet, strap) softly blurred. Camera angle: slightly above, looking down. Moody warm tones, cinematic side lighting. Portrait orientation. Ultra-sharp watch. No text, no logo, no watermark. High-end accessory editorial photography style.
+> Photorealistic lifestyle flat lay photo of a luxury men's watch placed naturally on top of a cognac/tan monogram leather crossbody bag. Beside the watch: a black leather folded wallet and modern car keys softly blurred. Shot from above at a slight diagonal angle. Neutral cool daylight lighting. Naturally arranged, everyday carry (EDC) editorial style. Portrait orientation. Ultra-sharp watch. No text, no watermark.
 
 ---
 
-### MALE-5 — Đồng hồ nghiêng kẹp giữa nếp gấp túi MCM nâu + nền tối dramatic
-
+### MALE-5 — Đeo trên tay + Cầm ly Whiskey + Áo suit đen
 **English instruction for GPT:**
-> Photorealistic lifestyle photo of a luxury men's watch propped diagonally between the folded leather flaps of a cognac MCM bag, slightly angled showing the dial. The surrounding leather creates natural framing. Dark moody background with hints of dark accessories blurred behind. Dramatic cinematic side lighting from the right highlights the steel bracelet and case. Portrait orientation. Ultra-sharp watch. No text, no logo, no watermark. Premium editorial photography.
+> Photorealistic lifestyle photo of a masculine wrist wearing a luxury watch. The hand is casually holding a crystal glass of whiskey with ice resting on a dark wooden bar table. The man wears a sharp black suit jacket with a sliver of white cuff visible. Moody, warm ambient bar lighting with subtle rim light on the watch. Portrait orientation. Ultra-sharp watch face. Extremely realistic candid evening lifestyle. No text, no watermark.
 
 ---
 
-### MALE-6 — Đeo cổ tay nam + áo len xám + ví đen + chìa khóa trên bàn (góc trên nhìn xuống)
-
+### MALE-6 — Flat lay + Quần Jeans đen + Kính râm + Cà phê
 **English instruction for GPT:**
-> Photorealistic lifestyle photo of a luxury men's watch worn on a masculine wrist, raised slightly above a dark desk surface. Below the wrist, blurred on the table: a thin black leather card wallet and a set of metal keys. Grey ribbed knit sweater sleeve visible. Camera angle: from above at about 45 degrees, looking down at the wrist. Neutral cool indoor lighting. Portrait orientation. Ultra-sharp watch. No text, no logo, no watermark. Everyday luxury lifestyle photography.
+> Photorealistic casual lifestyle flat lay of a luxury watch placed on folded dark grey or black denim jeans. Resting nearby: a pair of dark aviator sunglasses and a takeaway coffee cup. Shot from overhead with natural, soft sunlight casting gentle shadows. Very natural, unforced composition. Streetwear lifestyle aesthetic. Portrait orientation. Ultra-sharp watch. No text, no watermark.
 
 ---
 
-### MALE-7 — Đeo cổ tay nam + áo len xám + túi thể thao đen + cốc Starbucks (flat lay từ trên)
-
+### MALE-7 — Đeo trên tay + Đang đọc sách/báo + Áo thun đen
 **English instruction for GPT:**
-> Photorealistic lifestyle flat lay photo looking down at a man's wrist wearing a luxury watch. The wrist rests naturally across a black sports bag with a partially visible brand graphic (blurred). To the right of the wrist: a Starbucks white paper cup with coffee. Grey ribbed chunky knit sweater visible. Camera: directly overhead, flat lay style. Moody mixed lighting. Portrait orientation. Ultra-sharp watch. No text, no logo, no watermark added to the image. Streetwear luxury lifestyle photography.
+> Photorealistic close-up wrist shot of a luxury watch on a man's wrist. The hand is resting on an open newspaper or a hardcover book on a wooden table. The man wears a simple premium black t-shirt. Soft morning sunlight filtering through a nearby window. Extremely natural and realistic daily lifestyle moment. Portrait orientation. Ultra-sharp watch dial. No text, no watermark.
 
 ---
 
-### MALE-8 — Đồng hồ nằm trên đá slate đen + tua vít đồng hồ + sách
-
+### MALE-8 — Flat lay + Bàn làm việc tối giản + Chuột máy tính + Sổ tay
 **English instruction for GPT:**
-> Photorealistic product lifestyle flat lay of a luxury watch placed flat on a dark grey slate stone surface. Beside the watch: a small stainless steel watch screwdriver tool and the corner of a white notebook or magazine. Shot from directly overhead with slight tilt. Studio moody lighting, cool tones, subtle rim light on the steel bracelet. Portrait orientation. Ultra-sharp watch face and bracelet details. No text, no logo, no watermark. Minimalist luxury watch photography.
+> Photorealistic lifestyle flat lay of a luxury men's watch resting flat on a dark minimalist wooden desk. Beside it: a sleek black wireless mouse and a dark grey moleskine notebook. Cinematic moody office lighting, very professional and modern. Shot from directly overhead. Portrait orientation. Ultra-sharp watch face and case. No text, no watermark. Minimalist workspace lifestyle.
 
 ---
 
-### MALE-9 — Đeo cổ tay nam + áo len xám + nền tối moody (cận cổ tay góc thấp)
-
+### MALE-9 — Khay nhung đen + Tay nam đỡ từ dưới + Nền vàng bokeh ấm
 **English instruction for GPT:**
-> Photorealistic close-up lifestyle photo of a luxury men's watch worn on a masculine wrist. Grey chunky ribbed knit sweater sleeve. Camera angle: very low, at wrist level, looking slightly upward — the watch fills much of the frame. Background is very soft dark bokeh, extremely blurred, deep dark tones. Warm side lighting illuminates the top of the watch case and crystal. Portrait orientation. Ultra-sharp watch. No text, no logo, no watermark anywhere. Premium editorial wrist shot.
+> Photorealistic lifestyle photo of a luxury men's watch resting on a small black velvet display cushion or tray, held from below by masculine fingers gripping the very edges of the cushion. Background is extremely blurred warm golden bokeh — deep amber and chocolate indoor tones. Warm moody side lighting. Portrait orientation. Ultra-sharp watch dial. No text, no watermark.
 
 ---
 
-### MALE-10 — Flat lay đá slate đen + tay nam chạm nhẹ vào dây đeo (góc trên)
-
+### MALE-10 — Hai tay nam nghiêng đồng hồ 45° + Nhẫn Chrome Hearts bạc + Nền trong nhà
 **English instruction for GPT:**
-> Photorealistic lifestyle flat lay photo of a luxury watch lying flat on dark grey slate stone. A masculine hand enters the lower portion of the frame with fingers gently resting beside or lightly touching the bracelet of the watch. Camera: directly overhead, near-flat. Moody dark studio lighting with warm accent light on the watch face. Portrait orientation. Ultra-sharp watch details. No text, no logo, no watermark in image. Dark luxury product photography style.
+> Photorealistic lifestyle photo of two masculine hands holding a luxury men's watch and tilting the dial toward the camera at approximately 45 degrees so the face is clearly visible. One hand has a bold silver Chrome Hearts-style ornamental ring. Background is a softly blurred indoor scene. Natural side lighting. Portrait orientation. Ultra-sharp watch face. No text, no watermark.
 
 ---
 
-### MALE-11 — Cận mặt đồng hồ siêu macro + tông cam/hổ phách ấm
-
+### MALE-11 — Đeo trên cổ tay nam + Áo len chunky xám + Nền tối + Túi & Cốc cafe mờ
 **English instruction for GPT:**
-> Extreme close-up macro lifestyle photo of a luxury watch dial filling 75-80% of the frame. The watch is tilted at approximately 25-35 degrees. Background is completely smooth warm bokeh in orange, amber, and dark chocolate tones. Cinematic warm side lighting creates beautiful light reflections on the watch crystal, case edges, and dial. Every detail of the dial — indices, hands, text — is razor sharp. Portrait orientation. No text, no logo, no watermark anywhere. Premium luxury watch macro photography.
+> Photorealistic lifestyle close-up photo of a luxury watch worn on a masculine wrist. The man wears a chunky grey ribbed knit sweater sleeve, naturally pushed up. Camera angle: low, close, side-on at wrist level. Background is very soft dark bokeh — a blurred leather bag and the rim of a coffee cup barely visible. Warm ambient side lighting. Portrait orientation. Ultra-sharp watch. No text, no watermark.
 
 ---
 
-### MALE-12 — Hai tay nam cầm đồng hồ đối xứng + nhẫn Chrome Hearts + nền nâu mờ
-
+### MALE-12 — Cận Macro mặt đồng hồ + Nền đen ấm bokeh
 **English instruction for GPT:**
-> Photorealistic lifestyle photo of two masculine hands holding a luxury watch together — one hand gripping the bracelet from below, the other steadying from the side — displaying the dial clearly toward the camera. Both hands have silver ornate Chrome Hearts-style rings. Background is extremely soft warm bokeh of dark brown and amber indoor tones. Natural side lighting. Portrait orientation. Ultra-sharp watch dial. No text, no logo, no watermark anywhere. Luxury watch editorial photography.
+> Extreme close-up macro lifestyle photo of a luxury men's watch dial filling 80% of the frame. Watch is tilted at 25-30 degrees. Background is completely smooth warm dark bokeh. Beautiful cinematic side lighting creates glowing reflections on the watch crystal and case edge. Every detail — indices, hands, brand text — is razor sharp. Portrait orientation. No text, no logo, no watermark. Premium luxury macro photography.
 
 ---
 
-### MALE-13 — Tay nam cầm đồng hồ đặt trên khay nhung đen + quân cờ vàng mờ phía sau
-
+### MALE-13 — Hai lòng bàn tay nam ngửa đỡ đồng hồ + Nhẫn Chrome Hearts + Ánh sáng ấm
 **English instruction for GPT:**
-> Photorealistic lifestyle photo of a luxury watch resting on a small black velvet display cushion or tray, held from above by masculine fingers gently gripping the edges of the cushion. Behind the scene in the blurred background: golden chess pieces (king, queen shapes) with warm bokeh. Camera angle: slightly above, close. Warm moody lighting from the side. Portrait orientation. Ultra-sharp watch face. No text, no logo, no watermark. Luxury watch boutique photography style.
+> Photorealistic lifestyle photo of two masculine hands cupped and held open, with a luxury men's watch resting across both palms showing its dial to the camera. Both hands have bold silver Chrome Hearts-style ornate rings. Warm indoor ambient lighting. Background softly blurred warm bokeh. Portrait orientation. Ultra-sharp watch. No text, no watermark.
 
 ---
 
-### MALE-14 — Hai tay nam nâng đồng hồ + nhẫn hoa bạc + nền ấm mờ (showcase cổ điển)
-
+### MALE-14 — Flat lay + Đá slate đen + Tay nam chạm nhẹ bên cạnh + Overhead
 **English instruction for GPT:**
-> Photorealistic lifestyle photo of two masculine hands gently cradling a luxury watch between their palms, the dial facing the camera and slightly tilted upward. One hand has a floral silver ornate ring. The background is extremely blurred warm tones — dark brown and amber — very cinematic bokeh. Natural warm side lighting. Portrait orientation. Ultra-sharp watch. No text, no logo, no watermark anywhere. High-end watch collector lifestyle photography.
+> Photorealistic lifestyle flat lay of a luxury men's watch lying flat on dark grey slate stone. A masculine hand enters from the lower edge, fingertips gently resting beside the watch bracelet. Camera: directly overhead. Moody dark studio lighting with warm accent light on the watch face. Portrait orientation. Ultra-sharp watch. No text, no watermark.
 
 ---
 
-### MALE-15 — Cận mặt đồng hồ macro + nền cực mờ + lighting cinematic
-
+### MALE-15 — Một tay nam cầm đồng hồ đứng trên lòng bàn tay + Nhẫn Chrome Hearts + Nền tối sâu
 **English instruction for GPT:**
-> Extreme close-up macro photo of a luxury watch, the dial angled at approximately 20 degrees. The watch fills most of the frame. Background is completely smooth warm dark bokeh. Cinematic split lighting — strong warm light from one side creates dramatic shadows on the case sides while the dial remains well-lit. Every texture on the dial surface, every index, every hand is pin-sharp. Portrait orientation. No text, no logo, no watermark anywhere in image. Ultra-premium luxury watch photography.
+> Photorealistic lifestyle photo of a single masculine hand holding a luxury men's watch upright in an open palm, the dial clearly facing the camera. A bold silver Chrome Hearts-style ornate ring on one finger. Background is extremely dark moody bokeh, deep dark tones. Warm cinematic side lighting. Portrait orientation. Ultra-sharp watch. No text, no watermark.
 
 ---
 
-### MALE-16 — Đồng hồ đặt cạnh cốc Starbucks + áo hoodie streetwear đen (flat lay)
-
+### MALE-16 — Hai tay nam giữ đồng hồ từ hai phía + Nhiều nhẫn Chrome Hearts + Nền đen bokeh
 **English instruction for GPT:**
-> Photorealistic lifestyle flat lay of a luxury men's watch placed upright on a dark matte surface, beside a white Starbucks paper coffee cup showing the Starbucks logo. In the upper background: a black hoodie or sports jacket with a team or brand graphic (blurred). Camera angle: slightly above, looking down at a diagonal. Cool moody lighting. The watch is the clear focal point. No text, no logo, no watermark added to the image (the Starbucks cup's existing branding in background is acceptable as natural prop). Portrait orientation. Ultra-sharp watch. Streetwear lifestyle photography.
+> Photorealistic lifestyle photo of two masculine hands holding a luxury men's watch from both sides, the dial displayed clearly to the camera. Multiple bold silver Chrome Hearts-style ornate rings on the fingers. Background is very dark moody bokeh. Warm cinematic lighting. Portrait orientation. Ultra-sharp watch. No text, no watermark.
 
 ---
 
-### MALE-17 — Đeo cổ tay nam + áo len xám + nền tối + hậu cảnh cốc café mờ (cận ngang)
-
+### MALE-17 — Hai lòng bàn tay nam khum đỡ đồng hồ + Nhiều nhẫn Chrome Hearts + Nền vàng bokeh
 **English instruction for GPT:**
-> Photorealistic close-up wrist shot of a luxury men's watch worn on a masculine wrist. Grey chunky ribbed knit sweater sleeve. Camera angle: side-on at wrist level, slightly low. Background is very soft dark bokeh — a blurred dark bag or jacket, and the far edge of a coffee cup barely visible. Warm ambient side lighting. Portrait orientation. Ultra-sharp watch dial and case details. No text, no logo, no watermark anywhere in image. Premium lifestyle watch photography.
+> Photorealistic lifestyle photo of two masculine hands gently cupping a luxury men's watch, both palms facing upward with the watch resting naturally between them. Multiple bold silver Chrome Hearts-style ornate rings visible on the fingers of both hands. Background is extremely blurred warm golden bokeh — deep brown and amber indoor tones. Portrait orientation. Ultra-sharp watch dial. No text, no watermark.
 
 ---
 
-### MALE-18 — Hai tay nam cầm đồng hồ vàng hồng + nhẫn Chrome Hearts + quân cờ vàng mờ
-
+### MALE-18 — Đồng hồ đặt trên áo hoodie đen + Cốc Starbucks + Flat lay Streetwear
 **English instruction for GPT:**
-> Photorealistic lifestyle photo of two masculine hands cupping and holding a luxury rose gold or gold-tone watch, the bracelet draped naturally across the fingers, dial tilted toward the camera at about 40 degrees. Both hands have silver Chrome Hearts-style ornate rings. Background: extremely blurred warm dark tones — deep brown with bokeh of golden chess piece shapes glowing softly. Warm cinematic side lighting. Portrait orientation. Ultra-sharp watch dial. No text, no logo, no watermark anywhere. Luxury watch collector editorial photography.
+> Photorealistic lifestyle flat lay of a luxury men's watch placed upright on a folded black hoodie or athletic jacket with a blurred sports team graphic. To the right of the watch: a white Starbucks paper cup with coffee. Camera: from slightly above, looking down. Cool street-style moody lighting. Portrait orientation. Ultra-sharp watch. No text, no watermark added. Streetwear luxury lifestyle.
 
 ---
 
-### MALE-19 — Hai tay nam cầm đồng hồ vàng hồng + chụp từ thấp lên + nền tối sâu
-
+### MALE-19 — Tay nam kẹp đồng hồ từ bên cạnh + Nền cửa hàng bokeh
 **English instruction for GPT:**
-> Photorealistic lifestyle photo of two masculine hands holding a luxury rose gold or gold-tone watch, the watch elevated slightly in the air between the fingers at about 35 degrees, dial facing the camera. Camera angle: slightly low, looking up at the watch and hands. Background is very deep dark bokeh — almost pure black with warm glow from the watch metal. Dramatic warm cinematic lighting from below-right. Portrait orientation. Ultra-sharp watch. No text, no logo, no watermark anywhere in image. Dramatic luxury watch editorial photography.
+> Photorealistic lifestyle photo of a masculine hand pinching a luxury men's watch from the side between thumb and index finger, tilting it slightly to display the dial to the camera. Background is a softly blurred watch boutique or watch store, with blurred display cases faintly visible behind. Natural indoor lighting. Portrait orientation. Ultra-sharp watch. No text, no watermark.
+
+---
+
+### MALE-20 — Đeo trên cổ tay nam + Áo len xám + Nhìn xuống + Ví đen & Chìa khóa mờ
+**English instruction for GPT:**
+> Photorealistic lifestyle photo looking down at a masculine wrist wearing a luxury watch, the hand resting casually on a dark surface. Grey chunky ribbed knit sweater sleeve visible. In the background blurred: a sleek black leather card wallet and a set of metal car keys. Camera: from above at 45 degrees. Natural indoor lighting. Portrait orientation. Ultra-sharp watch. No text, no watermark.
+
+---
+
+### MALE-21 — Đồng hồ đặt lên tạp chí đua xe/phong cách sống + Góc chếch editorial
+**English instruction for GPT:**
+> Photorealistic lifestyle photo of a luxury men's watch placed at an angle on top of an open vintage car racing or men's lifestyle magazine, the cover image blurred beneath it. Camera angle: from slightly above at a diagonal, very close to the watch. Soft natural side lighting. Portrait orientation. Ultra-sharp watch case and dial. No text, no watermark.
+
+---
+
+### MALE-22 — Flat lay đá slate đen + Dụng cụ điều chỉnh dây đồng hồ + Tối giản kỹ thuật
+**English instruction for GPT:**
+> Photorealistic minimalist flat lay of a luxury men's watch placed flat on dark grey slate stone, a small stainless steel watch link removal tool or screwdriver placed neatly beside it. Camera: from directly overhead. Cool moody studio lighting. Portrait orientation. Ultra-sharp watch face and bracelet. No text, no watermark. Clean technical luxury watch photography.
+
+---
+
+### MALE-23 — Đồng hồ đặt gần sát tạp chí đua xe + Cận góc thấp + Moody cinematic
+**English instruction for GPT:**
+> Photorealistic lifestyle flat lay of a luxury men's watch resting on the open page of a vintage car or motorsport photography magazine. Camera angle: very low and close, almost at surface level, looking slightly upward at the watch dial. Partial magazine text and photographic image visible and blurred in background. Moody cinematic lighting. Portrait orientation. Ultra-sharp watch. No text, no watermark.
+
+---
+
+### MALE-24 — Đồng hồ đặt trên catalogue đồng hồ cao cấp + Tua vít + Bàn gỗ tối
+**English instruction for GPT:**
+> Photorealistic lifestyle flat lay of a luxury men's watch resting on top of an open high-end watch catalog or coffee table photography book, a small silver watch screwdriver tool placed beside it. Dark rich wooden desk surface visible at edges. Camera: from slightly above. Warm editorial moody lighting. Portrait orientation. Ultra-sharp watch. No text, no watermark.
+
+---
+
+### MALE-25 — Flat lay + Túi MCM nâu tan + Ví da đen + Nhẫn + Chai nước hoa + Overhead
+**English instruction for GPT:**
+> Photorealistic lifestyle flat lay photo looking from above at a luxury men's watch placed diagonally on top of a cognac tan MCM monogram leather crossbody bag. Around the watch: a black leather folded wallet, a bold silver ring placed nearby, and a dark luxury men's cologne bottle blurred in the upper background. Soft natural daylight. Naturally arranged EDC editorial style. Portrait orientation. Ultra-sharp watch. No text, no watermark.
+
+---
+
+### MALE-26 — Đồng hồ kẹp trong nếp gấp dây túi MCM + Phụ kiện đen mờ + Dramatic
+**English instruction for GPT:**
+> Photorealistic lifestyle photo of a luxury men's watch nestled and propped between the folded leather straps of a tan MCM crossbody bag, slightly tilted showing the dial. The surrounding cognac leather creates natural framing. Dark moody background with hints of dark accessories blurred. Dramatic cinematic side lighting from the right. Portrait orientation. Ultra-sharp watch. No text, no watermark.
+
+---
+
+### MALE-27 — Đồng hồ kẹp giữa dây da nâu & phụ kiện đen + Nền tối dramatic
+**English instruction for GPT:**
+> Photorealistic lifestyle photo of a luxury men's watch framed and propped between leather accessories — a tan MCM leather strap from above and a dark black leather item below. Background is very dark moody bokeh with a blurred cologne bottle or dark accessory faintly visible. Dramatic cinematic side lighting creating strong contrast. Portrait orientation. Ultra-sharp watch dial. No text, no watermark.
+
+---
+
+### MALE-28 — Cực cận macro mặt đồng hồ lấp đầy khung hình + Nền tối mịn
+**English instruction for GPT:**
+> Extreme macro close-up of a luxury men's watch dial filling the entire frame edge to edge. The watch case edge and bezel are barely visible on the sides. Background is a completely smooth, very dark matte bokeh. Ultra-detailed: every texture on the dial, every index, every hand is pin-sharp. No background story, pure dial artistry. Portrait orientation. No text, no watermark. Ultra-premium watch macro photography.
+
+---
+
+### MALE-29 — Đồng hồ dựng nghiêng tựa vào nền vải tối mịn + Thấy cả mặt và dây
+**English instruction for GPT:**
+> Photorealistic lifestyle photo of a luxury men's watch propped upright at a slight diagonal, leaning against a soft dark grey suede or velvet fabric background. Both the watch dial and the full bracelet are clearly visible in the frame. Soft even studio lighting, no harsh shadows. Clean minimal composition. Portrait orientation. Ultra-sharp watch. No text, no watermark.
+
+---
+
+### MALE-30 — Flat lay + Bàn gỗ tối espresso + Dụng cụ tua vít + Overhead editorial
+**English instruction for GPT:**
+> Photorealistic lifestyle flat lay of a luxury men's watch lying flat on a rich dark espresso-toned wooden surface. A small silver watch screwdriver or adjustment tool placed diagonally beside it. Camera: directly overhead. Warm moody lighting with subtle shadows. Portrait orientation. Ultra-sharp watch case, bracelet and dial. No text, no watermark.
 
 ---
 
 ## [FEMALE] CẢNH DÀNH CHO ĐỒNG HỒ NỮ (SKU chứa L)
 
-### FEMALE-1 — Đeo cổ tay nữ + áo len chunky kem/trắng + nền trắng ấm mờ
-
+### FEMALE-1 — Khay nhung đen + Tay nữ đỡ từ dưới + Nền vàng bokeh ấm
 **English instruction for GPT:**
-> Photorealistic close-up lifestyle photo of a luxury women's watch worn on a slim feminine wrist. The woman wears a chunky cream or off-white ribbed knit sweater sleeve. Camera angle: low and close, slightly upward toward the watch. Background is soft blurred neutral — warm white or light beige wall bokeh, cozy indoor atmosphere. Natural soft side daylight. Slender wrist, light skin, manicured nails with nude polish. Portrait orientation. Ultra-sharp watch face. No added text, logo, or watermark anywhere. Feminine luxury lifestyle photography.
+> Photorealistic lifestyle photo of a luxury women's watch resting on a small square black velvet display cushion, held gently from below by slender feminine fingers with a soft nude manicure. The fingertips grip the very edges of the cushion. Background is extremely blurred warm golden bokeh — deep amber and chocolate indoor tones. Warm moody side lighting. Portrait orientation. Ultra-sharp watch dial. No text, no watermark.
 
 ---
 
-### FEMALE-2 — Tay nữ cầm đồng hồ nghiêng 45° + nhẫn bạc mảnh + nền tối ấm
-
+### FEMALE-2 — Hai tay nữ nghiêng đồng hồ 45° + Nhẫn bạc hoa mảnh + Nền trong nhà
 **English instruction for GPT:**
-> Photorealistic lifestyle photo of a woman's slender hands holding a luxury watch, tilting the dial toward the camera at approximately 45 degrees. Manicured nails with soft nude or blush pink polish. One delicate thin silver ring on a finger. Background is warm dark bokeh — deep brown and amber tones of an indoor setting. Natural side lighting illuminates the dial. Portrait orientation. Ultra-sharp watch face and case. No added text, logo, or watermark. Feminine luxury watch photography.
+> Photorealistic lifestyle photo of two slender feminine hands holding a luxury women's watch and tilting the dial toward the camera at approximately 45 degrees, making the watch face clearly visible. One hand has a delicate silver floral ring. Background is softly blurred indoor scene with warm light. Portrait orientation. Ultra-sharp watch face. No text, no watermark.
 
 ---
 
-### FEMALE-3 — Flat lay đồng hồ trên khay nhung đen + quân cờ vàng + tay nữ nhẹ
-
+### FEMALE-3 — Đeo trên cổ tay nữ + Áo len chunky kem + Dark moody bag + Cốc cafe mờ
 **English instruction for GPT:**
-> Photorealistic lifestyle photo of a luxury women's watch resting on a small black velvet display cushion or tray, held gently from above by slender feminine fingers with soft pink manicured nails. Background: blurred golden chess piece shapes in warm bokeh, dark background. Warm moody lighting from the side. Portrait orientation. Ultra-sharp watch face. No added text, logo, or watermark. Luxury boutique feminine watch photography.
+> Photorealistic lifestyle close-up photo of a luxury watch worn on a slim feminine wrist. The woman wears a chunky cream or off-white ribbed knit sweater sleeve, naturally pushed up. Camera angle: low, close, side-on at wrist level. Background is very soft dark bokeh — a blurred leather bag and the rim of a coffee cup barely visible. Warm ambient side lighting. Portrait orientation. Ultra-sharp watch. No text, no watermark.
 
 ---
 
-### FEMALE-4 — Đeo cổ tay nữ + áo len mỏng + ví da nhỏ + chìa khóa charm (góc trên nhìn xuống)
-
+### FEMALE-4 — Cận Macro mặt đồng hồ + Nền đen ấm bokeh
 **English instruction for GPT:**
-> Photorealistic lifestyle photo of a luxury women's watch worn on a slim feminine wrist, raised above a light desk surface. Below the wrist on the table: a small cream or pastel leather wallet and a set of keys with a decorative charm. Cream or blush ribbed knit sleeve visible. Camera angle: from above at 45 degrees, looking down. Warm soft indoor lighting. Portrait orientation. Ultra-sharp watch. No added text, logo, or watermark. Elegant feminine everyday luxury lifestyle.
+> Extreme close-up macro lifestyle photo of a luxury women's watch dial filling 80% of the frame. Watch is tilted at 25-30 degrees. Background is completely smooth warm dark bokeh. Beautiful cinematic side lighting creates glowing reflections on the watch crystal and case. Every detail — indices, hands, brand text — is razor sharp. Portrait orientation. No text, no logo, no watermark. Premium luxury macro photography.
 
 ---
 
-### FEMALE-5 — Flat lay đồng hồ trên túi xách nữ + khăn lụa + son môi mờ phía sau
-
+### FEMALE-5 — Hai lòng bàn tay nữ đỡ đồng hồ + Nhẫn bạc mảnh + Ánh sáng ấm
 **English instruction for GPT:**
-> Photorealistic lifestyle flat lay of a luxury women's watch placed diagonally on top of a small elegant feminine handbag (cream, blush, or nude leather). Beside the watch: a folded silk scarf in soft tones and a luxury lipstick partially blurred in background. Shot from above at slight diagonal. Soft warm daylight. Editorial feminine style. Portrait orientation. Ultra-sharp watch. No added text, logo, or watermark. High-end women's lifestyle photography.
+> Photorealistic lifestyle photo of two slender feminine hands cupped and held open, with a luxury women's watch resting across both palms showing its dial to the camera. Both hands have delicate silver rings. Warm indoor ambient lighting. Background softly blurred. Portrait orientation. Ultra-sharp watch. No text, no watermark.
 
 ---
 
-### FEMALE-6 — Hai tay nữ nâng đồng hồ đối xứng + nhẫn hoa bạc mảnh + nền kem ấm
-
+### FEMALE-6 — Flat lay + Đá slate đen + Tay nữ chạm nhẹ bên cạnh + Overhead
 **English instruction for GPT:**
-> Photorealistic lifestyle photo of two slender feminine hands gently cradling a luxury women's watch between their palms, the dial facing the camera and slightly tilted upward. Both hands have delicate silver floral-shaped rings. Background is extremely blurred warm cream and ivory tones — soft romantic bokeh. Natural diffused window light. Portrait orientation. Ultra-sharp watch. No added text, logo, or watermark anywhere. Elegant feminine watch editorial photography.
+> Photorealistic lifestyle flat lay of a luxury women's watch lying flat on dark grey slate stone. A slender feminine hand with nude manicured nails enters from the lower edge, fingertips gently resting beside the watch bracelet. Camera: directly overhead. Moody dark studio lighting with warm accent light. Portrait orientation. Ultra-sharp watch. No text, no watermark.
 
 ---
 
-### FEMALE-7 — Cận macro mặt đồng hồ + nền pastel hồng/trắng ấm
-
+### FEMALE-7 — Một tay nữ cầm đồng hồ đứng + Nhẫn mảnh + Nền tối sâu
 **English instruction for GPT:**
-> Extreme close-up macro lifestyle photo of a luxury women's watch dial filling 75-80% of the frame. The watch is tilted at approximately 25 degrees. Background is completely smooth bokeh in soft blush pink, rose, or warm ivory tones. Soft diffused lighting creates gentle reflections on the crystal and mother-of-pearl or gemstone-set dial. Every detail — diamond indices, hands, brand text — is razor sharp. Portrait orientation. No added text, logo, or watermark anywhere. Premium feminine luxury watch macro photography.
+> Photorealistic lifestyle photo of a single slender feminine hand holding a luxury women's watch upright in an open palm, the dial clearly facing the camera. A delicate silver ring on one finger. Background is extremely dark moody bokeh, deep dark tones. Warm cinematic side lighting. Portrait orientation. Ultra-sharp watch. No text, no watermark.
 
 ---
 
-### FEMALE-8 — Đeo cổ tay nữ + áo len caramel/cam đất + nền vintage mờ (góc ngang thấp)
-
+### FEMALE-8 — Hai tay nữ giữ đồng hồ từ hai phía + Nhiều nhẫn + Nền đen bokeh
 **English instruction for GPT:**
-> Photorealistic close-up wrist shot of a luxury women's watch worn on a slim feminine wrist. The woman wears a warm caramel or burnt orange fine ribbed knit sweater sleeve. Camera angle: side-on at wrist level, slightly low. Background is very soft blurred vintage tones — warm brown or checkered fabric in bokeh. Soft natural window light from the side. Portrait orientation. Ultra-sharp watch dial. No added text, logo, or watermark. Warm editorial lifestyle photography.
+> Photorealistic lifestyle photo of two slender feminine hands holding a luxury women's watch from both sides, the dial displayed clearly to the camera. Multiple delicate rings on the fingers — silver, floral, minimalist styles. Background is very dark moody bokeh. Warm cinematic lighting. Portrait orientation. Ultra-sharp watch. No text, no watermark.
 
 ---
 
-### FEMALE-9 — Flat lay romantic + cánh hoa khô + nến + thư tình (nền trắng kem)
-
+### FEMALE-9 — Hai lòng bàn tay úp khum + Nhẫn bạc + Vàng bokeh mờ phía sau
 **English instruction for GPT:**
-> Photorealistic romantic lifestyle flat lay of a luxury women's watch placed on a smooth white or cream surface. Surrounding props: dried rose petals scattered lightly, a small white unlit candle, a folded handwritten letter or card, and a pearl bracelet loosely placed beside the watch. Overhead studio lighting, airy and bright with soft shadows. Clean feminine romantic aesthetic. Portrait orientation. Ultra-sharp watch. No added text, logo, or watermark. Women's luxury romantic flat lay photography.
+> Photorealistic lifestyle photo of two slender feminine hands gently cupping a luxury women's watch, both palms facing upward with the watch resting naturally between them. Multiple delicate silver rings visible on the fingers. Background is extremely blurred warm golden bokeh — deep brown and amber indoor tones with faint soft golden glow. Portrait orientation. Ultra-sharp watch dial. No text, no watermark.
 
 ---
 
-### FEMALE-10 — Hai tay nữ cầm đối xứng + nhẫn ngọc trai/đá nhỏ + nền sáng trắng
-
+### FEMALE-10 — Đồng hồ trên áo hoodie đen + Cốc Starbucks + Flat lay Streetwear
 **English instruction for GPT:**
-> Photorealistic lifestyle photo of two feminine hands cupping and holding a luxury women's watch together symmetrically, dial clearly facing the camera at about 30 degrees. Both hands have delicate rings with small pearls or gemstone settings. Background is soft blurred bright and airy — white or pale pink, very clean. Soft diffused studio light from above. Portrait orientation. Ultra-sharp watch. No added text, logo, or watermark. Luxury feminine jewelry-style photography.
+> Photorealistic lifestyle flat lay of a luxury women's watch placed upright on a folded black hoodie or athletic jacket. To the right of the watch: a white Starbucks paper cup with coffee, the green Starbucks logo partially visible. Camera: from slightly above, looking down. Cool street-style moody lighting. Portrait orientation. Ultra-sharp watch. No text, no watermark added. Feminine streetwear luxury flat lay.
 
 ---
 
-### FEMALE-11 — Đặt trên đá cẩm thạch trắng + hoa tươi mờ + tay nữ chạm nhẹ
-
+### FEMALE-11 — Tay nữ kẹp đồng hồ nghiêng từ bên cạnh + Nền cửa hàng bokeh
 **English instruction for GPT:**
-> Photorealistic lifestyle flat lay of a luxury women's watch resting on smooth white marble. A slender feminine hand with nude manicured nails reaches in from the side, fingertips lightly touching the bracelet. In the blurred background: a soft pink or white fresh flower bloom and a small perfume bottle. Overhead studio lighting with gentle side light. Portrait orientation. Ultra-sharp watch. No added text, logo, or watermark. Clean feminine luxury product photography.
+> Photorealistic lifestyle photo of a slender feminine hand pinching a luxury women's watch from the side, tilting it slightly to display the dial to the camera. Background is a softly blurred watch boutique or jewelry store, with blurred watch display cases faintly visible. Natural indoor lighting. Portrait orientation. Ultra-sharp watch. No text, no watermark.
 
 ---
 
-### FEMALE-12 — Cận cổ tay nữ + áo blouse lụa trắng + nền cửa sổ bokeh (phong cách công sở)
-
+### FEMALE-12 — Một tay nữ giơ đồng hồ mặt ngửa + Nhẫn mảnh + Nền tối
 **English instruction for GPT:**
-> Photorealistic close-up lifestyle photo of a luxury women's watch worn on a slim feminine wrist. The woman wears a white or ivory silk blouse, sleeve cuff slightly visible. Camera angle: from above, angled down at the wrist. Background is softly blurred natural window light with pale airy bokeh. Polished nude manicure. Portrait orientation. Ultra-sharp watch. No added text, logo, or watermark. Professional feminine luxury lifestyle photography.
+> Photorealistic lifestyle photo of a single slender feminine hand with a delicate ring, holding a luxury women's watch face-up in an open palm, elevated slightly. The dial is clearly visible from slightly above. Dark moody background. Warm side lighting illuminates the watch. Portrait orientation. Ultra-sharp watch. No text, no watermark.
 
 ---
 
-### FEMALE-13 — Đeo tay + cốc latte trắng + bàn gỗ sáng + áo sweater kem (cafe lifestyle)
-
+### FEMALE-13 — Đeo trên cổ tay nữ + Áo len xám + Nhìn xuống + Ví đen & Chìa khóa mờ
 **English instruction for GPT:**
-> Photorealistic lifestyle flat lay photo looking down at a woman's wrist wearing a luxury watch. The wrist rests naturally near a white ceramic cup of latte or matcha on a light wooden cafe table. Cream or blush chunky knit sweater sleeve visible. Camera: from above at slight diagonal. Airy warm natural daylight. Portrait orientation. Ultra-sharp watch. No added text, logo, or watermark. Feminine cafe lifestyle photography.
+> Photorealistic lifestyle photo looking down at a slim feminine wrist wearing a luxury watch, the hand resting casually on a dark surface. Grey or cream chunky knit sweater sleeve visible. In the background blurred: a sleek black leather card wallet and a set of car keys on a ring. Camera: from above at 45 degrees. Natural indoor lighting. Portrait orientation. Ultra-sharp watch. No text, no watermark.
 
 ---
 
-### FEMALE-14 — Hai tay nữ cầm đồng hồ vàng hồng/rose gold + nhẫn đá + nền tối lãng mạn
-
+### FEMALE-14 — Đồng hồ đặt lên tạp chí thời trang/lifestyle + Góc chếch editorial
 **English instruction for GPT:**
-> Photorealistic lifestyle photo of two slender feminine hands gently holding a luxury rose gold or gold-tone women's watch, bracelet draped naturally across the fingers, dial tilted toward the camera at about 40 degrees. Both hands have delicate rings with small diamonds or crystals. Background is extremely blurred deep warm romantic tones — dark burgundy or dark amber bokeh with soft glow on the watch metal. Warm cinematic side lighting. Portrait orientation. Ultra-sharp watch dial. No added text, logo, or watermark. Romantic luxury feminine watch photography.
+> Photorealistic lifestyle photo of a luxury women's watch placed at an angle on top of a high-end fashion or lifestyle magazine, the cover of the magazine blurred beneath it. Camera angle: from slightly above at a diagonal, very close. Soft natural side lighting. Portrait orientation. Ultra-sharp watch case and dial. No text, no watermark.
 
 ---
 
-### FEMALE-15 — Đồng hồ đặt trên hộp nhung tối + hoa hồng đơn + ánh đèn vàng ấm (gift-style)
-
+### FEMALE-15 — Flat lay đá slate đen + Dụng cụ điều chỉnh dây + Tối giản kỹ thuật
 **English instruction for GPT:**
-> Photorealistic lifestyle photo of a luxury women's watch resting elegantly inside an open dark navy or black velvet watch box. Beside the box: a single fresh rose or peony bloom. Background is warm dark bokeh with soft golden ambient glow — candle-lit atmosphere. A slender feminine hand with nude manicured nails gently holds the edge of the box from below. Camera angle: slightly above, looking down at an angle. Portrait orientation. Ultra-sharp watch face. No added text, logo, or watermark. Premium feminine gift photography style.
+> Photorealistic minimalist flat lay of a luxury women's watch placed perfectly on dark grey slate stone, a small silver watch adjustment screwdriver or link removal tool placed neatly beside it. Camera: from directly overhead. Cool moody studio lighting. Portrait orientation. Ultra-sharp watch. No text, no watermark. Clean technical luxury photography.
 
 ---
 
+### FEMALE-16 — Đồng hồ đặt gần sát tạp chí đua xe/thời trang + Cận góc thấp
+**English instruction for GPT:**
+> Photorealistic lifestyle flat lay of a luxury women's watch resting on or very close to the open page of a vintage car or motorsport photography magazine. Camera angle: very low and close, almost at table level, looking slightly upward at the watch. Partial magazine text and image visible and blurred in background. Moody cinematic lighting. Portrait orientation. Ultra-sharp watch. No text, no watermark.
+
+---
+
+### FEMALE-17 — Đồng hồ đặt trên catalogue đồng hồ + Dụng cụ tua vít + Bàn gỗ sang
+**English instruction for GPT:**
+> Photorealistic lifestyle flat lay of a luxury women's watch resting on top of an open luxury watch catalog or coffee table book, a small silver watch screwdriver tool placed beside it. Dark rich wooden desk surface visible at edges. Camera: from slightly above. Warm editorial lighting. Portrait orientation. Ultra-sharp watch. No text, no watermark.
+
+---
+
+### FEMALE-18 — Flat lay + Túi MCM nâu tan + Ví da đen + Nhẫn + Nước hoa + Từ trên xuống
+**English instruction for GPT:**
+> Photorealistic lifestyle flat lay photo looking from above at a luxury women's watch placed diagonally on top of a cognac tan MCM monogram leather bag. Around the watch: a black leather folded wallet, a small delicate silver ring placed nearby, and a dark luxury perfume bottle blurred in the upper background. Soft natural daylight. Naturally arranged, editorial style. Portrait orientation. Ultra-sharp watch. No text, no watermark.
+
+---
+
+### FEMALE-19 — Đồng hồ kẹp trong nếp gấp túi da nâu MCM + Phụ kiện đen mờ + Dramatic
+**English instruction for GPT:**
+> Photorealistic lifestyle photo of a luxury women's watch nestled and propped between the folded leather straps of a tan MCM crossbody bag, slightly tilted showing the dial. The surrounding cognac leather creates natural framing. Dark moody background with hints of dark accessories blurred behind. Dramatic cinematic side lighting from the right. Portrait orientation. Ultra-sharp watch. No text, no watermark.
+
+---
+
+### FEMALE-20 — Đồng hồ kẹp giữa dây da và phụ kiện nữ + Nền tối dramatic cinematic
+**English instruction for GPT:**
+> Photorealistic lifestyle photo of a luxury women's watch framed and propped between leather bag straps — a tan leather strap from above and a dark black leather item below. Background is very dark moody bokeh with a blurred dark perfume bottle or accessory faintly visible. Dramatic cinematic side lighting creating beautiful contrast. Portrait orientation. Ultra-sharp watch dial. No text, no watermark.
+
+---
+
+### FEMALE-21 — Cực cận macro mặt đồng hồ lấp đầy khung hình + Nền tối mịn
+**English instruction for GPT:**
+> Extreme macro close-up of a luxury women's watch dial filling the entire frame edge to edge. The watch case edge and bezel are barely visible on the sides. Background is a completely smooth, very dark matte bokeh. Ultra-detailed: every texture on the dial, every index, every hand is pin-sharp. No background story, pure dial artistry. Portrait orientation. No text, no watermark. Ultra-premium watch macro photography.
+
+---
+
+### FEMALE-22 — Đồng hồ dựng nghiêng tựa vào nền vải tối mịn + Thấy cả mặt và dây
+**English instruction for GPT:**
+> Photorealistic lifestyle photo of a luxury women's watch propped upright at a slight diagonal, leaning against a soft dark grey suede or velvet fabric background. Both the watch dial and the full bracelet are clearly visible in the frame. Soft even studio lighting, no harsh shadows. Clean minimal composition. Portrait orientation. Ultra-sharp watch. No text, no watermark.
+
+---
+
+### FEMALE-23 — Flat lay + Bàn gỗ tối đậm + Dụng cụ tua vít + Overhead editorial
+**English instruction for GPT:**
+> Photorealistic lifestyle flat lay of a luxury women's watch lying flat on a rich dark espresso-toned wooden surface. A small silver watch screwdriver or adjustment tool placed diagonally beside it. Camera: directly overhead. Warm moody lighting with subtle shadows. Portrait orientation. Ultra-sharp watch case, bracelet and dial. No text, no watermark.
+
+---
 
 ## [NEUTRAL] KHÔNG PHÂN BIỆT GIỚI TÍNH
 
-### NEUTRAL-1 — Flat lay đá slate đen + tua vít + sách trắng (không tay)
-
+### NEUTRAL-1 — Flat lay + Mặt bàn đá mờ + Minimal
 **English instruction for GPT:**
-> Photorealistic minimalist product flat lay of a luxury watch placed on dark grey slate stone. Beside it: a small stainless steel watch screwdriver tool and the edge of a white notebook. Overhead studio lighting, cool tones, subtle rim light on bracelet. No hands in frame. Portrait orientation. Ultra-sharp watch. No text, no logo, no watermark. Technical luxury watch photography.
+> Photorealistic minimalist product flat lay of a luxury watch placed perfectly flat on a dark grey matte slate stone. Completely empty background, no hands, no extra props except maybe a sleek pen. Overhead studio lighting, cool modern tones. Portrait orientation. Ultra-sharp watch. No text, no logo, no watermark.
 
 ---
 
-### NEUTRAL-2 — Macro mặt đồng hồ + lighting cam ấm dramatic
-
+### NEUTRAL-2 — Flat lay + Bàn gỗ vintage + Tách cafe đen
 **English instruction for GPT:**
-> Extreme close-up macro of a luxury watch dial at 30-degree tilt, filling the entire frame. Warm orange and amber bokeh background. Cinematic dramatic lighting, sharp dial details. Portrait orientation. No text, no logo, no watermark. Luxury macro photography.
+> Photorealistic lifestyle flat lay of a luxury watch resting on a textured dark vintage wooden table. Beside it: a simple white ceramic cup of black espresso. Shot from overhead with natural, unforced composition. Warm moody lighting. Portrait orientation. Ultra-sharp watch. No text, no watermark.
+
 
 ---
 
-## ĐỊNH DẠNG ĐẦU RA
-
-- **Kích thước:** Dọc 4:5 hoặc vuông 1:1
-- **Chất lượng:** Photorealistic, 4K, commercial photography
-- **Số lượng:** 4–6 ảnh mỗi lần, chọn ngẫu nhiên từng cảnh khác nhau
+### FEMALE-2 — Flat lay + Túi xách da + Khăn lụa + Son môi
+**English instruction for GPT:**
+> Photorealistic lifestyle flat lay of a luxury women's watch placed naturally on top of a small elegant nude or blush leather handbag. Beside the watch: a folded silk scarf in soft pastel tones and a luxury lipstick partially blurred in the background. Soft warm daylight. Editorial feminine everyday carry style. Portrait orientation. Ultra-sharp watch. No text, no watermark. High-end women's lifestyle.
 
 ---
 
-## GHI CHÚ DEVELOPER
+### FEMALE-3 — Đeo trên tay + Gõ laptop trắng + Không gian pastel
+**English instruction for GPT:**
+> Photorealistic lifestyle close-up of a feminine wrist wearing a luxury watch. The slender hand with soft nude manicure is lightly typing on a white or silver laptop keyboard. Beside the laptop, a blurred pastel coffee cup. The woman wears a delicate white silk blouse. Natural soft window light. Very realistic everyday professional female lifestyle. Portrait orientation. Ultra-sharp watch. No text.
 
-- Section `[MALE]` → SKU chứa G → random 1 trong MALE-1 đến MALE-19
-- Section `[FEMALE]` → SKU chứa L → random 1 trong FEMALE-1 đến FEMALE-3
-- Section `[NEUTRAL]` → fallback khi không detect được giới tính
-- Thêm phong cách mới: copy format `### MALE-X` và điền instruction
+---
+
+### FEMALE-4 — Flat lay + Bàn đá cẩm thạch trắng + Tạp chí + Hoa tươi
+**English instruction for GPT:**
+> Photorealistic lifestyle flat lay of a luxury women's watch resting on smooth white marble. Nearby in the composition: the corner of a high-end fashion magazine and a soft white or pale pink fresh peony flower bloom softly blurred. Overhead natural airy lighting with soft shadows. Clean feminine luxury lifestyle. Portrait orientation. Ultra-sharp watch. No text, no watermark.
+
+---
+
+### FEMALE-5 — Đeo trên tay + Vô lăng xe sang + Ánh nắng rực rỡ
+**English instruction for GPT:**
+> Photorealistic first-person view lifestyle photo of a woman's wrist wearing a luxury watch, casually resting her hand (with elegant nude polish) on the leather steering wheel of a premium car. The background shows blurred sunny street out the window. Natural bright sunlight illuminating the watch dial. Highly realistic everyday feminine driving scene. Portrait orientation. Ultra-sharp watch. No text.
+
+---
+
+### FEMALE-6 — Flat lay + Giường nệm trắng + Sách + Nắng sớm
+**English instruction for GPT:**
+> Photorealistic romantic lifestyle flat lay of a luxury women's watch resting lightly on rumpled, clean white bed sheets. Beside it, an open novel book. Soft morning sunlight streaming across the bed, creating gentle, airy shadows. Extremely natural, peaceful morning aesthetic. Portrait orientation. Ultra-sharp watch face. No text, no watermark.
+
+---
+
+## [NEUTRAL] KHÔNG PHÂN BIỆT GIỚI TÍNH
+
+### NEUTRAL-1 — Flat lay + Mặt bàn đá mờ + Minimal
+**English instruction for GPT:**
+> Photorealistic minimalist product flat lay of a luxury watch placed perfectly flat on a dark grey matte slate stone. Completely empty background, no hands, no extra props except maybe a sleek pen. Overhead studio lighting, cool modern tones. Portrait orientation. Ultra-sharp watch. No text, no logo, no watermark.
+
+---
+
+### NEUTRAL-2 — Flat lay + Bàn gỗ vintage + Tách cafe đen
+**English instruction for GPT:**
+> Photorealistic lifestyle flat lay of a luxury watch resting on a textured dark vintage wooden table. Beside it: a simple white ceramic cup of black espresso. Shot from overhead with natural, unforced composition. Warm moody lighting. Portrait orientation. Ultra-sharp watch. No text, no watermark.

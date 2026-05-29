@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import { Worker } from 'bullmq';
 import IORedis from 'ioredis';
-import { autoPublishRoutine } from '../services/publish.service.js';
+import { autoPublishRoutine, resetGlobalStop } from '../services/publish.service.js';
 
 const connection = new IORedis(process.env.REDIS_URL || 'redis://localhost:6379', {
   maxRetriesPerRequest: null
@@ -10,6 +10,7 @@ const connection = new IORedis(process.env.REDIS_URL || 'redis://localhost:6379'
 export const worker = new Worker('publishQueue', async job => {
   if (job.name === 'autoPublishJob') {
     console.log(`[Worker] Bắt đầu xử lý Job Đăng bài tự động (ID: ${job.id})`);
+    resetGlobalStop();
     await autoPublishRoutine();
   }
 }, { connection });

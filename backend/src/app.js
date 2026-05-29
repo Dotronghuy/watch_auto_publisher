@@ -3,7 +3,7 @@ import express from 'express';
 import apiRoutes from './routes/api.routes.js';
 import cors from 'cors';
 import { startScheduler } from './scheduler.js';
-import './workers/publish.worker.js';
+// Worker sẽ được khởi động SAU khi scheduler dọn sạch queue
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -32,6 +32,11 @@ app.use('/api', apiRoutes);
 app.listen(PORT, async () => {
   console.log(`🚀 Server is running on http://localhost:${PORT}`);
   
-  // Khởi động lịch trình đăng bài tự động sau khi server lên
+  // 1. Scheduler dọn sạch Redis trước
   await startScheduler();
+  
+  // 2. Chỉ sau khi scheduler đã dọn sạch xong mới khởi động Worker
+  // Tránh Worker pick up job stalled cũ từ phiên trước
+  await import('./workers/publish.worker.js');
+  console.log('✅ Worker đã khởi động sau khi Scheduler dọn sạch queue.');
 });

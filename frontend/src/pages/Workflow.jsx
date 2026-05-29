@@ -31,9 +31,10 @@ const Workflow = () => {
   const [nodes, setNodes] = useState(INITIAL_NODES);
   const [prompts, setPrompts] = useState(INITIAL_PROMPTS);
   const [editingPrompt, setEditingPrompt] = useState(null);
-  const [mdFileName, setMdFileName] = useState(null);      // tên file .md đã upload
-  const [mdUploading, setMdUploading] = useState(false);   // đang upload
-  const mdFileInputRef = useRef(null);                      // hidden file input
+  const [mdFiles, setMdFiles] = useState({ gpt: [], gemini: [] });
+  const [mdUploading, setMdUploading] = useState(false);
+  const [uploadingNode, setUploadingNode] = useState(null);
+  const mdFileInputRef = useRef(null);
   // Canvas transform state
   const [transform, setTransform] = useState({ x: 0, y: 0, scale: 1 });
   const terminalEndRef = useRef(null);
@@ -42,23 +43,48 @@ const Workflow = () => {
   const panning  = useRef(null);   // { startX, startY, originX, originY }
   const spaceHeld = useRef(false);
 
-  // ─── UPLOAD FILE .MD ───
-  const handleMdFileChange = async (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    if (!file.name.endsWith('.md')) {
-      Swal.fire({ title: 'Sai định dạng', text: 'Vui lòng chọn file có đuôi .md', icon: 'warning', background: 'var(--color-surface)', color: 'white' });
-      return;
+  // ─── LẤY DANH SÁCH & UPLOAD FILE .MD ───
+  const fetchMdFiles = useCallback(async (nodeId) => {
+    try {
+      const res = await fetch(`http://localhost:3000/api/prompt-md-files/${nodeId}`);
+      if (res.ok) {
+        const data = await res.json();
+        setMdFiles(prev => ({ ...prev, [nodeId]: data.files }));
+      }
+    } catch (e) {
+      console.error('Lỗi lấy danh sách file:', e);
     }
+  }, []);
+
+  useEffect(() => {
+    fetchMdFiles('gpt');
+    fetchMdFiles('gemini');
+  }, [fetchMdFiles]);
+
+  const handleUploadClick = (nodeId) => {
+    setUploadingNode(nodeId);
+    mdFileInputRef.current?.click();
+  };
+
+  const handleMdFileChange = async (e) => {
+    const files = e.target.files;
+    if (!files || files.length === 0 || !uploadingNode) return;
+    
     setMdUploading(true);
     try {
       const formData = new FormData();
-      formData.append('mdFile', file);
-      const res = await fetch('http://localhost:3000/api/upload-prompt-md', { method: 'POST', body: formData });
+      for (let i = 0; i < files.length; i++) {
+        formData.append('mdFiles', files[i]);
+      }
+      
+      const res = await fetch(`http://localhost:3000/api/upload-prompt-md/${uploadingNode}`, { 
+        method: 'POST', 
+        body: formData 
+      });
       const data = await res.json();
       if (res.ok) {
-        setMdFileName(file.name);
-        Swal.fire({ title: '✅ Tải lên thành công!', text: `File "${file.name}" đã được cập nhật. Tool sẽ dùng prompt từ file này.`, icon: 'success', background: 'var(--color-surface)', color: 'white', timer: 3000, showConfirmButton: false });
+        Swal.fire({ title: '✅ Tải lên thành công!', text: data.message, icon: 'success', background: 'var(--color-surface)', color: 'white', toast: true, position: 'top-end', timer: 3000, showConfirmButton: false });
+        fetchMdFiles(uploadingNode);
       } else {
         throw new Error(data.message || 'Upload thất bại');
       }
@@ -66,7 +92,22 @@ const Workflow = () => {
       Swal.fire({ title: 'Lỗi upload', text: err.message, icon: 'error', background: 'var(--color-surface)', color: 'white' });
     } finally {
       setMdUploading(false);
-      e.target.value = ''; // reset để chọn lại cùng file vẫn trigger
+      setUploadingNode(null);
+      e.target.value = ''; // reset
+    }
+  };
+
+  const handleDeleteMdFile = async (nodeId, filename) => {
+    try {
+      const res = await fetch(`http://localhost:3000/api/prompt-md-files/${nodeId}/${filename}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (res.ok) {
+        fetchMdFiles(nodeId);
+      } else {
+        Swal.fire({ title: 'Lỗi', text: data.message, icon: 'error', background: 'var(--color-surface)', color: 'white', toast: true, position: 'top-end', showConfirmButton: false, timer: 3000 });
+      }
+    } catch (err) {
+      console.error(err);
     }
   };
 
@@ -75,6 +116,26 @@ const Workflow = () => {
     eventSource.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
+
+        // Khôi phục lịch sử khi kết nối lại
+        if (data.type === 'history') {
+           setLogs(data.logs);
+           
+           // Khôi phục thư viện ảnh AI (loại bỏ trùng lặp)
+           const images = data.logs.filter(l => l.image).map(l => l.image);
+           const uniqueImages = [...new Set(images)];
+           setImageGallery(uniqueImages);
+           if (uniqueImages.length > 0) setCarouselIdx(uniqueImages.length - 1);
+           
+           // Khôi phục nội dung Gemini
+           const previews = data.logs.filter(l => l.textPreview).map(l => l.textPreview);
+           if (previews.length > 0) setPreviewText(previews[previews.length - 1]);
+           
+           setTimeout(() => terminalEndRef.current?.scrollIntoView({ behavior: 'auto' }), 100);
+           return;
+        }
+
+        // Logic xử lý log bình thường (real-time)
         setLogs(prev => [...prev, data]);
         setTimeout(() => terminalEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 100);
         if (data.sender === 'GPT-4 Vision' && data.type !== 'success') setIsGPTActive(true);
@@ -337,33 +398,33 @@ const Workflow = () => {
               <div className="node-header"><BrainCircuit size={14} className="pink" /> GPT-4 Vision (Sinh Ảnh)</div>
               <div className="node-body">
                 <div className="field">
-                  <label style={{display:'flex', justifyContent:'space-between'}}>
-                    Prompt sinh ảnh
-                    <button style={{fontSize:'10px', color:'var(--color-primary)', background:'none', border:'none', cursor:'pointer', padding:0}} onClick={() => setEditingPrompt('gpt')}>✏️ Sửa</button>
-                  </label>
-                  {editingPrompt === 'gpt' ? (
-                    <PromptEditor value={prompts.gpt} onSave={val => handleSavePrompt('gpt', val)} onCancel={() => setEditingPrompt(null)} />
-                  ) : (
-                    <div className="value prompt-preview" onClick={() => setEditingPrompt('gpt')}>{prompts.gpt}</div>
-                  )}
+                  <label>Trạng thái Prompt</label>
+                  <div className="value prompt-preview" style={{ color: '#ffcc00', border: '1px dashed rgba(255, 204, 0, 0.3)', background: 'rgba(255, 204, 0, 0.05)', cursor: 'default' }}>
+                    ⚠️ Bắt buộc: GPT sẽ tự động đọc cấu hình theo mã SKU từ file <b>.md</b> được tải lên bên dưới.
+                  </div>
                 </div>
                 <div className="field">
                   <label>File Prompt hướng dẫn AI (.md)</label>
-                  <input ref={mdFileInputRef} type="file" accept=".md" style={{display:'none'}} onChange={handleMdFileChange} />
+                  <input ref={mdFileInputRef} type="file" multiple accept=".md" style={{display:'none'}} onChange={handleMdFileChange} />
+                  <div style={{display: 'flex', flexDirection: 'column', gap: '4px', marginBottom: '8px'}}>
+                    {mdFiles.gpt.map(f => (
+                      <div key={f.name} style={{fontSize:'10px', display:'flex', justifyContent:'space-between', alignItems:'center', background:'rgba(255,255,255,0.05)', padding:'4px 6px', borderRadius:'4px', border: '1px solid rgba(255,255,255,0.05)'}}>
+                        <span style={{color: 'var(--color-primary)', display: 'flex', alignItems: 'center', gap: '4px'}}><FileText size={10} /> {f.name}</span>
+                        {!['gpt_image_prompt.md', 'gemini-prompt-template.md'].includes(f.name) && (
+                          <Trash2 size={12} style={{cursor:'pointer', color:'#ff4d4d', opacity: 0.7}} onClick={() => handleDeleteMdFile('gpt', f.name)} title="Xóa" />
+                        )}
+                      </div>
+                    ))}
+                  </div>
                   <button
                     className="btn-upload-md"
-                    onClick={() => mdFileInputRef.current?.click()}
-                    disabled={mdUploading}
-                    title="Chọn file .md để cập nhật prompt hướng dẫn AI tạo ảnh"
+                    onClick={() => handleUploadClick('gpt')}
+                    disabled={mdUploading && uploadingNode === 'gpt'}
+                    title="Thêm file .md cho node này"
                   >
                     <UploadCloud size={12} />
-                    {mdUploading ? ' Đang tải...' : mdFileName ? ` ${mdFileName}` : ' Chọn file .md'}
+                    {mdUploading && uploadingNode === 'gpt' ? ' Đang tải...' : ' Tải lên file .md'}
                   </button>
-                  {mdFileName && (
-                    <div style={{fontSize:'10px', color:'var(--color-primary)', marginTop:4, display:'flex', alignItems:'center', gap:4}}>
-                      ✅ Đang dùng: <span style={{color:'var(--color-text-dim)'}}>{mdFileName}</span>
-                    </div>
-                  )}
                 </div>
               </div>
               <div className="port" style={{top:'50%', right:'-5px'}} title="Output → Gemini"></div>
@@ -381,43 +442,32 @@ const Workflow = () => {
               <div className="node-header"><Settings size={14} className="blue" /> Gemini 1.5 Pro</div>
               <div className="node-body">
                 <div className="field">
-                  <label style={{display:'flex', justifyContent:'space-between'}}>
-                    Prompt viết bài
-                    <button style={{fontSize:'10px', color:'var(--color-primary)', background:'none', border:'none', cursor:'pointer', padding:0}} onClick={() => setEditingPrompt('gemini_post')}>✏️ Sửa</button>
-                  </label>
-                  {editingPrompt === 'gemini_post' ? (
-                    <PromptEditor value={prompts.gemini_post} onSave={val => handleSavePrompt('gemini_post', val)} onCancel={() => setEditingPrompt(null)} />
-                  ) : (
-                    <div className="value prompt-preview" onClick={() => setEditingPrompt('gemini_post')}>{prompts.gemini_post}</div>
-                  )}
+                  <label>Trạng thái Cấu hình AI</label>
+                  <div className="value prompt-preview" style={{ color: '#ffcc00', border: '1px dashed rgba(255, 204, 0, 0.3)', background: 'rgba(255, 204, 0, 0.05)', cursor: 'default' }}>
+                    ⚠️ Chế độ tự động nâng cao: Phân luồng FB/IG, áp dụng luật marketing và đọc chân dung khách hàng từ các file <b>.md</b>.
+                  </div>
                 </div>
                 <div className="field mt-2">
-                  <label style={{display:'flex', justifyContent:'space-between'}}>
-                    Prompt viết kịch bản (Video)
-                    <button style={{fontSize:'10px', color:'var(--color-primary)', background:'none', border:'none', cursor:'pointer', padding:0}} onClick={() => setEditingPrompt('gemini_video')}>✏️ Sửa</button>
-                  </label>
-                  {editingPrompt === 'gemini_video' ? (
-                    <PromptEditor value={prompts.gemini_video} onSave={val => handleSavePrompt('gemini_video', val)} onCancel={() => setEditingPrompt(null)} />
-                  ) : (
-                    <div className="value prompt-preview" onClick={() => setEditingPrompt('gemini_video')}>{prompts.gemini_video}</div>
-                  )}
-                </div>
-                <div className="field mt-2">
-                  <label>File Prompt hướng dẫn AI (.md)</label>
+                  <label>File Hướng dẫn & Dữ liệu (.md)</label>
+                  <div style={{display: 'flex', flexDirection: 'column', gap: '4px', marginBottom: '8px'}}>
+                    {mdFiles.gemini.map(f => (
+                      <div key={f.name} style={{fontSize:'10px', display:'flex', justifyContent:'space-between', alignItems:'center', background:'rgba(255,255,255,0.05)', padding:'4px 6px', borderRadius:'4px', border: '1px solid rgba(255,255,255,0.05)'}}>
+                        <span style={{color: 'var(--color-primary)', display: 'flex', alignItems: 'center', gap: '4px'}}><FileText size={10} /> {f.name}</span>
+                        {!['gpt_image_prompt.md', 'gemini-prompt-template.md'].includes(f.name) && (
+                          <Trash2 size={12} style={{cursor:'pointer', color:'#ff4d4d', opacity: 0.7}} onClick={() => handleDeleteMdFile('gemini', f.name)} title="Xóa" />
+                        )}
+                      </div>
+                    ))}
+                  </div>
                   <button
                     className="btn-upload-md"
-                    onClick={() => mdFileInputRef.current?.click()}
-                    disabled={mdUploading}
-                    title="Chọn file .md để cập nhật prompt hướng dẫn AI"
+                    onClick={() => handleUploadClick('gemini')}
+                    disabled={mdUploading && uploadingNode === 'gemini'}
+                    title="Thêm file .md cho node này"
                   >
                     <UploadCloud size={12} />
-                    {mdUploading ? ' Đang tải...' : mdFileName ? ` ${mdFileName}` : ' Chọn file .md'}
+                    {mdUploading && uploadingNode === 'gemini' ? ' Đang tải...' : ' Tải lên file .md'}
                   </button>
-                  {mdFileName && (
-                    <div style={{fontSize:'10px', color:'var(--color-primary)', marginTop:4}}>
-                      ✅ <span style={{color:'var(--color-text-dim)'}}>{mdFileName}</span>
-                    </div>
-                  )}
                 </div>
               </div>
               <div className="port" style={{top:'50%', right:'-5px'}} title="Output → Publisher"></div>

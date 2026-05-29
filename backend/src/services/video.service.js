@@ -17,22 +17,31 @@ ffmpeg.setFfmpegPath(ffmpegStatic);
 export const addMusicToVideo = (videoPath, audioPath, outputPath) => {
   return new Promise((resolve, reject) => {
     console.log(`🎵 Đang tiến hành ghép nhạc vào Video...`);
+    let stderrLog = '';
     ffmpeg(videoPath)
       .input(audioPath)
       .outputOptions([
-        '-map 0:v:0', // Chỉ lấy hình ảnh từ file đầu tiên (video gốc)
-        '-map 1:a:0', // Chỉ lấy âm thanh từ file thứ hai (nhạc nền)
-        '-c:v copy',  // Copy nguyên bản luồng hình ảnh (cực kỳ nhanh, không làm mờ video)
-        '-c:a aac',   // Nén âm thanh chuẩn AAC (chuẩn bắt buộc của Meta)
-        '-shortest'   // Cắt độ dài bằng với file ngắn nhất (yêu cầu của User)
+        '-map 0:v:0',         // Chỉ lấy hình ảnh từ video gốc
+        '-map 1:a:0',         // Chỉ lấy âm thanh từ nhạc nền
+        '-c:v libx264',       // Re-encode video (tương thích mọi định dạng, thay vì copy)
+        '-preset ultrafast',  // Tốc độ encode nhanh nhất
+        '-crf 23',            // Chất lượng hợp lý (0=tốt nhất, 51=kém nhất)
+        '-c:a aac',           // Nén âm thanh chuẩn AAC (bắt buộc của Meta)
+        '-b:a 128k',          // Bitrate âm thanh
+        '-ac 2',              // Stereo
+        '-movflags +faststart', // Tối ưu cho streaming
+        '-shortest',          // Cắt theo file ngắn nhất
+        '-y',                 // Ghi đè nếu file output đã tồn tại
       ])
       .save(outputPath)
+      .on('stderr', (line) => { stderrLog += line + '\n'; })
       .on('end', () => {
         console.log(`✅ Đã ghép nhạc thành công: ${outputPath}`);
         resolve(outputPath);
       })
       .on('error', (err) => {
         console.error(`❌ Lỗi khi ghép nhạc: ${err.message}`);
+        if (stderrLog) console.error(`📋 FFmpeg stderr:\n${stderrLog.slice(-500)}`);
         reject(err);
       });
   });

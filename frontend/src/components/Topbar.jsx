@@ -1,10 +1,23 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Search, Bell, Zap, User, RefreshCw, Play, Square } from 'lucide-react';
 import Swal from 'sweetalert2';
 import './Topbar.css';
 
 const Topbar = () => {
   const [isRunning, setIsRunning] = useState(false);
+
+  useEffect(() => {
+    const checkStatus = async () => {
+      try {
+        const res = await fetch('http://localhost:3000/api/dashboard');
+        const data = await res.json();
+        setIsRunning(data.activeWorkflows > 0);
+      } catch (e) {}
+    };
+    checkStatus();
+    const interval = setInterval(checkStatus, 3000);
+    return () => clearInterval(interval);
+  }, []);
   return (
     <header className="topbar">
       <div className="topbar-search">

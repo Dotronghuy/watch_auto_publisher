@@ -10,7 +10,7 @@ const __dirname = path.dirname(__filename);
 
 chromium.use(stealth());
 
-export const generateBackgroundOnChatGPT = async (imagePath, prompt, count = 1) => {
+export const generateBackgroundOnChatGPT = async (imagePath, promptsArray, abortSignal = null) => {
     console.log('\n--- BẮT ĐẦU TIẾN TRÌNH PLAYWRIGHT ---');
     const userDataDir = path.join(__dirname, '../../chrome_data_chatgpt');
     
@@ -97,17 +97,19 @@ export const generateBackgroundOnChatGPT = async (imagePath, prompt, count = 1) 
         const outputPaths = [];
         const downloadedSrcs = new Set();
         
+        const count = promptsArray.length;
         for (let i = 0; i < count; i++) {
             console.log(`\n--- VẼ ẢNH ${i + 1}/${count} ---`);
+            const currentPrompt = promptsArray[i];
             
             if (i === 0) {
-                console.log(`✍️ Đang gõ prompt gốc...`);
+                console.log(`✍️ Đang gõ prompt gốc số 1...`);
                 await promptLocator.click();
                 await page.waitForTimeout(300);
-                await promptLocator.fill(prompt);
+                await promptLocator.fill(currentPrompt);
             } else {
-                console.log(`✍️ Đang gõ prompt biến thể...`);
-                const followUpPrompt = "Hãy tạo thêm 1 bức ảnh khác với bối cảnh tương tự nhưng thay đổi góc nhìn, cách bài trí hoặc ánh sáng một chút. Không gian vẫn phải thật sang trọng.";
+                console.log(`✍️ Đang gõ prompt biến thể số ${i + 1}...`);
+                const followUpPrompt = `Bây giờ, hãy tạo bức ảnh tiếp theo. YÊU CẦU BẮT BUỘC: Thay đổi hoàn toàn bối cảnh theo mô tả chi tiết sau đây:\n\n"${currentPrompt}"\n\nTuyệt đối giữ nguyên vẹn 100% thiết kế của chiếc đồng hồ gốc. Đảm bảo chất lượng 4K siêu thực.`;
                 await promptLocator.click();
                 await page.waitForTimeout(300);
                 await promptLocator.fill(followUpPrompt);
@@ -115,13 +117,30 @@ export const generateBackgroundOnChatGPT = async (imagePath, prompt, count = 1) 
             
             await page.waitForTimeout(1000);
             console.log('🚀 Nhấn Enter gửi yêu cầu...');
+            
+            // Chụp snapshot tất cả ảnh HIỆN CÓ trên trang TRƯỚC khi GPT sinh ảnh mới
+            // → Tránh nhận nhầm ảnh thumbnail đã upload thành ảnh AI vừa tạo
+            try {
+                const existingImgs = await page.$$('img');
+                for (const img of existingImgs) {
+                    const src = await img.getAttribute('src');
+                    if (src) downloadedSrcs.add(src);
+                }
+                console.log(`📸 Đã snapshot ${downloadedSrcs.size} ảnh hiện có (sẽ bỏ qua khi scan).`);
+            } catch (e) {}
+            
             await page.keyboard.press('Enter');
             
             console.log(`⏳ Đang chờ ChatGPT vẽ ảnh ${i + 1} (có thể mất 60-100 giây)...`);
             
             let targetImgSrc = null;
-            // Quét tìm ảnh liên tục mỗi 5 giây, tối đa 20 lần (100 giây)
-            for (let attempt = 0; attempt < 20; attempt++) {
+            // Quét tìm ảnh liên tục mỗi 5 giây, tối đa 60 lần (300 giây = 5 phút)
+            for (let attempt = 0; attempt < 60; attempt++) {
+                // Kiểm tra lệnh dừng trước mỗi lần quét
+                if (abortSignal && abortSignal.aborted) {
+                    console.log('⏹️ Nhận lệnh dừng, thoát vòng lặp chờ ảnh GPT.');
+                    throw new Error('Abort requested');
+                }
                 await page.waitForTimeout(5000);
                 
                 // Xử lý trường hợp ChatGPT bật chế độ A/B Testing
@@ -144,10 +163,17 @@ export const generateBackgroundOnChatGPT = async (imagePath, prompt, count = 1) 
                         const box = await img.boundingBox();
                         if (box) {
                             const area = box.width * box.height;
-                            if (area > maxArea && area > 70000) {
+                            if (area > 10000) { // Hạ ngưỡng xuống để bắt kịp ảnh chưa render full
                                 const src = await img.getAttribute('src');
-                                // Loại bỏ ảnh đại diện và các ảnh đã tải ở vòng lặp trước
-                                if (src && !src.includes('avatar') && !downloadedSrcs.has(src)) {
+                                // Loại bỏ các ảnh UI (avatar, icon, logo trang web)
+                                const isUIElement = !src || 
+                                    src.includes('avatar') || 
+                                    src.includes('favicon') ||
+                                    src.includes('_next/static') ||
+                                    src.includes('logo') ||
+                                    src.includes('icon') ||
+                                    src.startsWith('data:image/svg');
+                                if (!isUIElement && !downloadedSrcs.has(src) && area > maxArea) {
                                     maxArea = area;
                                     bestImgSrc = src;
                                 }
@@ -164,10 +190,12 @@ export const generateBackgroundOnChatGPT = async (imagePath, prompt, count = 1) 
                     await page.waitForTimeout(5000); 
                     break;
                 }
+                
+                console.log(`⏳ Chưa thấy ảnh (lần thử ${attempt + 1}/60, đã chờ ${((attempt + 1) * 5)}s)...`);
             }
             
             if (!targetImgSrc) {
-                console.log(`❌ LỖI: Không thể tìm thấy ảnh thứ ${i + 1} do ChatGPT vẽ ra sau 100 giây. Sẽ dừng vòng lặp tại đây.`);
+                console.log(`❌ LỖI: Không thể tìm thấy ảnh thứ ${i + 1} do ChatGPT vẽ ra sau 150 giây. Sẽ dừng vòng lặp tại đây.`);
                 break;
             }
             
