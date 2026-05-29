@@ -8,7 +8,7 @@ import dotenv from 'dotenv';
 import { google } from 'googleapis';
 import multer from 'multer';
 import { startScheduler } from '../scheduler.js';
-import { autoPublishRoutine, resetGlobalStop, triggerGlobalStop, getIsRunning } from '../services/publish.service.js';
+import { autoPublishRoutine, dryRunRoutine, resetGlobalStop, triggerGlobalStop, getIsRunning } from '../services/publish.service.js';
 import { getProductInfoBySku } from '../services/sheet.service.js';
 import { openLoginHelper } from '../services/playwright.service.js';
 import { publishQueue } from '../workers/queue.js';
@@ -327,6 +327,27 @@ router.post('/stop-workflow', async (req, res) => {
   res.json({ success: true, message: 'Đã dừng toàn bộ ngay lập tức.' });
 });
 
+// 4c. DRY RUN — Chạy thử toàn bộ luồng AI nhưng KHÔNG đăng lên MXH
+router.post('/dry-run', async (req, res) => {
+  resetGlobalStop();
+  addActivity('Bắt đầu Dry Run — Kiểm thử AI không đăng MXH', 'info');
+  sendLogToClients({ time: new Date().toLocaleTimeString(), sender: 'System', message: '🧪 Bắt đầu Dry Run — Sẽ không đăng lên Facebook/Instagram...', type: 'highlight' });
+
+  try {
+    const result = await dryRunRoutine();
+    sendLogToClients({ time: new Date().toLocaleTimeString(), sender: 'System', message: `✅ Dry Run hoàn thành! SKU: ${result.sku} | ${result.imageCount} ảnh`, type: 'success' });
+    addActivity(`Dry Run thành công — SKU: ${result.sku}`, 'success');
+    res.json(result);
+  } catch (err) {
+    const isAborted = err.message?.includes('aborted') || err.name === 'AbortError';
+    const msg = isAborted ? '⏹️ Dry Run bị dừng theo yêu cầu.' : `❌ Dry Run thất bại: ${err.message}`;
+    const type = isAborted ? 'highlight' : 'error';
+    sendLogToClients({ time: new Date().toLocaleTimeString(), sender: 'System', message: msg, type });
+    addActivity(msg, isAborted ? 'warning' : 'error');
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // 5. Server-Sent Events (SSE) Endpoint cho Live Monitor
 router.get('/logs/stream', (req, res) => {
   // Header cho SSE
@@ -557,6 +578,68 @@ router.delete('/prompt-md-files/:nodeId/:filename', (req, res) => {
     fs.unlinkSync(filePath);
     console.log(`🗑️ [Delete/${nodeId}] Đã xoá: ${filename}`);
     res.json({ success: true, message: `Đã xoá ${filename}` });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// ─── SAMPLE IMAGES (Ảnh mẫu tham chiếu cho ChatGPT) ───
+const SAMPLE_IMAGES_DIR = path.join(__dirname, '../../config/sample_images');
+const sampleImgUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } }); // max 20MB
+
+// Liệt kê ảnh mẫu
+router.get('/sample-images', (req, res) => {
+  try {
+    if (!fs.existsSync(SAMPLE_IMAGES_DIR)) fs.mkdirSync(SAMPLE_IMAGES_DIR, { recursive: true });
+    const validExt = ['.jpg', '.jpeg', '.png', '.webp'];
+    const files = fs.readdirSync(SAMPLE_IMAGES_DIR)
+      .filter(f => validExt.includes(path.extname(f).toLowerCase()))
+      .map(f => {
+        const stat = fs.statSync(path.join(SAMPLE_IMAGES_DIR, f));
+        return { name: f, size: stat.size, updatedAt: stat.mtime };
+      });
+    res.json({ files, count: files.length });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// Upload ảnh mẫu
+router.post('/sample-images', sampleImgUpload.array('images', 20), (req, res) => {
+  if (!fs.existsSync(SAMPLE_IMAGES_DIR)) fs.mkdirSync(SAMPLE_IMAGES_DIR, { recursive: true });
+  if (!req.files || req.files.length === 0) return res.status(400).json({ message: 'Không có file nào.' });
+  
+  const saved = [];
+  const errors = [];
+  const validExt = ['.jpg', '.jpeg', '.png', '.webp'];
+  
+  for (const file of req.files) {
+    const ext = path.extname(file.originalname).toLowerCase();
+    if (!validExt.includes(ext)) { errors.push(`${file.originalname}: chỉ chấp nhận ảnh JPG/PNG/WEBP`); continue; }
+    try {
+      const savePath = path.join(SAMPLE_IMAGES_DIR, file.originalname);
+      fs.writeFileSync(savePath, file.buffer);
+      saved.push({ name: file.originalname, size: file.size });
+      console.log(`📸 [Sample Images] Đã lưu: ${file.originalname}`);
+    } catch (e) {
+      errors.push(`${file.originalname}: ${e.message}`);
+    }
+  }
+  
+  res.json({ success: saved.length > 0, saved, errors, message: `Đã lưu ${saved.length} ảnh mẫu.` });
+});
+
+// Xóa 1 ảnh mẫu
+router.delete('/sample-images/:filename', (req, res) => {
+  const { filename } = req.params;
+  if (!filename.match(/\.(jpg|jpeg|png|webp)$/i) || filename.includes('..')) {
+    return res.status(400).json({ message: 'Tên file không hợp lệ.' });
+  }
+  try {
+    const filePath = path.join(SAMPLE_IMAGES_DIR, filename);
+    if (!fs.existsSync(filePath)) return res.status(404).json({ message: 'File không tồn tại.' });
+    fs.unlinkSync(filePath);
+    res.json({ success: true, message: `Đã xóa ${filename}` });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }

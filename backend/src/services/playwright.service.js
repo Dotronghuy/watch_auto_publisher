@@ -10,7 +10,7 @@ const __dirname = path.dirname(__filename);
 
 chromium.use(stealth());
 
-export const generateBackgroundOnChatGPT = async (imagePath, promptsArray, abortSignal = null) => {
+export const generateBackgroundOnChatGPT = async (imagePath, promptsArray, abortSignal = null, sampleImagePath = null) => {
     console.log('\n--- BẮT ĐẦU TIẾN TRÌNH PLAYWRIGHT ---');
     const userDataDir = path.join(__dirname, '../../chrome_data_chatgpt');
     
@@ -82,11 +82,21 @@ export const generateBackgroundOnChatGPT = async (imagePath, promptsArray, abort
             throw new Error('Không tìm thấy ô nhập liệu ChatGPT! Giao diện có thể đã thay đổi hoặc tài khoản chưa đăng nhập.');
         }
 
-        console.log('📤 Đang tìm nút Upload và tải ảnh gốc lên...');
+        console.log('📤 Đang tìm nút Upload và tải ảnh lên...');
         const fileInput = await page.$('input[type="file"]');
         if (fileInput) {
-            await fileInput.setInputFiles(imagePath);
-            console.log('✅ Đã chọn file ảnh.');
+            // Upload ảnh AVT đồng hồ (bắt buộc)
+            const filesToUpload = [imagePath];
+            
+            // Nếu có ảnh mẫu tham chiếu, upload thêm vào cùng lúc
+            if (sampleImagePath && fs.existsSync(sampleImagePath)) {
+                filesToUpload.push(sampleImagePath);
+                console.log(`✅ Đã chọn 2 file: Watch AVT + Ảnh mẫu tham chiếu (${path.basename(sampleImagePath)})`);
+            } else {
+                console.log('✅ Đã chọn 1 file: Watch AVT (không có ảnh mẫu).');
+            }
+            
+            await fileInput.setInputFiles(filesToUpload);
         } else {
             throw new Error('Không tìm thấy nút Upload File trên giao diện ChatGPT. Có thể giao diện đã bị thay đổi!');
         }
@@ -106,10 +116,37 @@ export const generateBackgroundOnChatGPT = async (imagePath, promptsArray, abort
                 console.log(`✍️ Đang gõ prompt gốc số 1...`);
                 await promptLocator.click();
                 await page.waitForTimeout(300);
-                await promptLocator.fill(currentPrompt);
+                
+                // Nếu có ảnh mẫu tham chiếu → dùng prompt đặc biệt để GPT ghép vào bối cảnh thật
+                let firstPrompt;
+                if (sampleImagePath && fs.existsSync(sampleImagePath)) {
+                    firstPrompt = `I am sending you TWO images:
+- IMAGE 1 (first image): The luxury watch with a transparent/white background — this is the PRODUCT to feature.
+- IMAGE 2 (second image): A real lifestyle reference photo — this is the SCENE/BACKGROUND to use.
+
+YOUR TASK: Place the watch from Image 1 onto the wrist or surface in Image 2's scene. The final result must look like a real professional product photo.
+
+STRICT RULES:
+1. KEEP the watch design from Image 1 100% identical — do NOT change the dial, bezel, hands, brand text, bracelet, or colors in any way.
+2. KEEP the background, lighting, atmosphere, and composition from Image 2 as close to the original as possible.
+3. The watch must be naturally integrated — correct lighting angle, realistic shadow, proper scale on the wrist/surface.
+4. Output: photorealistic, high-end commercial photography quality, 4K.
+
+Additional scene variation for this image:
+${currentPrompt}`;
+                } else {
+                    firstPrompt = currentPrompt;
+                }
+                
+                await promptLocator.fill(firstPrompt);
             } else {
                 console.log(`✍️ Đang gõ prompt biến thể số ${i + 1}...`);
-                const followUpPrompt = `Bây giờ, hãy tạo bức ảnh tiếp theo. YÊU CẦU BẮT BUỘC: Thay đổi hoàn toàn bối cảnh theo mô tả chi tiết sau đây:\n\n"${currentPrompt}"\n\nTuyệt đối giữ nguyên vẹn 100% thiết kế của chiếc đồng hồ gốc. Đảm bảo chất lượng 4K siêu thực.`;
+                let followUpPrompt;
+                if (sampleImagePath && fs.existsSync(sampleImagePath)) {
+                    followUpPrompt = `Now create the next variation. Use the SAME watch from Image 1 (keep it 100% identical), but place it in a DIFFERENT scene variation as described below:\n\n"${currentPrompt}"\n\nKeep it photorealistic and natural. The watch details must remain exactly unchanged.`;
+                } else {
+                    followUpPrompt = `Bây giờ, hãy tạo bức ảnh tiếp theo. YÊU CẦU BẮT BUỘC: Thay đổi hoàn toàn bối cảnh theo mô tả chi tiết sau đây:\n\n"${currentPrompt}"\n\nTuyệt đối giữ nguyên vẹn 100% thiết kế của chiếc đồng hồ gốc. Đảm bảo chất lượng 4K siêu thực.`;
+                }
                 await promptLocator.click();
                 await page.waitForTimeout(300);
                 await promptLocator.fill(followUpPrompt);

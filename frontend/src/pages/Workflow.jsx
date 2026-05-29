@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { ChevronLeft, ChevronRight, Cloud, Settings, Share2, Search, Pause, Terminal, Image as ImageIcon, BrainCircuit, FileText, UploadCloud, RotateCcw, Trash2 } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Cloud, Settings, Share2, Search, Pause, Terminal, Image as ImageIcon, BrainCircuit, FileText, UploadCloud, RotateCcw, Trash2, FlaskConical, X, MessageSquare, Camera, Zap, CheckCircle } from 'lucide-react';
 import Swal from 'sweetalert2';
 import './Workflow.css';
 
@@ -35,6 +35,16 @@ const Workflow = () => {
   const [mdUploading, setMdUploading] = useState(false);
   const [uploadingNode, setUploadingNode] = useState(null);
   const mdFileInputRef = useRef(null);
+  const sampleImgInputRef = useRef(null);
+  // Dry Run state
+  const [dryRunLoading, setDryRunLoading] = useState(false);
+  const [dryRunResult, setDryRunResult] = useState(null);
+  const [showDryRunModal, setShowDryRunModal] = useState(false);
+  const [dryRunImgIdx, setDryRunImgIdx] = useState(0);
+  const [dryRunTab, setDryRunTab] = useState('fb'); // 'fb' | 'ig'
+  // Sample images state
+  const [sampleImages, setSampleImages] = useState([]);
+  const [sampleImgUploading, setSampleImgUploading] = useState(false);
   // Canvas transform state
   const [transform, setTransform] = useState({ x: 0, y: 0, scale: 1 });
   const terminalEndRef = useRef(null);
@@ -59,7 +69,44 @@ const Workflow = () => {
   useEffect(() => {
     fetchMdFiles('gpt');
     fetchMdFiles('gemini');
+    fetchSampleImages();
   }, [fetchMdFiles]);
+
+  // ─── QUẢN LÝ ẢNH MẬu THAM CHIỪu ───
+  const fetchSampleImages = async () => {
+    try {
+      const res = await fetch('http://localhost:3000/api/sample-images');
+      if (res.ok) { const d = await res.json(); setSampleImages(d.files || []); }
+    } catch (e) { console.error('Lỗi lấy danh sách ảnh mẫu:', e); }
+  };
+
+  const handleSampleImgUpload = async (e) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    setSampleImgUploading(true);
+    try {
+      const formData = new FormData();
+      for (let i = 0; i < files.length; i++) formData.append('images', files[i]);
+      const res = await fetch('http://localhost:3000/api/sample-images', { method: 'POST', body: formData });
+      const data = await res.json();
+      if (res.ok) {
+        Swal.fire({ title: '✅ Đã tải ảnh mẫu lên!', text: data.message, icon: 'success', background: 'var(--color-surface)', color: 'white', toast: true, position: 'top-end', timer: 3000, showConfirmButton: false });
+        fetchSampleImages();
+      } else throw new Error(data.message);
+    } catch (err) {
+      Swal.fire({ title: 'Lỗi upload ảnh mẫu', text: err.message, icon: 'error', background: 'var(--color-surface)', color: 'white' });
+    } finally {
+      setSampleImgUploading(false);
+      e.target.value = '';
+    }
+  };
+
+  const handleDeleteSampleImg = async (filename) => {
+    try {
+      const res = await fetch(`http://localhost:3000/api/sample-images/${encodeURIComponent(filename)}`, { method: 'DELETE' });
+      if (res.ok) fetchSampleImages();
+    } catch (err) { console.error(err); }
+  };
 
   const handleUploadClick = (nodeId) => {
     setUploadingNode(nodeId);
@@ -305,6 +352,32 @@ const Workflow = () => {
     } catch (e) {}
   };
 
+  // ─── DRY RUN ───
+  const handleDryRun = async () => {
+    if (dryRunLoading) return;
+    setDryRunLoading(true);
+    setDryRunResult(null);
+    try {
+      const res = await fetch('http://localhost:3000/api/dry-run', { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Dry Run thất bại');
+      setDryRunResult(data);
+      setDryRunImgIdx(0);
+      setDryRunTab('fb');
+      setShowDryRunModal(true);
+    } catch (err) {
+      Swal.fire({
+        title: '❌ Dry Run thất bại',
+        text: err.message,
+        icon: 'error',
+        background: 'var(--color-surface)',
+        color: 'white',
+      });
+    } finally {
+      setDryRunLoading(false);
+    }
+  };
+
   return (
     <div className="workflow-page">
       <div className="workflow-header-bar">
@@ -426,6 +499,71 @@ const Workflow = () => {
                     {mdUploading && uploadingNode === 'gpt' ? ' Đang tải...' : ' Tải lên file .md'}
                   </button>
                 </div>
+
+                {/* ── Ảnh mẫu tham chiếu ── */}
+                <div className="field" style={{marginTop:'8px'}}>
+                  <label style={{display:'flex', alignItems:'center', justifyContent:'space-between'}}>
+                    <span>🖼️ Ảnh mẫu tham chiếu</span>
+                    <span style={{
+                      fontSize:'9px', padding:'1px 5px', borderRadius:'4px',
+                      background: sampleImages.length > 0 ? 'rgba(52,211,153,0.2)' : 'rgba(255,255,255,0.08)',
+                      color: sampleImages.length > 0 ? '#34d399' : 'var(--color-text-dim)'
+                    }}>
+                      {sampleImages.length > 0 ? `${sampleImages.length} ảnh` : 'Chưa có'}
+                    </span>
+                  </label>
+
+                  {/* Danh sách ảnh mẫu hiện có */}
+                  {sampleImages.length > 0 && (
+                    <div style={{
+                      maxHeight: '90px', overflowY: 'auto', marginBottom: '6px',
+                      background: 'rgba(0,0,0,0.2)', borderRadius: '4px', padding: '4px'
+                    }}>
+                      {sampleImages.map(f => (
+                        <div key={f.name} style={{
+                          display:'flex', alignItems:'center', justifyContent:'space-between',
+                          padding:'2px 4px', borderRadius:'3px', marginBottom:'2px',
+                          background:'rgba(255,255,255,0.04)', fontSize:'10px'
+                        }}>
+                          <span style={{color:'#d4d4d4', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', flex:1}} title={f.name}>
+                            📷 {f.name}
+                          </span>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); handleDeleteSampleImg(f.name); }}
+                            onMouseDown={e => e.stopPropagation()}
+                            style={{
+                              background:'none', border:'none', color:'rgba(239,68,68,0.7)',
+                              cursor:'pointer', padding:'0 2px', marginLeft:'4px', fontSize:'10px',
+                              lineHeight:1, flexShrink:0
+                            }}
+                            title="Xóa ảnh mẫu này"
+                          >✕</button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Nút upload ảnh mẫu */}
+                  <button
+                    className="btn-upload-md"
+                    style={{borderColor: 'rgba(52,211,153,0.3)', color:'#34d399'}}
+                    onClick={(e) => { e.stopPropagation(); sampleImgInputRef.current?.click(); }}
+                    onMouseDown={e => e.stopPropagation()}
+                    disabled={sampleImgUploading}
+                    title="Upload ảnh chụp thật (tay đeo đồng hồ, cảnh luxury...) để GPT dùng làm tham chiếu"
+                  >
+                    <ImageIcon size={12} />
+                    {sampleImgUploading ? ' Đang tải...' : ' Thêm ảnh mẫu (JPG/PNG)'}
+                  </button>
+                  <input
+                    ref={sampleImgInputRef}
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp"
+                    multiple
+                    style={{display:'none'}}
+                    onChange={handleSampleImgUpload}
+                  />
+                </div>
               </div>
               <div className="port" style={{top:'50%', right:'-5px'}} title="Output → Gemini"></div>
             </div>
@@ -476,7 +614,7 @@ const Workflow = () => {
             {/* ───── NODE 4: PUBLISH ───── */}
             <div
               className="node-card publish-node"
-              style={{ top: publish.y, left: publish.x, cursor: 'grab' }}
+              style={{ top: publish.y, left: publish.x, cursor: 'grab', minHeight: NODE_HEIGHT_PUBLISH + 70 }}
               onMouseDown={e => onMouseDown(e, 'publish')}
             >
               <div className="port" style={{top:'50%', left:'-5px'}} title="Input từ Gemini"></div>
@@ -488,6 +626,22 @@ const Workflow = () => {
                     <span className="tag fb">FB</span>
                     <span className="tag ig">IG</span>
                   </div>
+                </div>
+                <div className="field" style={{marginTop: '10px'}}>
+                  <button
+                    id="btn-dry-run"
+                    className="btn-dry-run"
+                    onClick={(e) => { e.stopPropagation(); handleDryRun(); }}
+                    onMouseDown={e => e.stopPropagation()}
+                    disabled={dryRunLoading}
+                    title="Chạy thử toàn bộ luồng AI nhưng KHÔNG đăng lên MXH"
+                  >
+                    {dryRunLoading ? (
+                      <><span className="spin-icon">⟳</span> Đang chạy thử...</>
+                    ) : (
+                      <><FlaskConical size={13} /> Chạy Thử (Dry Run)</>
+                    )}
+                  </button>
                 </div>
               </div>
             </div>{/* end node publish */}
@@ -605,6 +759,113 @@ const Workflow = () => {
           </div>
         </div>
       </div>
+
+      {/* ───── DRY RUN RESULT MODAL ───── */}
+      {showDryRunModal && dryRunResult && (
+        <div className="dry-run-overlay" onClick={() => setShowDryRunModal(false)}>
+          <div className="dry-run-modal" onClick={e => e.stopPropagation()}>
+            {/* Header */}
+            <div className="dry-run-modal-header">
+              <div style={{display:'flex', alignItems:'center', gap:'10px'}}>
+                <CheckCircle size={20} color="#4ade80" />
+                <div>
+                  <h2 style={{margin:0, fontSize:'16px', color:'white'}}>Kết quả Dry Run</h2>
+                  <p style={{margin:0, fontSize:'11px', color:'var(--color-text-dim)'}}>
+                    SKU: <strong style={{color:'var(--color-primary)'}}>{dryRunResult.sku}</strong>
+                    &nbsp;·&nbsp; Chế độ: <strong style={{color:'#60a5fa'}}>{dryRunResult.postMode}</strong>
+                    &nbsp;·&nbsp; {dryRunResult.imageCount} ảnh
+                  </p>
+                </div>
+              </div>
+              <button className="dry-run-close" onClick={() => setShowDryRunModal(false)} title="Đóng">
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="dry-run-modal-body">
+              {/* Cột trái: Ảnh */}
+              <div className="dry-run-img-col">
+                <div className="dry-run-img-label">
+                  <ImageIcon size={12} style={{marginRight:'6px', color:'var(--color-primary)'}} />
+                  Ảnh Output ({dryRunImgIdx + 1}/{dryRunResult.images.length})
+                </div>
+                <div className="dry-run-img-wrap">
+                  {dryRunResult.images.length > 0 ? (
+                    <>
+                      <img
+                        src={dryRunResult.images[dryRunImgIdx]}
+                        alt={`Ảnh ${dryRunImgIdx + 1}`}
+                        className="dry-run-img"
+                      />
+                      {dryRunResult.images.length > 1 && (
+                        <>
+                          <button
+                            className="carousel-btn carousel-prev"
+                            onClick={() => setDryRunImgIdx(i => Math.max(0, i - 1))}
+                            disabled={dryRunImgIdx === 0}
+                          ><ChevronLeft size={18} /></button>
+                          <button
+                            className="carousel-btn carousel-next"
+                            onClick={() => setDryRunImgIdx(i => Math.min(dryRunResult.images.length - 1, i + 1))}
+                            disabled={dryRunImgIdx === dryRunResult.images.length - 1}
+                          ><ChevronRight size={18} /></button>
+                          <div className="carousel-dots">
+                            {dryRunResult.images.map((_, di) => (
+                              <button key={di} className={`carousel-dot ${di === dryRunImgIdx ? 'active' : ''}`} onClick={() => setDryRunImgIdx(di)} />
+                            ))}
+                          </div>
+                        </>
+                      )}
+                    </>
+                  ) : (
+                    <div style={{color:'var(--color-text-dim)', fontSize:'12px', textAlign:'center', padding:'20px'}}>
+                      {dryRunResult.postMode === 'REELS' ? '🎬 Chế độ Video — Không có ảnh tĩnh để preview' : '⚠️ Không có ảnh'}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Cột phải: Content */}
+              <div className="dry-run-content-col">
+                <div className="dry-run-tab-bar">
+                  <button
+                    className={`dry-run-tab ${dryRunTab === 'fb' ? 'active' : ''}`}
+                    onClick={() => setDryRunTab('fb')}
+                  >
+                    <MessageSquare size={13} /> Bài Facebook
+                  </button>
+                  <button
+                    className={`dry-run-tab ${dryRunTab === 'ig' ? 'active' : ''}`}
+                    onClick={() => setDryRunTab('ig')}
+                  >
+                    <Camera size={13} /> Caption Instagram
+                  </button>
+                </div>
+                <div className="dry-run-content-box">
+                  <pre className="dry-run-content-text">
+                    {dryRunTab === 'fb' ? dryRunResult.fbContent : dryRunResult.igContent}
+                  </pre>
+                </div>
+                <div style={{fontSize:'10px', color:'var(--color-text-dim)', marginTop:'8px'}}>
+                  {dryRunTab === 'fb'
+                    ? `${dryRunResult.fbContent?.length || 0} ký tự — Facebook`
+                    : `${dryRunResult.igContent?.length || 0} ký tự — Instagram`
+                  }
+                </div>
+              </div>
+            </div>
+
+            <div className="dry-run-modal-footer">
+              <span style={{fontSize:'11px', color:'rgba(74,222,128,0.8)', display:'flex', alignItems:'center', gap:'6px'}}>
+                <Zap size={12} /> Kết quả AI thuần — Chưa đăng lên MXH nào.
+              </span>
+              <button className="btn-dry-run" style={{padding:'8px 20px'}} onClick={() => setShowDryRunModal(false)}>
+                Đóng Preview
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
