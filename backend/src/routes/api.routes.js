@@ -8,9 +8,9 @@ import dotenv from 'dotenv';
 import { google } from 'googleapis';
 import multer from 'multer';
 import { startScheduler } from '../scheduler.js';
-import { autoPublishRoutine, dryRunRoutine, resetGlobalStop, triggerGlobalStop, getIsRunning } from '../services/publish.service.js';
+import { autoPublishRoutine, dryRunRoutine, resetGlobalStop, triggerGlobalStop, getIsRunning, trainImageOnly, trainContentOnly } from '../services/publish.service.js';
 import { getProductInfoBySku } from '../services/sheet.service.js';
-import { openLoginHelper } from '../services/playwright.service.js';
+import { openLoginHelper, generateContentOnChatGPT, generateBackgroundOnChatGPT, analyzeNewSampleImages } from '../services/playwright.service.js';
 import { publishQueue } from '../workers/queue.js';
 import { recentActivities, addActivity } from '../utils/activity.js';
 import { getAllPostedHistory } from '../utils/history.js';
@@ -327,6 +327,38 @@ router.post('/stop-workflow', async (req, res) => {
   res.json({ success: true, message: 'Đã dừng toàn bộ ngay lập tức.' });
 });
 
+router.post('/train-image', async (req, res) => {
+  try {
+    resetGlobalStop();
+    addActivity('Bắt đầu Train Ảnh (GPT Vision)', 'info');
+    sendLogToClients({ time: new Date().toLocaleTimeString(), sender: 'System', message: '🚀 Bắt đầu luồng Train Ảnh...', type: 'info' });
+    
+    const result = await trainImageOnly();
+    res.json(result);
+  } catch (err) {
+    const isAborted = err.message?.includes('aborted') || err.name === 'AbortError';
+    const msg = isAborted ? '⏹️ Train Ảnh bị dừng.' : `❌ Lỗi: ${err.message}`;
+    sendLogToClients({ time: new Date().toLocaleTimeString(), sender: 'System', message: msg, type: isAborted ? 'warning' : 'error' });
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.post('/train-content', async (req, res) => {
+  try {
+    resetGlobalStop();
+    addActivity('Bắt đầu Train Content', 'info');
+    sendLogToClients({ time: new Date().toLocaleTimeString(), sender: 'System', message: '📝 Bắt đầu luồng Train Content...', type: 'info' });
+    
+    const result = await trainContentOnly();
+    res.json(result);
+  } catch (err) {
+    const isAborted = err.message?.includes('aborted') || err.name === 'AbortError';
+    const msg = isAborted ? '⏹️ Train Content bị dừng.' : `❌ Lỗi: ${err.message}`;
+    sendLogToClients({ time: new Date().toLocaleTimeString(), sender: 'System', message: msg, type: isAborted ? 'warning' : 'error' });
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // 4c. DRY RUN — Chạy thử toàn bộ luồng AI nhưng KHÔNG đăng lên MXH
 router.post('/dry-run', async (req, res) => {
   resetGlobalStop();
@@ -605,7 +637,7 @@ router.get('/sample-images', (req, res) => {
 });
 
 // Upload ảnh mẫu
-router.post('/sample-images', sampleImgUpload.array('images', 20), (req, res) => {
+router.post('/sample-images', sampleImgUpload.array('images', 100), (req, res) => {
   if (!fs.existsSync(SAMPLE_IMAGES_DIR)) fs.mkdirSync(SAMPLE_IMAGES_DIR, { recursive: true });
   if (!req.files || req.files.length === 0) return res.status(400).json({ message: 'Không có file nào.' });
   
@@ -627,6 +659,11 @@ router.post('/sample-images', sampleImgUpload.array('images', 20), (req, res) =>
   }
   
   res.json({ success: saved.length > 0, saved, errors, message: `Đã lưu ${saved.length} ảnh mẫu.` });
+
+  // Chạy phân tích ảnh mẫu mới ở background (không block response)
+  if (saved.length > 0) {
+    analyzeNewSampleImages().catch(e => console.log('⚠️ Lỗi auto-analyze:', e.message));
+  }
 });
 
 // Xóa 1 ảnh mẫu
@@ -642,6 +679,17 @@ router.delete('/sample-images/:filename', (req, res) => {
     res.json({ success: true, message: `Đã xóa ${filename}` });
   } catch (err) {
     res.status(500).json({ message: err.message });
+  }
+});
+
+// Phân tích ảnh mẫu thủ công → Sinh prompt vào .md
+router.post('/analyze-samples', async (req, res) => {
+  try {
+    sendLogToClients({ time: new Date().toLocaleTimeString(), sender: 'System', message: '📸 Bắt đầu phân tích ảnh mẫu mới để sinh prompt...', type: 'highlight' });
+    const result = await analyzeNewSampleImages();
+    res.json({ success: true, ...result });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 

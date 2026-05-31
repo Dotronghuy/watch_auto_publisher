@@ -112,3 +112,8 @@ ul {
 .glow-success {
   box-shadow: 0 0 8px var(--color-success-glow);
 }
+
+/* Đẩy z-index của Swal2 lên cao hơn Dry Run Modal (9999) */
+.swal2-container {
+  z-index: 99999 !important;
+}

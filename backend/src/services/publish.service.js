@@ -4,10 +4,11 @@ import FormData from 'form-data';
 import sharp from 'sharp';
 import { getFolderIdByName, getImagesInFolder, getVideosInFolder, downloadFileFromDrive, getFoldersInFolder } from './drive.service.js';
 import { getProductInfoBySku, updateProductPostInfo, getAllProductsPostInfo, clearExpiredPostInfo } from './sheet.service.js';
-import { getPostedImageIds, addPostedImageId } from '../utils/history.js';
+import { getPostedImageIds, addPostedImageId, addPostMetric } from '../utils/history.js';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { generateBackgroundOnChatGPT, generateTextOnGemini } from './playwright.service.js';
+import { generateBackgroundOnChatGPT, generateContentOnChatGPT } from './playwright.service.js';
+import { telegramEvents, sendBatchToTelegram } from './telegram.service.js';
 import { publishToInstagram, publishCarouselToInstagram, publishFBReels, publishIGReels } from './meta.service.js';
 import { addMusicToVideo } from './video.service.js';
 import { addActivity } from '../utils/activity.js';
@@ -193,6 +194,8 @@ export const dryRunRoutine = async () => {
     // 3. AI xử lý (ChatGPT + Gemini)
     let fbContent = '';
     let igContent = '';
+    let currentImgPromptsArray = [];
+    let currentSceneTextsArray = [];
     try {
       const productInfo = await getProductInfoBySku(selectedSku.name);
       const productInfoText = productInfo ? Object.entries(productInfo).map(([k, v]) => `${k}: ${v}`).join('\n') : '';
@@ -215,8 +218,20 @@ export const dryRunRoutine = async () => {
             const sectionRegex = new RegExp(`\\[${genderTag}\\][\\s\\S]*?(?=\\n## \\[|$)`, 'i');
             const sectionMatch = mdContent.match(sectionRegex);
             const searchContent = sectionMatch ? sectionMatch[0] : mdContent;
-            const sceneMatches = [...searchContent.matchAll(/\*\*English instruction for GPT:\*\*\s*>\s*([\s\S]*?)(?=\n---|###|## |$)/g)];
-            const validScenes = sceneMatches.map(m => m[1].trim()).filter(s => !s.startsWith('PLACEHOLDER'));
+            const blockRegex = /###\s+(?:MALE|FEMALE|NEUTRAL)-\d+[\s\S]*?(?=\n###|\n## |$)/gi;
+            const blocks = [...searchContent.matchAll(blockRegex)].map(m => m[0]);
+            
+            const validScenes = blocks.map(block => {
+              const sampleImgMatch = block.match(/\*\*Sample Image:\*\*\s*(.+)/i);
+              const promptMatch = block.match(/\*\*English instruction for GPT:\*\*\s*>\s*([\s\S]*?)(?=\n---|###|## |$)/i);
+              if (promptMatch && !promptMatch[1].trim().startsWith('PLACEHOLDER')) {
+                return {
+                  text: promptMatch[1].trim(),
+                  sampleImage: sampleImgMatch ? sampleImgMatch[1].trim() : null
+                };
+              }
+              return null;
+            }).filter(Boolean);
 
             if (validScenes.length > 0) {
               const shuffledScenes = [...validScenes].sort(() => 0.5 - Math.random()).slice(0, numAiImages);
@@ -225,20 +240,34 @@ export const dryRunRoutine = async () => {
                 : genderTag === 'FEMALE'
                   ? 'The person in the scene must have FEMININE hands and appearance (female wrist, manicured nails, female clothing).'
                   : '';
-              imgPromptsArray = shuffledScenes.map(sceneText =>
-                `This is a luxury watch with transparent background (background already removed). Composite this exact watch into the following lifestyle scene:\n\n${sceneText}\n\n${genderNote}\n\nCRITICAL RULES:\n- Do NOT redraw, redesign, or modify the watch in any way.\n- Keep the watch dial, hands, case, bracelet, brand text, and colors EXACTLY as in the provided image.\n- Lighting must be consistent between the watch and the environment.\n- Output: photorealistic, 4K commercial product photography quality.`
-              );
+              
+              currentSceneTextsArray = shuffledScenes.map(s => s.text);
+              imgPromptsArray = shuffledScenes.map(s => {
+                let sImgPath = null;
+                if (s.sampleImage && s.sampleImage !== 'N/A') {
+                  const checkPath = path.join(__dirname, '../../config/sample_images', s.sampleImage);
+                  if (fs.existsSync(checkPath)) sImgPath = checkPath;
+                }
+                return {
+                  prompt: `This is a luxury watch with transparent background (background already removed). Composite this exact watch into the following lifestyle scene:\n\n${s.text}\n\n${genderNote}\n\nCRITICAL RULES:\n- IGNORE ALL PREVIOUS WATCH IMAGES in this chat history. YOU MUST ONLY USE THE IMAGE ATTACHED TO THIS CURRENT MESSAGE!\n- Do NOT redraw, redesign, or modify the watch in any way.\n- Keep the watch dial, hands, case, bracelet, brand text, and colors EXACTLY as in the provided image.\n- Lighting must be consistent between the watch and the environment.\n- Output: photorealistic, 4K commercial product photography quality.`,
+                  sampleImage: sImgPath
+                };
+              });
             } else {
-              imgPromptsArray = Array(numAiImages).fill('This is a luxury watch image with the background removed. Place this exact watch into a high-end lifestyle flat lay scene on white marble with luxury props. CRITICAL: Do NOT alter the watch design. Photorealistic, 4K quality.');
+              currentSceneTextsArray = Array(numAiImages).fill('white marble with luxury props');
+              imgPromptsArray = Array(numAiImages).fill('This is a luxury watch image with the background removed. Place this exact watch into a high-end lifestyle flat lay scene on white marble with luxury props. CRITICAL: IGNORE ALL PREVIOUS IMAGES. Use ONLY the attached image. Do NOT alter the watch design. Photorealistic, 4K quality.');
             }
           } else {
-            imgPromptsArray = Array(numAiImages).fill('This is a luxury watch image with the background removed. Place this exact watch into a high-end lifestyle scene. CRITICAL: Do NOT alter the watch design. Photorealistic, 4K quality.');
+            currentSceneTextsArray = Array(numAiImages).fill('high-end lifestyle scene');
+            imgPromptsArray = Array(numAiImages).fill('This is a luxury watch image with the background removed. Place this exact watch into a high-end lifestyle scene. CRITICAL: IGNORE ALL PREVIOUS IMAGES. Use ONLY the attached image. Do NOT alter the watch design. Photorealistic, 4K quality.');
           }
 
           const sampleImg = getRandomSampleImage();
           if (sampleImg) liveLog(`🖼️ [DRY RUN] Dùng ảnh mẫu: ${path.basename(sampleImg)}`, 'info', 'ChatGPT');
-          aiGeneratedImagePaths = await generateBackgroundOnChatGPT(localFilePaths[0], imgPromptsArray, globalStopController.signal, sampleImg);
-          if (fs.existsSync(localFilePaths[0])) fs.unlinkSync(localFilePaths[0]);
+          aiGeneratedImagePaths = await generateBackgroundOnChatGPT(localFilePaths[0], imgPromptsArray, globalStopController.signal, sampleImg, false);
+          currentImgPromptsArray = imgPromptsArray;
+          const lastWatchPath = path.join(__dirname, '../../temp_images/last_watch_image.png');
+          if (fs.existsSync(localFilePaths[0])) { fs.copyFileSync(localFilePaths[0], lastWatchPath); fs.unlinkSync(localFilePaths[0]); }
           localFilePaths = [...aiGeneratedImagePaths];
         } catch (pwError) {
           if (globalStopController.signal.aborted) throw pwError;
@@ -297,29 +326,23 @@ export const dryRunRoutine = async () => {
             }
           }
 
-          const reelsContent = await generateTextOnGemini(reelsPrompt, targetImgPathForGemini);
+          const reelsContent = await generateContentOnChatGPT(reelsPrompt, 'reels', targetImgPathForGemini);
           fbContent = reelsContent;
           igContent = reelsContent;
         } else {
           const fallbackPrompt = `Hãy viết 2 bài theo đúng format:\n## FACEBOOK:\n[Bài FB 80-150 từ, sang trọng, có hashtag #iwcarnivalvietnam #iwcarnival #donghoiwcarnival]\n## INSTAGRAM:\n[Caption IG 15-35 từ, góc nhìn KHÁC bài FB, có hashtag #iwcarnivalvietnam #iwcarnival #donghoiwcarnival]\nSản phẩm: đồng hồ SKU ${selectedSku.name}. Không kèm giải thích.`;
           const combinedPrompt = fbPromptFinal || fallbackPrompt;
-          const combinedOutput = await generateTextOnGemini(combinedPrompt, targetImgPathForGemini);
+          const fbSpecificPrompt = combinedPrompt + "\n\n[LƯU Ý: HÃY CHỈ VIẾT NỘI DUNG CHO FACEBOOK DỰA THEO HƯỚNG DẪN TRÊN. BỎ QUA PHẦN INSTAGRAM. TRẢ VỀ TRỰC TIẾP NỘI DUNG MÀ KHÔNG CẦN TIÊU ĐỀ ## FACEBOOK]";
+          const igSpecificPrompt = combinedPrompt + "\n\n[LƯU Ý: HÃY CHỈ VIẾT NỘI DUNG CHO INSTAGRAM DỰA THEO HƯỚNG DẪN TRÊN. BỎ QUA PHẦN FACEBOOK. TRẢ VỀ TRỰC TIẾP NỘI DUNG MÀ KHÔNG CẦN TIÊU ĐỀ ## INSTAGRAM]";
 
-          const fbMatch2 = combinedOutput.match(/(?:#{1,3}\s*|\*{0,2})FACEBOOK:?\*{0,2}\s*\n([\s\S]*?)(?=\n(?:#{1,3}\s*|\*{0,2})INSTAGRAM:?|$)/i);
-          const igMatch2 = combinedOutput.match(/(?:#{1,3}\s*|\*{0,2})INSTAGRAM:?\*{0,2}\s*\n([\s\S]*?)$/i);
+          fbContent = await generateContentOnChatGPT(fbSpecificPrompt, 'fb', targetImgPathForGemini);
+          igContent = await generateContentOnChatGPT(igSpecificPrompt, 'ig', targetImgPathForGemini);
 
-          if (fbMatch2 && igMatch2) {
-            fbContent = fbMatch2[1].trim();
-            igContent = igMatch2[1].trim();
+          if (fbContent && igContent) {
+            console.log(`✅ [ChatGPT] Sinh thành công: FB (${fbContent.length} ký tự) | IG (${igContent.length} ký tự)`);
           } else {
-            const splitIdx = combinedOutput.search(/INSTAGRAM/i);
-            if (splitIdx !== -1) {
-              fbContent = combinedOutput.slice(0, splitIdx).replace(/^.*?FACEBOOK:?\s*/is, '').trim() || combinedOutput;
-              igContent = combinedOutput.slice(splitIdx).replace(/^INSTAGRAM:?\s*/i, '').trim() || combinedOutput;
-            } else {
-              fbContent = combinedOutput;
-              igContent = combinedOutput;
-            }
+             fbContent = "Failed to generate FB content";
+             igContent = "Failed to generate IG content";
           }
         }
 
@@ -340,14 +363,18 @@ export const dryRunRoutine = async () => {
 
     // 4. Trả về URL ảnh qua /images/filename (nhẹ hơn base64 nhiều lần)
     const imageUrls = [];
-    for (const imgPath of localFilePaths) {
+    for (let i = 0; i < localFilePaths.length; i++) {
+      const imgPath = localFilePaths[i];
       if (fs.existsSync(imgPath)) {
         const filename = path.basename(imgPath);
-        imageUrls.push(`http://localhost:3000/images/${filename}`);
+        imageUrls.push({
+          url: `http://localhost:3000/images/${filename}`,
+          prompt: currentSceneTextsArray[i] || ''
+        });
       }
     }
 
-    liveLog(`✅ [DRY RUN] Hoàn thành! ${imageUrls.length} ảnh, FB: ${fbContent.length} ký tự, IG: ${igContent.length} ký tự`, 'success', 'System');
+    liveLog(`🎉 [DRY RUN] Hoàn thành! ${imageUrls.length} ảnh, FB: ${fbContent.length} ký tự, IG: ${igContent.length} ký tự`, 'success', 'System');
 
     // KHÔNG xóa temp_images để frontend load được ảnh — sẽ xóa ở lần chạy tiếp theo
     // (cleanTempDirectory sẽ được gọi khi autoPublishRoutine hoặc dry-run tiếp theo chạy)
@@ -365,6 +392,304 @@ export const dryRunRoutine = async () => {
   } catch (error) {
     cleanTempDirectory();
     liveLog(`❌ [DRY RUN] Thất bại: ${error.message}`, 'error', 'System');
+    throw error;
+  } finally {
+    isRoutineRunning = false;
+  }
+};
+
+// ============================================================
+// TRAIN IMAGE ONLY: Chỉ tạo ảnh GPT để training
+// ============================================================
+const waitForTelegramDecision = () => {
+  return new Promise((resolve) => {
+    const onContinue = () => { cleanup(); resolve(true); };
+    const onStop = () => { cleanup(); resolve(false); };
+    const cleanup = () => {
+      telegramEvents.off('continue_training', onContinue);
+      telegramEvents.off('stop_training', onStop);
+    };
+    telegramEvents.on('continue_training', onContinue);
+    telegramEvents.on('stop_training', onStop);
+  });
+};
+
+telegramEvents.on('trigger_start_training', () => {
+  if (!isRoutineRunning) {
+    console.log('🔄 Nhận lệnh đánh thức hệ thống từ Telegram. Đang khởi động lại vòng lặp...');
+    startTelegramTrainingLoop().catch(e => console.error(e));
+  }
+});
+
+export const startTelegramTrainingLoop = async () => {
+  isRoutineRunning = true;
+  let isTraining = true;
+  
+  const checkAbort = () => {
+    if (globalStopController.signal.aborted) {
+      const err = new Error('Luồng bị dừng theo yêu cầu của người dùng.');
+      err.name = 'AbortError';
+      throw err;
+    }
+  };
+
+  while (isTraining && !globalStopController.signal.aborted) {
+    try {
+      console.log('--- ĐÃ CHẠY VÀO VÒNG LẶP TRAIN ẢNH ---');
+      liveLog('Bắt đầu vòng lặp Train Ảnh mới...', 'highlight', 'System');
+      const skuFolders = await getFoldersInFolder(ROOT_DRIVE_FOLDER_ID);
+      if (skuFolders.length === 0) throw new Error('Không tìm thấy thư mục SKU nào trong Drive!');
+
+      const postedIds = await getPostedImageIds();
+      checkAbort();
+
+      const shuffledSkus = [...skuFolders].sort(() => 0.5 - Math.random());
+      let selectedSku = null;
+      let avtImageFile = null;
+
+      for (const skuFolder of shuffledSkus) {
+        const avtFolderId = await getFolderIdByName('0_Anh_AVT', skuFolder.id);
+        if (!avtFolderId) continue;
+        const mediaFiles = await getImagesInFolder(avtFolderId);
+        const freshMedia = mediaFiles.filter(item => !postedIds.includes(item.id));
+        if (freshMedia.length > 0) {
+          selectedSku = skuFolder;
+          avtImageFile = freshMedia[Math.floor(Math.random() * freshMedia.length)];
+          break;
+        }
+      }
+
+      if (!selectedSku || !avtImageFile) {
+        liveLog('Không tìm thấy ảnh AVT mới, tạm ngưng Train.', 'warning', 'System');
+        break;
+      }
+
+      liveLog('✅ [TRAIN ẢNH] Đã chọn SKU: ' + selectedSku.name, 'highlight', 'Google Drive');
+      
+      let pathStr = await downloadFileFromDrive(avtImageFile.id, avtImageFile.name);
+      const bgRemovedPath = pathStr.replace(/\.[^/.]+$/, '_rmbg.png');
+      const finalPaddedPath = pathStr.replace(/\.[^/.]+$/, '_1024.png');
+      try {
+        liveLog('🎨 [TRAIN ẢNH] Đang xóa nền...', 'typing', 'remove.bg');
+        const rmBgFormData = new FormData();
+        rmBgFormData.append('size', 'auto');
+        rmBgFormData.append('image_file', fs.readFileSync(pathStr), {
+          filename: path.basename(pathStr),
+          contentType: pathStr.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg'
+        });
+        const rmbgResponse = await axios.post('https://api.remove.bg/v1.0/removebg', rmBgFormData, {
+          headers: { ...rmBgFormData.getHeaders(), 'X-Api-Key': (process.env.REMOVE_BG_API_KEY || '').trim() },
+          responseType: 'arraybuffer',
+        });
+        fs.writeFileSync(bgRemovedPath, rmbgResponse.data);
+        await sharp(bgRemovedPath).resize(1024, 1024, { fit: 'contain', background: { r: 255, g: 255, b: 255, alpha: 0 } }).toFormat('png').toFile(finalPaddedPath);
+        pathStr = finalPaddedPath;
+      } catch (e) {
+        liveLog('⚠️ Lỗi xóa nền: ' + e.message, 'error', 'remove.bg');
+      }
+
+      const promptGuidePath = path.join(__dirname, '../../config/gpt_image_prompt.md');
+      const numAiImages = 10; // Gốc là 10 ảnh mỗi mẻ
+      let imgPromptsArray = [];
+      let currentSceneTextsArray = [];
+
+      if (fs.existsSync(promptGuidePath)) {
+        const mdContent = fs.readFileSync(promptGuidePath, 'utf8');
+        const skuUpper = (selectedSku?.name || '').toUpperCase();
+        let genderTag = 'NEUTRAL';
+        if (/G\d*$|G[^A-Z]|\d+G/.test(skuUpper)) genderTag = 'MALE';
+        else if (/L\d*$|L[^A-Z]|\d+L/.test(skuUpper)) genderTag = 'FEMALE';
+
+        const sectionRegex = new RegExp(`\\[${genderTag}\\][\\s\\S]*?(?=\\n## \\[|$)`, 'i');
+        const sectionMatch = mdContent.match(sectionRegex);
+        const searchContent = sectionMatch ? sectionMatch[0] : mdContent;
+        const blockRegex = /###\s+(?:MALE|FEMALE|NEUTRAL)-\d+[\s\S]*?(?=\n###|\n## |$)/gi;
+        const blocks = [...searchContent.matchAll(blockRegex)].map(m => m[0]);
+        
+        const validScenes = blocks.map(block => {
+          const sampleImgMatch = block.match(/\*\*Sample Image:\*\*\s*(.+)/i);
+          const promptMatch = block.match(/\*\*English instruction for GPT:\*\*\s*>\s*([\s\S]*?)(?=\n---|###|## |$)/i);
+          if (promptMatch && !promptMatch[1].trim().startsWith('PLACEHOLDER')) {
+            return {
+              text: promptMatch[1].trim(),
+              sampleImage: sampleImgMatch ? sampleImgMatch[1].trim() : null
+            };
+          }
+          return null;
+        }).filter(Boolean);
+
+        if (validScenes.length > 0) {
+          const shuffledScenes = [...validScenes].sort(() => 0.5 - Math.random()).slice(0, numAiImages);
+          const genderNote = genderTag === 'MALE' ? 'The person must have MASCULINE hands.' : genderTag === 'FEMALE' ? 'The person must have FEMININE hands.' : '';
+          currentSceneTextsArray = shuffledScenes.map(s => s.text);
+          imgPromptsArray = shuffledScenes.map(s => {
+            let sImgPath = null;
+            if (s.sampleImage && s.sampleImage !== 'N/A') {
+              const checkPath = path.join(__dirname, '../../config/sample_images', s.sampleImage);
+              if (fs.existsSync(checkPath)) sImgPath = checkPath;
+            }
+            return {
+              prompt: `This is a luxury watch with transparent background (background already removed). Composite this exact watch into the following lifestyle scene:\n\n${s.text}\n\n${genderNote}\n\nCRITICAL RULES:\n- IGNORE ALL PREVIOUS WATCH IMAGES in this chat history. YOU MUST ONLY USE THE IMAGE ATTACHED TO THIS CURRENT MESSAGE!\n- Do NOT redraw, redesign, or modify the watch in any way.\n- Keep the watch dial, hands, case, bracelet, brand text, and colors EXACTLY as in the provided image.\n- Lighting must be consistent between the watch and the environment.\n- Output: photorealistic, 4K commercial product photography quality.`,
+              sampleImage: sImgPath
+            };
+          });
+        } else {
+          currentSceneTextsArray = Array(numAiImages).fill('white marble with luxury props');
+          imgPromptsArray = Array(numAiImages).fill('This is a luxury watch image with the background removed. Place this exact watch into a high-end lifestyle flat lay scene on white marble with luxury props. CRITICAL: IGNORE ALL PREVIOUS IMAGES. Use ONLY the attached image. Do NOT alter the watch design.');
+        }
+      }
+
+      const sampleImg = getRandomSampleImage();
+      const aiGeneratedImagePaths = await generateBackgroundOnChatGPT(pathStr, imgPromptsArray, globalStopController.signal, sampleImg, false);
+      const lastWatchPath = path.join(__dirname, '../../temp_images/last_watch_image.png');
+      if (fs.existsSync(pathStr)) { fs.copyFileSync(pathStr, lastWatchPath); fs.unlinkSync(pathStr); }
+      
+      const imageUrls = [];
+      for (let i = 0; i < aiGeneratedImagePaths.length; i++) {
+        if (fs.existsSync(aiGeneratedImagePaths[i])) {
+          imageUrls.push({
+            path: aiGeneratedImagePaths[i],
+            prompt: currentSceneTextsArray[i] || ''
+          });
+        }
+      }
+
+      liveLog('🎉 [TRAIN ẢNH] Đã vẽ xong! Đang đẩy ảnh qua Telegram...', 'success', 'System');
+      
+      await sendBatchToTelegram(imageUrls, lastWatchPath, sampleImg);
+      
+      liveLog('⏳ Đang chờ bác chấm điểm trên Telegram...', 'highlight', 'System');
+      const shouldContinue = await waitForTelegramDecision();
+      
+      if (!shouldContinue) {
+        isTraining = false;
+        liveLog('⏸️ Hệ thống Train Ảnh đã ngưng theo yêu cầu (hoặc timeout).', 'warning', 'System');
+      }
+
+    } catch (error) {
+      liveLog('❌ Lỗi vòng lặp Train: ' + error.message, 'error', 'System');
+      isTraining = false;
+    }
+  }
+  isRoutineRunning = false;
+};
+
+export const trainImageOnly = async () => {
+  if (isRoutineRunning) throw new Error('Hệ thống đang chạy một tiến trình khác!');
+  
+  // Khởi động luồng chạy ngầm
+  startTelegramTrainingLoop().catch(console.error);
+
+  return {
+    success: true,
+    sku: 'Auto',
+    postMode: 'AI',
+    fbContent: '',
+    igContent: '',
+    images: [],
+    imageCount: 0,
+    trainMode: 'image',
+    message: '🚀 Đã chuyển quyền điều khiển sang Telegram! Vui lòng mở điện thoại để chấm điểm ảnh.'
+  };
+};
+
+// ============================================================
+// TRAIN CONTENT ONLY: Chỉ tạo content để training
+// ============================================================
+export const trainContentOnly = async () => {
+  isRoutineRunning = true;
+
+  const checkAbort = () => {
+    if (globalStopController.signal.aborted) {
+      const err = new Error('Luồng bị dừng theo yêu cầu của người dùng.');
+      err.name = 'AbortError';
+      throw err;
+    }
+  };
+
+  liveLog('📝 [TRAIN CONTENT] Bắt đầu tạo nội dung để training...', 'highlight', 'System');
+
+  try {
+    const skuFolders = await getFoldersInFolder(ROOT_DRIVE_FOLDER_ID);
+    if (skuFolders.length === 0) throw new Error('Không tìm thấy thư mục SKU nào trong Drive!');
+
+    checkAbort();
+
+    // Chọn ngẫu nhiên 1 SKU
+    const selectedSku = skuFolders[Math.floor(Math.random() * skuFolders.length)];
+    liveLog(`✅ [TRAIN CONTENT] Đã chọn SKU: ${selectedSku.name}`, 'highlight', 'Google Drive');
+
+    const productInfo = await getProductInfoBySku(selectedSku.name);
+    const productInfoText = productInfo ? Object.entries(productInfo).map(([k, v]) => `${k}: ${v}`).join('\n') : '';
+
+    const skuUp = (selectedSku?.name || '').toUpperCase();
+    let genderLabel = 'Unisex';
+    if (/\dG$|G\d|\dG\d/.test(skuUp)) genderLabel = 'Nam (Male)';
+    else if (/\dL$|L\d|\dL\d/.test(skuUp)) genderLabel = 'Nữ (Female)';
+
+    let fbPromptFinal = null;
+    if (fs.existsSync(geminiTemplatePath)) {
+      const templateRaw = fs.readFileSync(geminiTemplatePath, 'utf8');
+      let additionalContext = '';
+      const marketingPath = path.join(__dirname, '../../config/watch-marketing-content.md');
+      if (fs.existsSync(marketingPath)) additionalContext += `\n\n--- QUY TẮC MARKETING BỔ SUNG ---\n${fs.readFileSync(marketingPath, 'utf8')}`;
+      const personaPath = path.join(__dirname, '../../config/customer-persona.md');
+      if (fs.existsSync(personaPath)) additionalContext += `\n\n--- CHÂN DUNG KHÁCH HÀNG BỔ SUNG ---\n${fs.readFileSync(personaPath, 'utf8')}`;
+
+      const fillTemplate = (tmpl) => tmpl
+        .replace(/\{\{SKU\}\}/g, selectedSku.name)
+        .replace(/\{\{PRODUCT_INFO\}\}/g, productInfoText || 'Không có thông tin')
+        .replace(/\{\{GENDER\}\}/g, genderLabel) + additionalContext;
+
+      const fbIgMatch = templateRaw.match(/## FB_AND_IG_PROMPT_TEMPLATE\s*\n([\s\S]*?)(?=\n---\n## |\n## REELS_|$)/);
+      if (fbIgMatch) fbPromptFinal = fillTemplate(fbIgMatch[1].trim());
+    }
+
+    // Tìm ảnh tham chiếu cho content
+    let targetImgPathForContent = null;
+    const sampleFolders = ['1_Anh_Hang', '2_Anh_Tu_Chup', '0_Anh_AVT'];
+    for (const sFolder of sampleFolders) {
+      const sFolderId = await getFolderIdByName(sFolder, selectedSku.id);
+      if (sFolderId) {
+        const sImages = await getImagesInFolder(sFolderId);
+        if (sImages.length > 0) {
+          const sampleImg = sImages[Math.floor(Math.random() * sImages.length)];
+          targetImgPathForContent = await downloadFileFromDrive(sampleImg.id, `temp_train_${sampleImg.name}`);
+          break;
+        }
+      }
+    }
+
+    checkAbort();
+
+    const fallbackPrompt = `Hãy viết 2 bài theo đúng format:\n## FACEBOOK:\n[Bài FB 80-150 từ, sang trọng, có hashtag #iwcarnivalvietnam #iwcarnival #donghoiwcarnival]\n## INSTAGRAM:\n[Caption IG 15-35 từ, góc nhìn KHÁC bài FB, có hashtag #iwcarnivalvietnam #iwcarnival #donghoiwcarnival]\nSản phẩm: đồng hồ SKU ${selectedSku.name}. Không kèm giải thích.`;
+    const combinedPrompt = fbPromptFinal || fallbackPrompt;
+    const fbSpecificPrompt = combinedPrompt + "\n\n[LƯU Ý: HÃY CHỈ VIẾT NỘI DUNG CHO FACEBOOK DỰA THEO HƯỚNG DẪN TRÊN. BỎ QUA PHẦN INSTAGRAM. TRẢ VỀ TRỰC TIẾP NỘI DUNG MÀ KHÔNG CẦN TIÊU ĐỀ ## FACEBOOK]";
+    const igSpecificPrompt = combinedPrompt + "\n\n[LƯU Ý: HÃY CHỈ VIẾT NỘI DUNG CHO INSTAGRAM DỰA THEO HƯỚNG DẪN TRÊN. BỎ QUA PHẦN FACEBOOK. TRẢ VỀ TRỰC TIẾP NỘI DUNG MÀ KHÔNG CẦN TIÊU ĐỀ ## INSTAGRAM]";
+
+    const fbContent = await generateContentOnChatGPT(fbSpecificPrompt, 'fb', targetImgPathForContent);
+    const igContent = await generateContentOnChatGPT(igSpecificPrompt, 'ig', targetImgPathForContent);
+
+    // Dọn ảnh tham chiếu tạm
+    if (targetImgPathForContent && fs.existsSync(targetImgPathForContent)) fs.unlinkSync(targetImgPathForContent);
+
+    if (!fbContent && !igContent) throw new Error('Không tạo được nội dung nào!');
+
+    liveLog(`🎉 [TRAIN CONTENT] Hoàn thành! FB: ${fbContent?.length || 0} ký tự, IG: ${igContent?.length || 0} ký tự`, 'success', 'System');
+
+    return {
+      success: true,
+      sku: selectedSku.name,
+      postMode: 'CONTENT',
+      fbContent: fbContent || '',
+      igContent: igContent || '',
+      images: [],
+      imageCount: 0,
+      trainMode: 'content',
+    };
+
+  } catch (error) {
+    liveLog(`❌ [TRAIN CONTENT] Thất bại: ${error.message}`, 'error', 'System');
     throw error;
   } finally {
     isRoutineRunning = false;
@@ -655,7 +980,7 @@ export const autoPublishRoutine = async () => {
 
           const sampleImg = getRandomSampleImage();
           if (sampleImg) liveLog(`🖼️ Dùng ảnh mẫu tham chiếu: ${path.basename(sampleImg)}`, 'highlight', 'ChatGPT');
-          aiGeneratedImagePaths = await generateBackgroundOnChatGPT(localFilePaths[0], imgPromptsArray, globalStopController.signal, sampleImg);
+          aiGeneratedImagePaths = await generateBackgroundOnChatGPT(localFilePaths[0], imgPromptsArray, globalStopController.signal, sampleImg, false);
 
           // Xóa ảnh gốc vì không cần thiết đăng ảnh gốc nữa
           if (fs.existsSync(localFilePaths[0])) fs.unlinkSync(localFilePaths[0]);
@@ -748,7 +1073,7 @@ export const autoPublishRoutine = async () => {
             }
           }
 
-          const reelsContent = await generateTextOnGemini(reelsPrompt, targetImgPathForGemini);
+          const reelsContent = await generateContentOnChatGPT(reelsPrompt, 'fb', targetImgPathForGemini);
           fbContent = reelsContent;
           igContent = reelsContent; // Reels dùng chung 1 caption
 
@@ -757,17 +1082,14 @@ export const autoPublishRoutine = async () => {
           const fallbackPrompt = `Hãy viết 2 bài theo đúng format:\n## FACEBOOK:\n[Bài FB 80-150 từ, sang trọng, có hashtag #iwcarnivalvietnam #iwcarnival #donghoiwcarnival]\n## INSTAGRAM:\n[Caption IG 15-35 từ, góc nhìn KHÁC bài FB, có hashtag #iwcarnivalvietnam #iwcarnival #donghoiwcarnival]\nSản phẩm: đồng hồ SKU ${selectedSku.name}. Không kèm giải thích.`;
           const combinedPrompt = fbPromptFinal || fallbackPrompt;
 
-          const combinedOutput = await generateTextOnGemini(combinedPrompt, targetImgPathForGemini);
+          const fbSpecificPrompt = combinedPrompt + "\n\n[LƯU Ý: HÃY CHỈ VIẾT NỘI DUNG CHO FACEBOOK DỰA THEO HƯỚNG DẪN TRÊN. BỎ QUA PHẦN INSTAGRAM. TRẢ VỀ TRỰC TIẾP NỘI DUNG MÀ KHÔNG CẦN TIÊU ĐỀ ## FACEBOOK]";
+          const igSpecificPrompt = combinedPrompt + "\n\n[LƯU Ý: HÃY CHỈ VIẾT NỘI DUNG CHO INSTAGRAM DỰA THEO HƯỚNG DẪN TRÊN. BỎ QUA PHẦN FACEBOOK. TRẢ VỀ TRỰC TIẾP NỘI DUNG MÀ KHÔNG CẦN TIÊU ĐỀ ## INSTAGRAM]";
 
-          // Parse FB và IG từ output của Gemini
-          // Hỗ trợ nhiều dạng format: ## FACEBOOK:, **FACEBOOK:**, FACEBOOK:, # FACEBOOK:
-          const fbMatch2 = combinedOutput.match(/(?:#{1,3}\s*|\*{0,2})FACEBOOK:?\*{0,2}\s*\n([\s\S]*?)(?=\n(?:#{1,3}\s*|\*{0,2})INSTAGRAM:?|$)/i);
-          const igMatch2 = combinedOutput.match(/(?:#{1,3}\s*|\*{0,2})INSTAGRAM:?\*{0,2}\s*\n([\s\S]*?)$/i);
+          fbContent = await generateContentOnChatGPT(fbSpecificPrompt, 'fb', targetImgPathForGemini);
+          igContent = await generateContentOnChatGPT(igSpecificPrompt, 'ig', targetImgPathForGemini);
 
-          if (fbMatch2 && igMatch2) {
-            fbContent = fbMatch2[1].trim();
-            igContent = igMatch2[1].trim();
-            console.log(`✅ [Gemini] Parse thành công: FB (${fbContent.length} ký tự) | IG (${igContent.length} ký tự)`);
+          if (fbContent && igContent) {
+            console.log(`✅ [ChatGPT] Sinh thành công: FB (${fbContent.length} ký tự) | IG (${igContent.length} ký tự)`);
           } else {
             // Fallback: nếu không parse được, tách thủ công theo từ khóa INSTAGRAM
             console.log(`⚠️ [Gemini] Regex chính không match. Output gốc: ${combinedOutput.substring(0, 200)}...`);
@@ -877,6 +1199,7 @@ export const autoPublishRoutine = async () => {
 
       // ĐĂNG VIDEO REELS LÊN FACEBOOK
       postId = await publishFBReels(finalVideoPath, postContent);
+      await addPostMetric('facebook_reels', postId, selectedSku.name, postContent);
 
       // ĐĂNG VIDEO REELS LÊN INSTAGRAM (Bơm thẳng file nội bộ)
       try {
@@ -927,6 +1250,7 @@ export const autoPublishRoutine = async () => {
         headers: { ...fbFormData.getHeaders() }
       });
       postId = fbResponse.data.post_id;
+      await addPostMetric('facebook', postId, selectedSku.name, postContent);
 
       // Lấy Public URL của ảnh vừa đăng để dùng cho Instagram
       try {
@@ -984,6 +1308,7 @@ export const autoPublishRoutine = async () => {
         access_token: pageToken
       });
       postId = feedRes.data.id;
+      await addPostMetric('facebook', postId, selectedSku.name, postContent);
 
       // Đăng lên Instagram Carousel
       if (publicUrls.length >= 2) {
@@ -994,7 +1319,8 @@ export const autoPublishRoutine = async () => {
               await sleep(delayMs, globalStopController.signal);
           }
           console.log(`✅ Đang đẩy ${publicUrls.length} ảnh sang Instagram Carousel (nội dung IG riêng)...`);
-          await publishCarouselToInstagram(igContent, publicUrls);
+          const igRes = await publishCarouselToInstagram(igContent, publicUrls);
+          if(igRes && igRes.mediaId) await addPostMetric('instagram', igRes.mediaId, selectedSku.name, igContent);
         } catch (igErr) {
           console.log(`⚠️ Lỗi đăng Carousel Instagram: ${igErr.response?.data?.error?.message || igErr.message}`);
         }
@@ -1028,3 +1354,6 @@ export const autoPublishRoutine = async () => {
     isRoutineRunning = false; // Luôn reset trạng thái khi kết thúc (dù thành công, lỗi hay bị abort)
   }
 };
+
+
+

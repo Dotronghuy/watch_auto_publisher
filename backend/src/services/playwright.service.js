@@ -10,24 +10,72 @@ const __dirname = path.dirname(__filename);
 
 chromium.use(stealth());
 
-export const generateBackgroundOnChatGPT = async (imagePath, promptsArray, abortSignal = null, sampleImagePath = null) => {
+const getRandomSampleImageLocal = () => {
+    try {
+        const sampleDir = path.join(__dirname, '../../config/sample_images');
+        if (!fs.existsSync(sampleDir)) return null;
+        const validExt = ['.jpg', '.jpeg', '.png', '.webp'];
+        const files = fs.readdirSync(sampleDir).filter(f => validExt.includes(path.extname(f).toLowerCase()));
+        if (files.length === 0) return null;
+        return path.join(sampleDir, files[Math.floor(Math.random() * files.length)]);
+    } catch (e) {
+        return null;
+    }
+};
+
+const settingsPath = path.join(__dirname, '../config/settings.json');
+const getAiTaskUrl = (type) => {
+    try {
+        if (fs.existsSync(settingsPath)) {
+            const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+            return settings.aiTasks?.[type] || null;
+        }
+    } catch(e) {}
+    return null;
+};
+const updateAiTaskUrl = (type, url) => {
+    try {
+        let settings = { aiTasks: {} };
+        if (fs.existsSync(settingsPath)) {
+            settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+        }
+        if (!settings.aiTasks) settings.aiTasks = {};
+        
+        let chatId = url;
+        if (url && url.includes('/c/')) {
+            chatId = url.split('/c/')[1];
+        }
+        settings.aiTasks[type] = chatId;
+        fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+    } catch (e) {
+        console.error('Error saving URL', e);
+    }
+};
+
+export const generateBackgroundOnChatGPT = async (imagePath, promptsArray, abortSignal = null, sampleImagePath = null, isNewSession = true) => {
     console.log('\n--- BẮT ĐẦU TIẾN TRÌNH PLAYWRIGHT ---');
     const userDataDir = path.join(__dirname, '../../chrome_data_chatgpt');
     
     console.log('🚀 Khởi động trình duyệt ảo (Sử dụng Persistent Profile)...');
-    // headless: false + ẩn ra ngoài màn hình để tránh bị ChatGPT detect
+    // Hiển thị ra màn hình để theo dõi
     const context = await chromium.launchPersistentContext(userDataDir, { 
         headless: false,
-        args: ['--window-position=-32000,-32000', '--window-size=1280,720'],
+        args: ['--window-position=0,0', '--window-size=1280,720'],
         viewport: { width: 1280, height: 720 }
     });
     
-    // Persistent Context mặc định mở sẵn 1 tab trắng
     const page = context.pages().length > 0 ? context.pages()[0] : await context.newPage();
     
     try {
-        console.log('🌐 Đang truy cập chatgpt.com...');
-        await page.goto('https://chatgpt.com', { waitUntil: 'domcontentloaded' });
+        let targetUrl = 'https://chatgpt.com';
+        if (!isNewSession) {
+            const savedChatId = getAiTaskUrl('imageChatUrl');
+            if (savedChatId) {
+                targetUrl = `https://chatgpt.com/c/${savedChatId}`;
+            }
+        }
+        console.log(`🌐 Đang truy cập ${targetUrl}...`);
+        await page.goto(targetUrl, { waitUntil: 'domcontentloaded' });
         
         // Kiểm tra xem đã đăng nhập chưa
         await page.waitForTimeout(3000); // Chờ trang tải các nút bấm
@@ -36,28 +84,19 @@ export const generateBackgroundOnChatGPT = async (imagePath, promptsArray, abort
             console.log('⚠️ BẠN CHƯA ĐĂNG NHẬP CHATGPT! Trình duyệt sẽ dừng lại để bạn thao tác.');
             console.log('⏳ Vui lòng đăng nhập vào tài khoản Plus trên trình duyệt đang mở (Bạn có 3 phút)...');
             
-            // Vòng lặp kiểm tra trạng thái đăng nhập mỗi 5 giây
-            // Phải dùng vòng lặp vì khi bấm Login, trang sẽ chuyển hướng sang trang của OpenAI auth
             for (let i = 0; i < 36; i++) {
+                if (abortSignal && abortSignal.aborted) throw new Error('Abort requested');
                 await page.waitForTimeout(5000);
-                try {
-                    const currentUrl = page.url();
-                    // Nếu đã quay lại trang chủ và không còn nút Log in
-                    if (currentUrl.includes('chatgpt.com')) {
-                        const stillLoggedOut = await page.isVisible('text="Log in"');
-                        if (!stillLoggedOut) {
-                            console.log('✅ Đã phát hiện đăng nhập thành công! Tiếp tục tiến trình...');
-                            await page.waitForTimeout(3000);
-                            break;
-                        }
-                    }
-                } catch (e) {
-                    // Bỏ qua lỗi context bị hủy tạm thời khi chuyển trang
+                const loggedIn = await page.isVisible('#prompt-textarea') || await page.isVisible('div[contenteditable="true"]');
+                if (loggedIn) {
+                    console.log('✅ Đã phát hiện đăng nhập thành công!');
+                    break;
                 }
+                if (i === 35) throw new Error('Hết thời gian chờ đăng nhập!');
             }
         }
         
-        // Đảm bảo ô nhập prompt đã sẵn sàng - thư nhiều selector vì ChatGPT hay đổi UI
+        // Đảm bảo ô nhập prompt đã sẵn sàng
         const PROMPT_SELECTORS = [
             '#prompt-textarea',
             'div[contenteditable="true"][data-lexical-editor]',
@@ -66,210 +105,224 @@ export const generateBackgroundOnChatGPT = async (imagePath, promptsArray, abort
         ];
 
         let promptLocator = null;
-        console.log('🔍 Đang tìm ô nhập liệu ChatGPT...');
-        for (const sel of PROMPT_SELECTORS) {
-            try {
-                await page.waitForSelector(sel, { state: 'visible', timeout: 8000 });
-                promptLocator = page.locator(sel).first();
-                console.log(`✅ Tìm thấy ô nhập liệu bằng selector: ${sel}`);
-                break;
-            } catch (e) {
-                console.log(`⚠️ Không tìm thấy: ${sel}, thử selector tiếp theo...`);
+        console.log('🔍 Đang tìm ô nhập liệu ChatGPT (timeout 10 phút)...');
+        
+        // Thử tìm tối đa 10 phút (20 lần x 30 giây mỗi lần)
+        for (let retry = 0; retry < 20; retry++) {
+            for (const sel of PROMPT_SELECTORS) {
+                try {
+                    await page.waitForSelector(sel, { state: 'visible', timeout: 8000 });
+                    promptLocator = page.locator(sel).first();
+                    console.log(`✅ Tìm thấy ô nhập liệu bằng selector: ${sel}`);
+                    break;
+                } catch (e) {
+                    // Selector không tìm thấy, thử cái tiếp theo
+                }
+            }
+            
+            if (promptLocator) break;
+            
+            if (retry < 19) {
+                console.log(`⚠️ Lần thử ${retry + 1}/20: Không tìm thấy ô nhập liệu. Đang reload trang...`);
+                try {
+                    await page.reload({ waitUntil: 'domcontentloaded' });
+                    await page.waitForTimeout(10000); // Chờ 10 giây sau khi reload
+                } catch (e) {
+                    console.log('⚠️ Reload thất bại, thử lại...');
+                    await page.waitForTimeout(5000);
+                }
             }
         }
 
         if (!promptLocator) {
-            throw new Error('Không tìm thấy ô nhập liệu ChatGPT! Giao diện có thể đã thay đổi hoặc tài khoản chưa đăng nhập.');
+            throw new Error('Không tìm thấy ô nhập liệu ChatGPT sau 10 phút! Giao diện có thể đã thay đổi hoặc tài khoản chưa đăng nhập.');
         }
 
-        console.log('📤 Đang tìm nút Upload và tải ảnh lên...');
-        const fileInput = await page.$('input[type="file"]');
-        if (fileInput) {
-            // Upload ảnh AVT đồng hồ (bắt buộc)
-            const filesToUpload = [imagePath];
-            
-            // Nếu có ảnh mẫu tham chiếu, upload thêm vào cùng lúc
-            if (sampleImagePath && fs.existsSync(sampleImagePath)) {
-                filesToUpload.push(sampleImagePath);
-                console.log(`✅ Đã chọn 2 file: Watch AVT + Ảnh mẫu tham chiếu (${path.basename(sampleImagePath)})`);
-            } else {
-                console.log('✅ Đã chọn 1 file: Watch AVT (không có ảnh mẫu).');
-            }
-            
-            await fileInput.setInputFiles(filesToUpload);
-        } else {
-            throw new Error('Không tìm thấy nút Upload File trên giao diện ChatGPT. Có thể giao diện đã bị thay đổi!');
-        }
-        
-        // Chờ ảnh được tải lên (hiện thumbnail)
-        await page.waitForTimeout(5000);
-        
         const outputPaths = [];
-        const downloadedSrcs = new Set();
+        // Không cần downloadedSrcs nữa vì ta dùng logic quét từ dưới lên
         
         const count = promptsArray.length;
         for (let i = 0; i < count; i++) {
             console.log(`\n--- VẼ ẢNH ${i + 1}/${count} ---`);
-            const currentPrompt = promptsArray[i];
+            if (abortSignal?.aborted) throw new Error('aborted');
+
+            const currentPromptObj = promptsArray[i];
+            const isString = typeof currentPromptObj === 'string';
+            const currentPrompt = isString ? currentPromptObj : currentPromptObj.prompt;
+            const promptSampleImage = isString ? null : currentPromptObj.sampleImage;
+
+            let currentSampleImage = null;
+            if (promptSampleImage && fs.existsSync(promptSampleImage)) {
+                currentSampleImage = promptSampleImage;
+            } else if (i === 0 && sampleImagePath && fs.existsSync(sampleImagePath)) {
+                currentSampleImage = sampleImagePath;
+            } else if (i > 0) {
+                currentSampleImage = getRandomSampleImageLocal();
+            }
+
+            console.log('📤 Đang tìm nút Upload và tải ảnh lên...');
+            const inputs = await page.$$('input[type="file"]');
+            if (inputs.length > 0) {
+                const filesToUpload = [];
+                if (imagePath && fs.existsSync(imagePath)) filesToUpload.push(imagePath);
+                if (currentSampleImage && fs.existsSync(currentSampleImage)) {
+                    filesToUpload.push(currentSampleImage);
+                    console.log(`✅ Đã chọn kèm ảnh mẫu tham chiếu (${path.basename(currentSampleImage)})`);
+                }
+                if (filesToUpload.length > 0) {
+                    const activeInput = inputs[inputs.length - 1]; // Lấy thẻ cuối cùng (active)
+                    await activeInput.setInputFiles(filesToUpload);
+                    console.log(`✅ Đã chọn ${filesToUpload.length} file ảnh xong.`);
+                }
+            } else {
+                console.log('⚠️ Không tìm thấy input file, có thể giao diện đổi.');
+            }
             
-            if (i === 0) {
-                console.log(`✍️ Đang gõ prompt gốc số 1...`);
-                await promptLocator.click();
-                await page.waitForTimeout(300);
-                
-                // Nếu có ảnh mẫu tham chiếu → dùng prompt đặc biệt để GPT ghép vào bối cảnh thật
-                let firstPrompt;
-                if (sampleImagePath && fs.existsSync(sampleImagePath)) {
-                    firstPrompt = `I am sending you TWO images:
+            // Chờ ảnh tải lên hiện thành thumbnail
+            await page.waitForTimeout(4000);
+
+            console.log(`✍️ Đang gõ prompt số ${i + 1}...`);
+            await promptLocator.click();
+            await page.waitForTimeout(300);
+            
+            let finalPrompt;
+            if (currentSampleImage) {
+                finalPrompt = `I am sending you TWO images:
 - IMAGE 1 (first image): The luxury watch with a transparent/white background — this is the PRODUCT to feature.
 - IMAGE 2 (second image): A real lifestyle reference photo — this is the SCENE/BACKGROUND to use.
 
 YOUR TASK: Place the watch from Image 1 onto the wrist or surface in Image 2's scene. The final result must look like a real professional product photo.
 
 STRICT RULES:
-1. KEEP the watch design from Image 1 100% identical — do NOT change the dial, bezel, hands, brand text, bracelet, or colors in any way.
-2. KEEP the background, lighting, atmosphere, and composition from Image 2 as close to the original as possible.
-3. The watch must be naturally integrated — correct lighting angle, realistic shadow, proper scale on the wrist/surface.
-4. Output: photorealistic, high-end commercial photography quality, 4K.
+1. IGNORE ALL PREVIOUS IMAGES IN THIS CHAT. YOU MUST ONLY USE IMAGE 1 AS THE PRODUCT.\n2. KEEP the watch design from Image 1 100% identical — do NOT change the dial, bezel, hands, brand text, bracelet, or colors in any way.
+3. KEEP the background, lighting, atmosphere, and composition from Image 2 exactly as the original. DO NOT invent a new background.
+4. The watch must be naturally integrated — correct lighting angle, realistic shadow, proper scale.
+5. Output: photorealistic, high-end commercial photography quality, 4K.
 
-Additional scene variation for this image:
+Scene constraint for this specific image:
 ${currentPrompt}`;
-                } else {
-                    firstPrompt = currentPrompt;
-                }
-                
-                await promptLocator.fill(firstPrompt);
             } else {
-                console.log(`✍️ Đang gõ prompt biến thể số ${i + 1}...`);
-                let followUpPrompt;
-                if (sampleImagePath && fs.existsSync(sampleImagePath)) {
-                    followUpPrompt = `Now create the next variation. Use the SAME watch from Image 1 (keep it 100% identical), but place it in a DIFFERENT scene variation as described below:\n\n"${currentPrompt}"\n\nKeep it photorealistic and natural. The watch details must remain exactly unchanged.`;
-                } else {
-                    followUpPrompt = `Bây giờ, hãy tạo bức ảnh tiếp theo. YÊU CẦU BẮT BUỘC: Thay đổi hoàn toàn bối cảnh theo mô tả chi tiết sau đây:\n\n"${currentPrompt}"\n\nTuyệt đối giữ nguyên vẹn 100% thiết kế của chiếc đồng hồ gốc. Đảm bảo chất lượng 4K siêu thực.`;
-                }
-                await promptLocator.click();
-                await page.waitForTimeout(300);
-                await promptLocator.fill(followUpPrompt);
+                finalPrompt = `I am sending you ONE image (the watch).
+CRITICAL RULES:
+1. IGNORE ALL PREVIOUS IMAGES IN THIS CHAT. Use ONLY the attached image.
+2. KEEP the watch design 100% identical.
+3. Place it in this exact scene: ${currentPrompt}`;
             }
             
+            await promptLocator.fill(finalPrompt);
             await page.waitForTimeout(1000);
-            console.log('🚀 Nhấn Enter gửi yêu cầu...');
+            console.log('🚀 Nhấn nút Send gửi yêu cầu...');
             
-            // Chụp snapshot tất cả ảnh HIỆN CÓ trên trang TRƯỚC khi GPT sinh ảnh mới
-            // → Tránh nhận nhầm ảnh thumbnail đã upload thành ảnh AI vừa tạo
             try {
-                const existingImgs = await page.$$('img');
-                for (const img of existingImgs) {
-                    const src = await img.getAttribute('src');
-                    if (src) downloadedSrcs.add(src);
+                if (!isNewSession && i === 0) {
+                    await page.waitForTimeout(3000);
+                    const currentUrl = page.url();
+                    if (currentUrl.includes('/c/')) {
+                        console.log(`🔗 Đã lưu URL cuộc trò chuyện TẠO ẢNH: ${currentUrl}`);
+                        updateAiTaskUrl('imageChatUrl', currentUrl);
+                    }
                 }
-                console.log(`📸 Đã snapshot ${downloadedSrcs.size} ảnh hiện có (sẽ bỏ qua khi scan).`);
             } catch (e) {}
-            
-            await page.keyboard.press('Enter');
+
+            try {
+                const sendBtn = await page.waitForSelector('button[data-testid="send-button"]:not([disabled])', { timeout: 10000 });
+                if (sendBtn) {
+                    await sendBtn.click();
+                } else {
+                    await page.keyboard.press('Enter');
+                }
+            } catch (err) {
+                await page.keyboard.press('Enter');
+            }
             
             console.log(`⏳ Đang chờ ChatGPT vẽ ảnh ${i + 1} (có thể mất 60-100 giây)...`);
             
             let targetImgSrc = null;
-            // Quét tìm ảnh liên tục mỗi 5 giây, tối đa 60 lần (300 giây = 5 phút)
-            for (let attempt = 0; attempt < 60; attempt++) {
-                // Kiểm tra lệnh dừng trước mỗi lần quét
-                if (abortSignal && abortSignal.aborted) {
-                    console.log('⏹️ Nhận lệnh dừng, thoát vòng lặp chờ ảnh GPT.');
-                    throw new Error('Abort requested');
+            
+            // Tìm tọa độ Y tuyệt đối lớn nhất của các ảnh cũ
+            let maxY = 0;
+            try {
+                const existingImgs = await page.$$('img');
+                for (const img of existingImgs) {
+                    const box = await img.boundingBox();
+                    if (box && box.width * box.height > 90000) {
+                        const absoluteY = await page.evaluate((el) => {
+                            const rect = el.getBoundingClientRect();
+                            return rect.top + window.scrollY;
+                        }, img);
+                        if (absoluteY > Math.round(maxY)) maxY = absoluteY;
+                    }
                 }
+            } catch (e) {}
+            console.log(`📍 Tọa độ Y thấp nhất của ảnh cũ: ${Math.round(maxY)} px`);
+
+            for (let attempt = 0; attempt < 60; attempt++) {
+                if (abortSignal && abortSignal.aborted) throw new Error('Abort requested');
                 await page.waitForTimeout(5000);
                 
-                // Xử lý trường hợp ChatGPT bật chế độ A/B Testing
+                // Quét tìm ảnh có tọa độ Y lớn hơn ảnh cũ
                 try {
-                    const img1Btn = await page.$('text="Image 1 is better"');
-                    if (img1Btn) {
-                        console.log('👀 Phát hiện ChatGPT hỏi chọn ảnh (A/B Test). Tự động chọn Image 1...');
-                        await img1Btn.click();
-                        await page.waitForTimeout(2000); 
-                    }
-                } catch (e) {}
-
-                const images = await page.$$('img');
-                
-                let maxArea = 0;
-                let bestImgSrc = null;
-                
-                for (const img of images) {
-                    try {
+                    const images = await page.$$('img');
+                    for (let j = images.length - 1; j >= 0; j--) {
+                        const img = images[j];
                         const box = await img.boundingBox();
                         if (box) {
                             const area = box.width * box.height;
-                            if (area > 10000) { // Hạ ngưỡng xuống để bắt kịp ảnh chưa render full
+                            if (area > 90000) {
                                 const src = await img.getAttribute('src');
-                                // Loại bỏ các ảnh UI (avatar, icon, logo trang web)
-                                const isUIElement = !src || 
-                                    src.includes('avatar') || 
-                                    src.includes('favicon') ||
-                                    src.includes('_next/static') ||
-                                    src.includes('logo') ||
-                                    src.includes('icon') ||
-                                    src.startsWith('data:image/svg');
-                                if (!isUIElement && !downloadedSrcs.has(src) && area > maxArea) {
-                                    maxArea = area;
-                                    bestImgSrc = src;
+                                const isUIElement = !src || src.includes('avatar') || src.includes('favicon') || src.startsWith('data:image');
+                                if (!isUIElement) {
+                                    const absoluteY = await page.evaluate((el) => {
+                                        const rect = el.getBoundingClientRect();
+                                        return rect.top + window.scrollY;
+                                    }, img);
+                                    
+                                    // Bức ảnh mới luôn nằm dưới cùng, nên Y của nó phải lớn hơn Y của các ảnh cũ
+                                    // +10 để bù trừ sai số pixel
+                                    if (absoluteY > Math.round(maxY) + 10) {
+                                        targetImgSrc = src;
+                                        console.log(`✅ Đã chộp được ảnh mới vẽ ở vị trí Y: ${Math.round(absoluteY)} (Kích thước: ${Math.round(area)} px²)`);
+                                        break;
+                                    }
                                 }
                             }
                         }
-                    } catch (e) {
-                        // Bỏ qua lỗi DOM
                     }
-                }
+                } catch (e) {}
                 
-                if (bestImgSrc) {
-                    targetImgSrc = bestImgSrc;
-                    console.log(`✅ Đã bắt được ảnh DALL-E mới (Diện tích: ${maxArea}px). Chờ 5 giây cho ảnh render hoàn toàn...`);
-                    await page.waitForTimeout(5000); 
-                    break;
-                }
-                
-                console.log(`⏳ Chưa thấy ảnh (lần thử ${attempt + 1}/60, đã chờ ${((attempt + 1) * 5)}s)...`);
+                if (targetImgSrc) break;
             }
             
             if (!targetImgSrc) {
-                console.log(`❌ LỖI: Không thể tìm thấy ảnh thứ ${i + 1} do ChatGPT vẽ ra sau 150 giây. Sẽ dừng vòng lặp tại đây.`);
-                break;
+                console.log(`⚠️ Timeout chờ ảnh ${i + 1} (Không tìm thấy ảnh sau 5 phút)`);
+                continue;
             }
             
-            downloadedSrcs.add(targetImgSrc);
+            // Wait to fully load
+            await page.waitForTimeout(2000);
             
-            console.log(`📥 Đang tải ảnh mới về máy: ${targetImgSrc.substring(0, 50)}...`);
-            const imageBuffer = await page.evaluate(async (url) => {
+            console.log('📥 Đang tải ảnh xuống máy...');
+            const imageResponse = await page.evaluate(async (url) => {
                 const res = await fetch(url);
-                const buffer = await res.arrayBuffer();
-                return Array.from(new Uint8Array(buffer));
+                const blob = await res.blob();
+                return new Promise((resolve, reject) => {
+                    const reader = new FileReader();
+                    reader.onloadend = () => resolve(reader.result);
+                    reader.onerror = reject;
+                    reader.readAsDataURL(blob);
+                });
             }, targetImgSrc);
             
-            const outputPath = path.join(__dirname, `../../temp_images/chatgpt_ai_${i}_${Date.now()}.png`);
-            fs.writeFileSync(outputPath, Buffer.from(imageBuffer));
-            const fileName = path.basename(outputPath);
-            const imageUrl = `http://localhost:3000/images/${fileName}`;
-
-            console.log(`🎉 HOÀN THÀNH ẢNH ${i + 1}/${count}: ${outputPath}`);
-            
-            // Gửi ngay lên Live Monitor để hiển thị carousel
-            liveLog(
-              `🖼️ Ảnh ${i + 1}/${count} đã được sinh xong!`,
-              'success',
-              'GPT-4 Vision',
-              { image: imageUrl, imageIndex: i + 1, imageTotal: count }
-            );
+            const base64Data = imageResponse.split(',')[1];
+            const buffer = Buffer.from(base64Data, 'base64');
+            const outputPath = path.join(__dirname, `../../temp_images/chatgpt_gen_${Date.now()}.png`);
+            fs.writeFileSync(outputPath, buffer);
+            console.log(`✅ Đã lưu ảnh ${i + 1} thành công: ${path.basename(outputPath)}`);
             
             outputPaths.push(outputPath);
-            
-            // Nghỉ một chút trước khi yêu cầu vẽ bức tiếp theo
-            if (i < count - 1) {
-                await page.waitForTimeout(3000);
-            }
         }
         
-        // Giữ trình duyệt 5 giây để User nhìn thấy kết quả
-        await page.waitForTimeout(5000);
+        console.log('✅ Hoàn thành tiến trình vẽ mẻ ảnh!');
         await context.close();
         
         return outputPaths;
@@ -277,176 +330,389 @@ ${currentPrompt}`;
     } catch (error) {
         console.error('\n❌ LỖI TRONG TIẾN TRÌNH PLAYWRIGHT:');
         console.error(error.message);
-        // Không đóng ngay để User xem lỗi trên màn hình
-        console.log('⏳ Sẽ giữ trình duyệt 30 giây để bạn xem lỗi trước khi tắt...');
-        await page.waitForTimeout(30000);
+        if (page && !page.isClosed()) {
+            await page.waitForTimeout(20000);
+        }
         await context.close();
-        throw error;
+        return [];
     }
 };
 
-export const generateTextOnGemini = async (prompt, imagePath = null) => {
-    console.log('\n--- BẮT ĐẦU TIẾN TRÌNH PLAYWRIGHT (GEMINI TEXT) ---');
-    // Ta tách riêng thư mục profile để tránh xung đột file lock với ChatGPT
-    const userDataDir = path.join(__dirname, '../../chrome_data_gemini');
+export const generateContentOnChatGPT = async (prompt, type, imagePath = null) => {
+    console.log('\n--- BẮT ĐẦU TIẾN TRÌNH PLAYWRIGHT (CHATGPT TEXT) ---');
+    const userDataDir = path.join(__dirname, '../../chrome_data_chatgpt');
     
-    console.log('🚀 Khởi động trình duyệt ảo (Gemini Profile)...');
-    // headless: false + ẩn ra ngoài màn hình để tránh bị Gemini detect
+    console.log('🚀 Khởi động trình duyệt ảo (ChatGPT Text Profile)...');
     const context = await chromium.launchPersistentContext(userDataDir, { 
         headless: false,
-        args: ['--window-position=-32000,-32000', '--window-size=1280,720'],
+        args: ['--window-position=0,0', '--window-size=1280,720'],
         viewport: { width: 1280, height: 720 }
     });
     
     const page = context.pages().length > 0 ? context.pages()[0] : await context.newPage();
     
     try {
-        console.log('🌐 Đang truy cập gemini.google.com...');
-        await page.goto('https://gemini.google.com/app', { waitUntil: 'domcontentloaded' });
-        
-        // Kiểm tra xem đã đăng nhập chưa
-        await page.waitForTimeout(3000);
-        const isGeminiLoggedOut = await page.isVisible('text="Sign in"');
-        if (isGeminiLoggedOut) {
-            console.log('⚠️ BẠN CHƯA ĐĂNG NHẬP GOOGLE! Trình duyệt sẽ dừng lại để bạn thao tác.');
-            console.log('⏳ Vui lòng đăng nhập vào tài khoản Google trên trình duyệt đang mở (Bạn có 3 phút)...');
-            
-            for (let i = 0; i < 36; i++) {
-                await page.waitForTimeout(5000);
-                try {
-                    const currentUrl = page.url();
-                    if (currentUrl.includes('gemini.google.com')) {
-                        const stillLoggedOut = await page.isVisible('text="Sign in"');
-                        if (!stillLoggedOut) {
-                            console.log('✅ Đã phát hiện đăng nhập thành công! Tiếp tục tiến trình...');
-                            await page.waitForTimeout(3000);
-                            break;
-                        }
-                    }
-                } catch (e) {
-                    // Bỏ qua lỗi
-                }
-            }
+        let targetUrl = 'https://chatgpt.com';
+        const savedChatId = type === 'fb' ? getAiTaskUrl('fbChatUrl') : (type === 'ig' ? getAiTaskUrl('igChatUrl') : getAiTaskUrl('fbChatUrl'));
+        if (savedChatId) {
+            targetUrl = `https://chatgpt.com/c/${savedChatId}`;
         }
         
-        await page.waitForSelector('rich-textarea', { state: 'visible', timeout: 30000 });
+        console.log(`🌐 Đang truy cập ${targetUrl}...`);
+        await page.goto(targetUrl, { waitUntil: 'domcontentloaded' });
+        
+        await page.waitForTimeout(3000);
+        
+        const PROMPT_SELECTORS = [
+            '#prompt-textarea',
+            'div[contenteditable="true"][data-lexical-editor]',
+            'div[contenteditable="true"]',
+            'p[data-placeholder]',
+        ];
+
+        let promptLocator = null;
+        for (const sel of PROMPT_SELECTORS) {
+            try {
+                await page.waitForSelector(sel, { state: 'visible', timeout: 5000 });
+                promptLocator = page.locator(sel).first();
+                break;
+            } catch (e) {}
+        }
+
+        if (!promptLocator) {
+            throw new Error('Không tìm thấy ô nhập liệu ChatGPT!');
+        }
 
         if (imagePath && fs.existsSync(imagePath)) {
-            console.log('📤 Đang đính kèm ảnh lên Gemini bằng cách giả lập Paste...');
-            try {
-                // Đọc file ảnh chuyển thành Base64
-                const imageBuffer = fs.readFileSync(imagePath);
-                const base64Image = imageBuffer.toString('base64');
-                const mimeType = imagePath.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg';
-                
-                // Focus vào ô nhập liệu trước
-                const editor = page.locator('rich-textarea');
-                await editor.click();
-                await page.waitForTimeout(500);
-                
-                // Giả lập lệnh Paste (Ctrl+V) đẩy thẳng file ảnh vào bộ nhớ đệm của thẻ rich-textarea
-                await page.evaluate(async ({ base64, mime }) => {
-                    const res = await fetch(`data:${mime};base64,${base64}`);
-                    const blob = await res.blob();
-                    const file = new File([blob], "image.jpg", { type: mime });
-                    const dataTransfer = new DataTransfer();
-                    dataTransfer.items.add(file);
-                    
-                    const pasteEvent = new ClipboardEvent('paste', {
-                        clipboardData: dataTransfer,
-                        bubbles: true,
-                        cancelable: true
-                    });
-                    document.querySelector('rich-textarea').dispatchEvent(pasteEvent);
-                }, { base64: base64Image, mime: mimeType });
-                
-                console.log('✅ Đã dán ảnh thành công.');
-                await page.waitForTimeout(4000); // Đợi Gemini xử lý xong ảnh vừa dán
-            } catch (err) {
-                console.log(`⚠️ Lỗi dán ảnh: ${err.message}. Sẽ gửi nội dung không kèm ảnh.`);
+            console.log('📤 Đang đính kèm ảnh...');
+            const inputs = await page.$$('input[type="file"]');
+            if (inputs.length > 0) {
+                const activeInput = inputs[inputs.length - 1];
+                await activeInput.setInputFiles([imagePath]);
+                await page.waitForTimeout(4000);
             }
         }
 
-        console.log('✍️ Đang gõ yêu cầu cho Gemini...');
-        const editor = page.locator('rich-textarea');
-        await editor.click(); // Focus vào thẻ
-        await page.waitForTimeout(500); // Chờ focus ăn
-        await page.keyboard.insertText(prompt); // Chèn text trực tiếp như người dùng paste nội dung
+        console.log('✍️ Đang gõ prompt text...');
+        await promptLocator.click();
+        await page.waitForTimeout(300);
+        await promptLocator.fill(prompt);
         await page.waitForTimeout(1000);
         
-        console.log('🚀 Đang gửi yêu cầu...');
-        // Hủy bôi đen đoạn text vừa dán để tránh việc bấm Enter làm xóa text
-        await page.keyboard.press('ArrowRight');
-        await page.waitForTimeout(500);
-
         try {
-            // Thử click nút Send của Gemini (nút có aria-label chứa chữ Send)
-            const sendBtn = page.locator('button[aria-label*="Send" i]').first();
-            if (await sendBtn.isVisible({ timeout: 1000 })) {
-                await sendBtn.click();
-                console.log('✅ Đã click nút Send.');
-            } else {
-                console.log('⚠️ Không tìm thấy nút Send, sẽ thử dùng phím Enter.');
-                await page.keyboard.press('Enter');
-            }
-        } catch(e) {
+            const sendBtn = await page.waitForSelector('button[data-testid="send-button"]:not([disabled])', { timeout: 10000 });
+            if (sendBtn) await sendBtn.click();
+            else await page.keyboard.press('Enter');
+        } catch (err) {
             await page.keyboard.press('Enter');
         }
         
-        console.log('⏳ Đang chờ Gemini sinh nội dung (có thể mất 15-30 giây)...');
-        
-        let finalText = '';
-        
-        // Quét kết quả trả về liên tục mỗi 4 giây
-        for (let attempt = 0; attempt < 15; attempt++) {
-            await page.waitForTimeout(4000);
-            
-            // Tìm tất cả các khối trả lời (message-content)
-            const responses = await page.$$('message-content');
-            if (responses.length > 0) {
-                const lastResponse = responses[responses.length - 1];
-                const text = await lastResponse.innerText();
-                
-                // Nếu text đủ dài, ta chờ thêm 3 giây xem nó có đang gõ tiếp không
-                if (text && text.length > 50) {
-                    await page.waitForTimeout(3000);
-                    const newText = await lastResponse.innerText();
-                    
-                    // Nếu sau 3 giây mà text không đổi, nghĩa là Gemini đã trả lời xong!
-                    if (newText === text) {
-                        finalText = newText;
-                        break;
-                    }
-                }
+        if (!savedChatId) {
+            await page.waitForTimeout(3000);
+            const currentUrl = page.url();
+            if (currentUrl.includes('/c/')) {
+                const saveType = type === 'fb' ? 'fbChatUrl' : (type === 'ig' ? 'igChatUrl' : 'fbChatUrl');
+                updateAiTaskUrl(saveType, currentUrl);
             }
         }
         
-        if (!finalText) {
-            throw new Error('❌ Không thể lấy được nội dung từ Gemini sau 60 giây. Có thể do lỗi mạng hoặc tài khoản bị block.');
+        // Đánh dấu các tin nhắn cũ
+        await page.evaluate(() => {
+            document.querySelectorAll('div[data-message-author-role="assistant"]').forEach(el => {
+                el.classList.add('already-processed-msg');
+            });
+        });
+        
+        console.log('⏳ Đang chờ ChatGPT viết nội dung...');
+        
+        for (let attempt = 0; attempt < 60; attempt++) {
+            await page.waitForTimeout(5000);
+            // Đợi cho đến khi ChatGPT không còn nút Stop generating nữa (tức là đã viết xong)
+            try {
+                const stopBtn = await page.$('button[data-testid="stop-button"]');
+                if (stopBtn) continue; // Vẫn đang stream chữ
+            } catch (e) {}
+            
+            // Lấy text mới nhất từ tin nhắn chưa đánh dấu
+            const newMessages = await page.$$('div[data-message-author-role="assistant"]:not(.already-processed-msg)');
+            if (newMessages.length > 0) {
+                const lastMsg = newMessages[newMessages.length - 1];
+                const text = await lastMsg.innerText();
+                console.log('✅ Đã lấy xong nội dung!');
+                await context.close();
+                return text.trim();
+            }
         }
         
-        console.log('🎉 HOÀN THÀNH: Đã lấy được nội dung từ Gemini!');
-
-        // Gửi nội dung lên Live Monitor để hiển thị phần Gemini Content
-        liveLog(
-          `✅ Gemini đã viết xong nội dung (${finalText.length} ký tự)!`,
-          'success',
-          'Gemini 1.5 Pro',
-          { textPreview: finalText }
-        );
-        
-        await page.waitForTimeout(2000);
-        await context.close();
-        
-        return finalText;
+        throw new Error('Timeout chờ text');
         
     } catch (error) {
-        console.error('\n❌ LỖI TRONG TIẾN TRÌNH GEMINI PLAYWRIGHT:');
-        console.error(error.message);
-        console.log('⏳ Sẽ giữ trình duyệt 30 giây để bạn xem lỗi trước khi tắt...');
-        await page.waitForTimeout(30000);
+        console.error('❌ LỖI TRONG TIẾN TRÌNH PLAYWRIGHT TEXT:', error.message);
         await context.close();
-        throw error;
+        return null;
+    }
+};
+
+// ─── PHÂN TÍCH ẢNH MẪU MỚI → SINH PROMPT → LƯU VÀO .MD ───
+const ANALYZED_MANIFEST_PATH = path.join(__dirname, '../../config/analyzed_samples.json');
+
+const getAnalyzedManifest = () => {
+    try {
+        if (fs.existsSync(ANALYZED_MANIFEST_PATH)) {
+            return JSON.parse(fs.readFileSync(ANALYZED_MANIFEST_PATH, 'utf8'));
+        }
+    } catch (e) {}
+    return { analyzed: [] };
+};
+
+const saveAnalyzedManifest = (manifest) => {
+    fs.writeFileSync(ANALYZED_MANIFEST_PATH, JSON.stringify(manifest, null, 2));
+};
+
+const getNextPromptId = (section) => {
+    const promptGuidePath = path.join(__dirname, '../../config/gpt_image_prompt.md');
+    if (!fs.existsSync(promptGuidePath)) return 1;
+    const content = fs.readFileSync(promptGuidePath, 'utf8');
+    // Tìm ID lớn nhất hiện có trong section (ví dụ: MALE-30, FEMALE-23, NEUTRAL-5)
+    const prefix = section.toUpperCase();
+    const regex = new RegExp(`${prefix}-(\\d+)`, 'g');
+    let maxId = 0;
+    let match;
+    while ((match = regex.exec(content)) !== null) {
+        const id = parseInt(match[1]);
+        if (id > maxId) maxId = id;
+    }
+    return maxId + 1;
+};
+
+const appendPromptToMd = (section, id, titleVi, promptEn, imgFile) => {
+    const promptGuidePath = path.join(__dirname, '../../config/gpt_image_prompt.md');
+    if (!fs.existsSync(promptGuidePath)) return;
+
+    let content = fs.readFileSync(promptGuidePath, 'utf8');
+    const prefix = section.toUpperCase();
+    const newBlock = `\n\n### ${prefix}-${id} — ${titleVi}\n**Sample Image:** ${imgFile || 'N/A'}\n**English instruction for GPT:**\n> ${promptEn}\n\n---\n`;
+
+    // Tìm vị trí cuối của section để chèn vào
+    // Section headers: ## [MALE], ## [FEMALE], ## [NEUTRAL]
+    const sectionHeader = `## [${prefix}]`;
+    const sectionIdx = content.indexOf(sectionHeader);
+    
+    if (sectionIdx === -1) {
+        // Section không tồn tại, thêm vào cuối file
+        content = content.trimEnd() + `\n\n${sectionHeader} AUTO-GENERATED\n${newBlock}`;
+    } else {
+        // Tìm section tiếp theo để biết giới hạn
+        const nextSectionRegex = /\n## \[(?:MALE|FEMALE|NEUTRAL)\]/g;
+        nextSectionRegex.lastIndex = sectionIdx + sectionHeader.length;
+        const nextMatch = nextSectionRegex.exec(content);
+        
+        if (nextMatch) {
+            // Chèn trước section tiếp theo
+            content = content.slice(0, nextMatch.index) + newBlock + content.slice(nextMatch.index);
+        } else {
+            // Là section cuối, chèn vào cuối file
+            content = content.trimEnd() + newBlock;
+        }
+    }
+
+    fs.writeFileSync(promptGuidePath, content);
+};
+
+export const analyzeNewSampleImages = async () => {
+    const sampleDir = path.join(__dirname, '../../config/sample_images');
+    if (!fs.existsSync(sampleDir)) return { generated: 0, prompts: [] };
+
+    const validExt = ['.jpg', '.jpeg', '.png', '.webp'];
+    const allImages = fs.readdirSync(sampleDir).filter(f => validExt.includes(path.extname(f).toLowerCase()));
+    
+    const manifest = getAnalyzedManifest();
+    const newImages = allImages.filter(f => !manifest.analyzed.includes(f));
+
+    if (newImages.length === 0) {
+        console.log('📸 Không có ảnh mẫu mới cần phân tích.');
+        return { generated: 0, prompts: [] };
+    }
+
+    console.log(`\n📸 Phát hiện ${newImages.length} ảnh mẫu mới. Đang gửi cho ChatGPT phân tích...`);
+    liveLog(`📸 Phát hiện ${newImages.length} ảnh mẫu mới. Đang gửi AI phân tích để sinh prompt...`, 'highlight', 'System');
+
+    let context;
+    let page;
+    try {
+        const userDataDir = path.join(__dirname, '../../chrome_data_chatgpt');
+        context = await chromium.launchPersistentContext(userDataDir, {
+            headless: false,
+            args: ['--window-position=0,0', '--window-size=1280,720'],
+            viewport: { width: 1280, height: 720 },
+            timeout: 60000 // 60s timeout
+        });
+        page = context.pages().length > 0 ? context.pages()[0] : await context.newPage();
+    } catch (err) {
+        console.error('❌ Lỗi khởi động trình duyệt:', err.message);
+        if (err.message.includes('lock')) {
+            liveLog('❌ Lỗi: Trình duyệt đang bị khóa. Hãy tắt tính năng "Train Ảnh GPT" đang chạy trước khi phân tích ảnh mẫu!', 'error', 'System');
+        } else {
+            liveLog(`❌ Lỗi khởi động trình duyệt: ${err.message}`, 'error', 'System');
+        }
+        return { generated: 0, prompts: [] };
+    }
+
+    const generatedPrompts = [];
+
+    try {
+        // Mở ChatGPT session mới cho việc phân tích
+        await page.goto('https://chatgpt.com', { waitUntil: 'domcontentloaded' });
+        await page.waitForTimeout(3000);
+
+        // Kiểm tra đăng nhập
+        const isLoggedOut = await page.isVisible('text="Log in"');
+        if (isLoggedOut) throw new Error('Chưa đăng nhập ChatGPT!');
+
+        // Tìm ô nhập liệu
+        const PROMPT_SELECTORS = [
+            '#prompt-textarea',
+            'div[contenteditable="true"][data-lexical-editor]',
+            'div[contenteditable="true"]',
+            'p[data-placeholder]',
+        ];
+
+        let promptLocator = null;
+        for (const sel of PROMPT_SELECTORS) {
+            try {
+                await page.waitForSelector(sel, { state: 'visible', timeout: 8000 });
+                promptLocator = page.locator(sel).first();
+                break;
+            } catch (e) {}
+        }
+        if (!promptLocator) throw new Error('Không tìm thấy ô nhập liệu ChatGPT!');
+
+        for (let i = 0; i < newImages.length; i++) {
+            const imgFile = newImages[i];
+            const imgPath = path.join(sampleDir, imgFile);
+            console.log(`\n📸 [${i + 1}/${newImages.length}] Đang phân tích: ${imgFile}`);
+            liveLog(`📸 [${i + 1}/${newImages.length}] Đang phân tích ảnh mẫu: ${imgFile}`, 'typing', 'ChatGPT');
+
+            try {
+                // Upload ảnh
+                const inputs = await page.$$('input[type="file"]');
+                if (inputs.length > 0) {
+                    const activeInput = inputs[inputs.length - 1];
+                    await activeInput.setInputFiles([imgPath]);
+                    await page.waitForTimeout(4000);
+                }
+
+                // Gõ prompt phân tích
+                const analyzePrompt = `Look at this lifestyle/product photography reference image carefully. I want you to describe it so I can use your description as a prompt to recreate a similar scene with a luxury watch composited into it.
+
+Please provide your response in EXACTLY this format (nothing else):
+
+TITLE_VI: [A short Vietnamese title describing the scene, max 15 words, e.g. "Flat lay + Bàn gỗ tối + Cốc cafe + Moody"]
+SECTION: [One of: MALE, FEMALE, or NEUTRAL — based on the vibe of the scene]
+PROMPT_EN: [A detailed English prompt describing the exact scene, lighting, composition, camera angle, props, and atmosphere. The prompt must follow this style: "Photorealistic lifestyle..." and end with "Portrait orientation. Ultra-sharp watch. No text, no watermark." The prompt should be ONE paragraph, no line breaks.]
+
+IMPORTANT:
+- The prompt must describe where to PLACE a luxury watch in this scene
+- Include specific details: surface material, lighting direction, color temperature, props, camera angle
+- Keep it photorealistic commercial photography style
+- Do NOT mention any specific brand names in the prompt`;
+
+                await promptLocator.click();
+                await page.waitForTimeout(300);
+                await promptLocator.fill(analyzePrompt);
+                await page.waitForTimeout(1000);
+
+                // Send
+                try {
+                    const sendBtn = await page.waitForSelector('button[data-testid="send-button"]:not([disabled])', { timeout: 10000 });
+                    if (sendBtn) await sendBtn.click();
+                    else await page.keyboard.press('Enter');
+                } catch (err) {
+                    await page.keyboard.press('Enter');
+                }
+
+                // Đánh dấu tin nhắn cũ
+                await page.evaluate(() => {
+                    document.querySelectorAll('div[data-message-author-role="assistant"]').forEach(el => {
+                        el.classList.add('already-processed-msg');
+                    });
+                });
+
+                console.log('⏳ Đang chờ ChatGPT phân tích ảnh...');
+
+                // Chờ response
+                let responseText = null;
+                for (let attempt = 0; attempt < 40; attempt++) {
+                    await page.waitForTimeout(5000);
+                    try {
+                        const stopBtn = await page.$('button[data-testid="stop-button"]');
+                        if (stopBtn) continue;
+                    } catch (e) {}
+
+                    const newMessages = await page.$$('div[data-message-author-role="assistant"]:not(.already-processed-msg)');
+                    if (newMessages.length > 0) {
+                        const lastMsg = newMessages[newMessages.length - 1];
+                        responseText = await lastMsg.innerText();
+                        break;
+                    }
+                }
+
+                if (!responseText) {
+                    console.log(`⚠️ Timeout phân tích ảnh ${imgFile}`);
+                    continue;
+                }
+
+                // Parse response (bỏ qua dấu * nếu GPT lỡ in đậm markdown)
+                const titleMatch = responseText.match(/TITLE_VI[\s*]*:[\s*]*(.+)/i);
+                // ÉP BUỘC TẤT CẢ LÀ MALE THEO YÊU CẦU CỦA USER
+                const section = 'MALE';
+                const promptMatch = responseText.match(/PROMPT_EN[\s*]*:[\s*]*([\s\S]+)/i);
+
+                if (titleMatch && promptMatch) {
+                    const titleVi = titleMatch[1].trim();
+                    let promptEn = promptMatch[1].trim();
+                    // Dọn dấu quote nếu có
+                    promptEn = promptEn.replace(/^["']|["']$/g, '');
+
+                    const nextId = getNextPromptId(section);
+                    appendPromptToMd(section, nextId, titleVi, promptEn, imgFile);
+
+                    // Đánh dấu đã phân tích
+                    manifest.analyzed.push(imgFile);
+                    saveAnalyzedManifest(manifest);
+
+                    generatedPrompts.push({
+                        image: imgFile,
+                        section,
+                        id: `${section}-${nextId}`,
+                        title: titleVi,
+                        prompt: promptEn
+                    });
+
+                    console.log(`✅ Đã sinh prompt ${section}-${nextId}: "${titleVi}"`);
+                    liveLog(`✅ Đã sinh prompt ${section}-${nextId} từ ảnh ${imgFile}`, 'success', 'ChatGPT');
+                } else {
+                    console.log(`⚠️ Không parse được response cho ${imgFile}. Response: ${responseText.substring(0, 200)}`);
+                    liveLog(`⚠️ AI trả lời không đúng format cho ảnh ${imgFile}, bỏ qua.`, 'warning', 'System');
+                }
+            } catch (imgErr) {
+                console.log(`⚠️ Lỗi phân tích ${imgFile}: ${imgErr.message}`);
+            }
+        }
+
+        await context.close();
+        
+        const msg = `📸 Đã phân tích xong ${generatedPrompts.length}/${newImages.length} ảnh mẫu → sinh ${generatedPrompts.length} prompt mới vào gpt_image_prompt.md`;
+        console.log(msg);
+        liveLog(msg, 'success', 'System');
+
+        return { generated: generatedPrompts.length, prompts: generatedPrompts };
+
+    } catch (error) {
+        console.error('❌ Lỗi phân tích ảnh mẫu:', error.message);
+        liveLog(`❌ Lỗi phân tích ảnh mẫu: ${error.message}`, 'error', 'System');
+        try { await context.close(); } catch (e) {}
+        return { generated: generatedPrompts.length, prompts: generatedPrompts };
     }
 };
 

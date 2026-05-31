@@ -5,5 +5,10 @@
   "mode": "real",
   "testInterval": "1",
   "igDelayMin": "1",
-  "igDelayMax": "2"
+  "igDelayMax": "2",
+  "aiTasks": {
+    "imageChatUrl": "6a1a5e49-0eb0-83ec-8adf-81e749f6b749",
+    "fbChatUrl": "6a1a5d63-13a4-83ec-adc6-477762d82363",
+    "igChatUrl": "6a1a5d8c-2118-83ec-82d6-37b50fb408c4"
+  }
 }

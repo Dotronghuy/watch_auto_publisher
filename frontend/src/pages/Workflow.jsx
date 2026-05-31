@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { ChevronLeft, ChevronRight, Cloud, Settings, Share2, Search, Pause, Terminal, Image as ImageIcon, BrainCircuit, FileText, UploadCloud, RotateCcw, Trash2, FlaskConical, X, MessageSquare, Camera, Zap, CheckCircle } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Cloud, Settings, Share2, Search, Pause, Terminal, Image as ImageIcon, BrainCircuit, FileText, UploadCloud, RotateCcw, Trash2, FlaskConical, X, MessageSquare, Camera, Zap, CheckCircle, Palette, PenTool } from 'lucide-react';
 import Swal from 'sweetalert2';
 import './Workflow.css';
 
@@ -42,6 +42,7 @@ const Workflow = () => {
   const [showDryRunModal, setShowDryRunModal] = useState(false);
   const [dryRunImgIdx, setDryRunImgIdx] = useState(0);
   const [dryRunTab, setDryRunTab] = useState('fb'); // 'fb' | 'ig'
+  const [trainMode, setTrainMode] = useState(null); // null | 'image' | 'content' | 'full'
   // Sample images state
   const [sampleImages, setSampleImages] = useState([]);
   const [sampleImgUploading, setSampleImgUploading] = useState(false);
@@ -357,6 +358,7 @@ const Workflow = () => {
     if (dryRunLoading) return;
     setDryRunLoading(true);
     setDryRunResult(null);
+    setTrainMode('full');
     try {
       const res = await fetch('http://localhost:3000/api/dry-run', { method: 'POST' });
       const data = await res.json();
@@ -367,7 +369,7 @@ const Workflow = () => {
       setShowDryRunModal(true);
     } catch (err) {
       Swal.fire({
-        title: '❌ Dry Run thất bại',
+        title: '⚠️ Dry Run thất bại',
         text: err.message,
         icon: 'error',
         background: 'var(--color-surface)',
@@ -375,6 +377,248 @@ const Workflow = () => {
       });
     } finally {
       setDryRunLoading(false);
+      setTrainMode(null);
+    }
+  };
+
+  // ─── TRAIN IMAGE ONLY ───
+  const handleTrainImage = async () => {
+    if (dryRunLoading) return;
+    setDryRunLoading(true);
+    setDryRunResult(null);
+    setTrainMode('image');
+    try {
+      const res = await fetch('http://localhost:3000/api/train-image', { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Training ảnh thất bại');
+      if (data.trainMode === 'image' && data.images.length === 0) {
+        Swal.fire({ icon: 'success', title: 'Đã Bắt Đầu!', text: data.message, background: 'var(--color-surface)', color: 'white' });
+      } else {
+        setDryRunResult(data);
+        setDryRunImgIdx(0);
+        setDryRunTab('fb');
+        setShowDryRunModal(true);
+      }
+    } catch (err) {
+      Swal.fire({
+        title: '⚠️ Training ảnh thất bại',
+        text: err.message,
+        icon: 'error',
+        background: 'var(--color-surface)',
+        color: 'white',
+      });
+    } finally {
+      setDryRunLoading(false);
+      setTrainMode(null);
+    }
+  };
+
+  // ─── TRAIN CONTENT ONLY ───
+  const handleTrainContent = async () => {
+    if (dryRunLoading) return;
+    setDryRunLoading(true);
+    setDryRunResult(null);
+    setTrainMode('content');
+    try {
+      const res = await fetch('http://localhost:3000/api/train-content', { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Training content thất bại');
+      setDryRunResult(data);
+      setDryRunImgIdx(0);
+      setDryRunTab('fb');
+      setShowDryRunModal(true);
+    } catch (err) {
+      Swal.fire({
+        title: '⚠️ Training content thất bại',
+        text: err.message,
+        icon: 'error',
+        background: 'var(--color-surface)',
+        color: 'white',
+      });
+    } finally {
+      setDryRunLoading(false);
+      setTrainMode(null);
+    }
+  };
+
+  const handleRejectPrompt = async () => {
+    const currentImg = dryRunResult.images[dryRunImgIdx];
+    if (!currentImg || !currentImg.prompt) {
+      Swal.fire({ icon: 'info', title: 'Không có prompt', text: 'Ảnh này không phải do AI tạo hoặc không có prompt đi kèm.', background: 'var(--color-surface)', color: 'white' });
+      return;
+    }
+
+    const confirm = await Swal.fire({
+      title: '🗑️ Xóa cảnh gốc?',
+      text: 'Hệ thống sẽ xóa vĩnh viễn bối cảnh đã tạo ra ảnh này khỏi file cấu hình, đồng thời "mắng" AI để nó bỏ phong cách này đi.',
+      icon: 'warning',
+      showCancelButton: true,
+      confirmButtonText: 'Xóa Vĩnh Viễn!',
+      cancelButtonText: 'Hủy',
+      background: 'var(--color-surface)',
+      color: 'white',
+      confirmButtonColor: '#ef4444'
+    });
+
+    if (!confirm.isConfirmed) return;
+
+    try {
+      const res = await fetch('http://localhost:3000/api/delete-prompt', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ promptText: currentImg.prompt })
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.message || data.error);
+
+      Swal.fire({
+        title: 'Thành công',
+        text: 'Đã đào thải bối cảnh lỗi và nhắc nhở AI!',
+        icon: 'success',
+        background: 'var(--color-surface)',
+        color: 'white'
+      });
+
+      setDryRunResult(prev => {
+        const newImages = [...prev.images];
+        newImages.splice(dryRunImgIdx, 1);
+        return { ...prev, images: newImages, imageCount: newImages.length };
+      });
+      if (dryRunImgIdx >= dryRunResult.images.length - 1) {
+        setDryRunImgIdx(Math.max(0, dryRunImgIdx - 1));
+      }
+    } catch (err) {
+      Swal.fire({ icon: 'error', title: 'Lỗi', text: err.message, background: 'var(--color-surface)', color: 'white' });
+    }
+  };
+
+  const handleSendFeedback = async () => {
+    const currentImg = dryRunResult.images[dryRunImgIdx];
+    if (!currentImg || !currentImg.prompt) {
+      Swal.fire({ icon: 'info', title: 'Không có prompt', text: 'Ảnh này không có bối cảnh gốc để nhận xét.', background: 'var(--color-surface)', color: 'white' });
+      return;
+    }
+
+    const { value: formValues } = await Swal.fire({
+      title: '💬 Nhận xét cho AI',
+      html: `
+        <div style="text-align:left;">
+          <label style="font-size:12px; color:#aaa; display:block; margin-bottom:6px;">Bạn muốn AI sửa đổi gì cho bối cảnh này?</label>
+          <textarea id="swal-feedback-text" rows="3" placeholder="Ví dụ: Đổ bóng quá đậm, thiếu ánh sáng vàng..." style="width:100%; background:#1e1e1e; color:white; border:1px solid #444; border-radius:6px; padding:8px; font-size:13px; resize:vertical; outline:none; box-sizing:border-box; font-family:inherit;"></textarea>
+          <label style="font-size:12px; color:#aaa; display:block; margin-top:12px; margin-bottom:6px;">📎 Upload ảnh mẫu để AI học theo (tùy chọn)</label>
+          <div id="swal-upload-area" style="border:2px dashed rgba(168,85,247,0.4); border-radius:8px; padding:12px; text-align:center; cursor:pointer; transition:all 0.2s; background:rgba(168,85,247,0.05);">
+            <input type="file" id="swal-feedback-file" accept="image/*" style="display:none;" />
+            <div id="swal-upload-label" style="color:#c084fc; font-size:12px;">🖼️ Click hoặc kéo thả ảnh mẫu vào đây</div>
+            <img id="swal-preview-img" style="display:none; max-height:120px; max-width:100%; margin-top:8px; border-radius:6px; border:1px solid rgba(168,85,247,0.3);" />
+          </div>
+        </div>
+      `,
+      showCancelButton: true,
+      confirmButtonText: 'Gửi Góp Ý',
+      cancelButtonText: 'Hủy',
+      background: 'var(--color-surface)',
+      color: 'white',
+      width: 480,
+      focusConfirm: false,
+      didOpen: () => {
+        const textArea = document.getElementById('swal-feedback-text');
+        const fileInput = document.getElementById('swal-feedback-file');
+        const uploadArea = document.getElementById('swal-upload-area');
+        const previewImg = document.getElementById('swal-preview-img');
+        const uploadLabel = document.getElementById('swal-upload-label');
+
+        textArea.focus();
+        textArea.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            Swal.clickConfirm();
+          }
+        });
+
+        uploadArea.addEventListener('click', () => fileInput.click());
+        uploadArea.addEventListener('dragover', (e) => { e.preventDefault(); uploadArea.style.borderColor = '#a855f7'; uploadArea.style.background = 'rgba(168,85,247,0.12)'; });
+        uploadArea.addEventListener('dragleave', () => { uploadArea.style.borderColor = 'rgba(168,85,247,0.4)'; uploadArea.style.background = 'rgba(168,85,247,0.05)'; });
+        uploadArea.addEventListener('drop', (e) => {
+          e.preventDefault();
+          uploadArea.style.borderColor = 'rgba(168,85,247,0.4)';
+          uploadArea.style.background = 'rgba(168,85,247,0.05)';
+          if (e.dataTransfer.files.length > 0) {
+            fileInput.files = e.dataTransfer.files;
+            fileInput.dispatchEvent(new Event('change'));
+          }
+        });
+
+        fileInput.addEventListener('change', () => {
+          if (fileInput.files.length > 0) {
+            const file = fileInput.files[0];
+            const reader = new FileReader();
+            reader.onload = (ev) => {
+              previewImg.src = ev.target.result;
+              previewImg.style.display = 'block';
+              uploadLabel.innerHTML = `✅ ${file.name} (${(file.size / 1024).toFixed(0)}KB)`;
+            };
+            reader.readAsDataURL(file);
+          }
+        });
+      },
+      preConfirm: () => {
+        const text = document.getElementById('swal-feedback-text').value;
+        const file = document.getElementById('swal-feedback-file').files[0] || null;
+        if (!text && !file) {
+          Swal.showValidationMessage('Vui lòng nhập nhận xét hoặc upload ảnh mẫu!');
+          return false;
+        }
+        return { text, file };
+      }
+    });
+
+    if (!formValues) return;
+
+    Swal.fire({
+      title: 'Đang xử lý...',
+      text: 'AI đang vẽ lại ảnh theo ý bạn. Vui lòng đợi khoảng 20-30s...',
+      allowOutsideClick: false,
+      background: 'var(--color-surface)',
+      color: 'white',
+      didOpen: () => {
+        Swal.showLoading();
+      }
+    });
+
+    try {
+      const formData = new FormData();
+      formData.append('promptText', currentImg.prompt);
+      formData.append('feedbackText', formValues.text || '');
+      formData.append('action', 'feedback');
+      if (formValues.file) {
+        formData.append('referenceImage', formValues.file);
+      }
+
+      const res = await fetch('http://localhost:3000/api/feedback-prompt', {
+        method: 'POST',
+        body: formData
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.message);
+
+      if (data.newImageUrl) {
+        setDryRunResult(prev => {
+          const newImages = [...prev.images];
+          // Replace current image with the new generated image
+          newImages[dryRunImgIdx] = { url: data.newImageUrl, prompt: currentImg.prompt };
+          return { ...prev, images: newImages };
+        });
+      }
+
+      Swal.fire({
+        title: 'Thành công',
+        text: 'AI đã tiếp thu và sinh lại ảnh mới!',
+        icon: 'success',
+        background: 'var(--color-surface)',
+        color: 'white'
+      });
+    } catch (err) {
+      Swal.fire({ icon: 'error', title: 'Lỗi', text: err.message, background: 'var(--color-surface)', color: 'white' });
     }
   };
 
@@ -543,18 +787,50 @@ const Workflow = () => {
                     </div>
                   )}
 
-                  {/* Nút upload ảnh mẫu */}
-                  <button
-                    className="btn-upload-md"
-                    style={{borderColor: 'rgba(52,211,153,0.3)', color:'#34d399'}}
-                    onClick={(e) => { e.stopPropagation(); sampleImgInputRef.current?.click(); }}
-                    onMouseDown={e => e.stopPropagation()}
-                    disabled={sampleImgUploading}
-                    title="Upload ảnh chụp thật (tay đeo đồng hồ, cảnh luxury...) để GPT dùng làm tham chiếu"
-                  >
-                    <ImageIcon size={12} />
-                    {sampleImgUploading ? ' Đang tải...' : ' Thêm ảnh mẫu (JPG/PNG)'}
-                  </button>
+                  {/* Nút upload và xóa ảnh mẫu */}
+                  <div style={{display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '6px'}}>
+                    <button
+                      className="btn-upload-md"
+                      style={{borderColor: 'rgba(52,211,153,0.3)', color:'#34d399', width: '100%'}}
+                      onClick={(e) => { e.stopPropagation(); sampleImgInputRef.current?.click(); }}
+                      onMouseDown={e => e.stopPropagation()}
+                      disabled={sampleImgUploading}
+                      title="Upload ảnh chụp thật (tay đeo đồng hồ, cảnh luxury...) để GPT dùng làm tham chiếu"
+                    >
+                      <ImageIcon size={12} />
+                      {sampleImgUploading ? ' Đang tải...' : ' Thêm ảnh mẫu (JPG/PNG)'}
+                    </button>
+                    {sampleImages.length > 0 && (
+                      <button
+                        className="btn-upload-md"
+                        style={{borderColor: 'rgba(239,68,68,0.3)', color:'#ef4444', width: '100%'}}
+                        onClick={async (e) => {
+                          e.stopPropagation();
+                          const confirm = await Swal.fire({
+                            title: 'Xóa toàn bộ?',
+                            text: 'Bạn có chắc chắn muốn xóa TẤT CẢ ảnh mẫu không?',
+                            icon: 'warning',
+                            showCancelButton: true,
+                            confirmButtonText: 'Xóa Hết',
+                            cancelButtonText: 'Hủy',
+                            background: 'var(--color-surface)',
+                            color: 'white',
+                            confirmButtonColor: '#ef4444'
+                          });
+                          if(confirm.isConfirmed) {
+                            for (let img of sampleImages) {
+                              await handleDeleteSampleImg(img.name);
+                            }
+                            Swal.fire({ title: 'Đã xóa!', text: 'Đã xóa toàn bộ ảnh mẫu.', icon: 'success', toast: true, position: 'top-end', showConfirmButton: false, timer: 2000, background: 'var(--color-surface)', color: 'white' });
+                          }
+                        }}
+                        onMouseDown={e => e.stopPropagation()}
+                        title="Xóa toàn bộ ảnh mẫu hiện tại"
+                      >
+                        <Trash2 size={12} /> Xóa hết
+                      </button>
+                    )}
+                  </div>
                   <input
                     ref={sampleImgInputRef}
                     type="file"
@@ -627,7 +903,7 @@ const Workflow = () => {
                     <span className="tag ig">IG</span>
                   </div>
                 </div>
-                <div className="field" style={{marginTop: '10px'}}>
+                <div className="field" style={{marginTop: '10px', display: 'flex', gap: '6px', flexWrap: 'wrap'}}>
                   <button
                     id="btn-dry-run"
                     className="btn-dry-run"
@@ -635,11 +911,40 @@ const Workflow = () => {
                     onMouseDown={e => e.stopPropagation()}
                     disabled={dryRunLoading}
                     title="Chạy thử toàn bộ luồng AI nhưng KHÔNG đăng lên MXH"
+                    style={{flex: '1 1 100%'}}
                   >
-                    {dryRunLoading ? (
+                    {dryRunLoading && trainMode === 'full' ? (
                       <><span className="spin-icon">⟳</span> Đang chạy thử...</>
                     ) : (
                       <><FlaskConical size={13} /> Chạy Thử (Dry Run)</>
+                    )}
+                  </button>
+                  <button
+                    className="btn-dry-run btn-train-image"
+                    onClick={(e) => { e.stopPropagation(); handleTrainImage(); }}
+                    onMouseDown={e => e.stopPropagation()}
+                    disabled={dryRunLoading}
+                    title="Chỉ tạo ảnh GPT để training AI"
+                    style={{flex: '1 1 45%'}}
+                  >
+                    {dryRunLoading && trainMode === 'image' ? (
+                      <><span className="spin-icon">⟳</span> Đang tạo ảnh...</>
+                    ) : (
+                      <><Palette size={13} /> Train Ảnh GPT</>
+                    )}
+                  </button>
+                  <button
+                    className="btn-dry-run btn-train-content"
+                    onClick={(e) => { e.stopPropagation(); handleTrainContent(); }}
+                    onMouseDown={e => e.stopPropagation()}
+                    disabled={dryRunLoading}
+                    title="Chỉ tạo content để training AI"
+                    style={{flex: '1 1 45%'}}
+                  >
+                    {dryRunLoading && trainMode === 'content' ? (
+                      <><span className="spin-icon">⟳</span> Đang viết bài...</>
+                    ) : (
+                      <><PenTool size={13} /> Train Content</>
                     )}
                   </button>
                 </div>
@@ -769,11 +1074,13 @@ const Workflow = () => {
               <div style={{display:'flex', alignItems:'center', gap:'10px'}}>
                 <CheckCircle size={20} color="#4ade80" />
                 <div>
-                  <h2 style={{margin:0, fontSize:'16px', color:'white'}}>Kết quả Dry Run</h2>
+                  <h2 style={{margin:0, fontSize:'16px', color:'white'}}>
+                    {dryRunResult.trainMode === 'image' ? 'Training Ảnh GPT' : dryRunResult.trainMode === 'content' ? 'Training Content' : 'Kết quả Dry Run'}
+                  </h2>
                   <p style={{margin:0, fontSize:'11px', color:'var(--color-text-dim)'}}>
                     SKU: <strong style={{color:'var(--color-primary)'}}>{dryRunResult.sku}</strong>
-                    &nbsp;·&nbsp; Chế độ: <strong style={{color:'#60a5fa'}}>{dryRunResult.postMode}</strong>
-                    &nbsp;·&nbsp; {dryRunResult.imageCount} ảnh
+                    &nbsp;·&nbsp; Chế độ: <strong style={{color:'#60a5fa'}}>{dryRunResult.trainMode === 'image' ? '🎨 Chỉ Ảnh' : dryRunResult.trainMode === 'content' ? '📝 Chỉ Content' : dryRunResult.postMode}</strong>
+                    {dryRunResult.imageCount > 0 && <>&nbsp;·&nbsp; {dryRunResult.imageCount} ảnh</>}
                   </p>
                 </div>
               </div>
@@ -783,8 +1090,9 @@ const Workflow = () => {
             </div>
 
             <div className="dry-run-modal-body">
-              {/* Cột trái: Ảnh */}
-              <div className="dry-run-img-col">
+              {/* Cột trái: Ảnh (ẩn khi chỉ train content) */}
+              {dryRunResult.trainMode !== 'content' && (
+              <div className="dry-run-img-col" style={dryRunResult.trainMode === 'image' ? {width: '100%', borderRight: 'none'} : {}}>
                 <div className="dry-run-img-label">
                   <ImageIcon size={12} style={{marginRight:'6px', color:'var(--color-primary)'}} />
                   Ảnh Output ({dryRunImgIdx + 1}/{dryRunResult.images.length})
@@ -793,7 +1101,7 @@ const Workflow = () => {
                   {dryRunResult.images.length > 0 ? (
                     <>
                       <img
-                        src={dryRunResult.images[dryRunImgIdx]}
+                        src={dryRunResult.images[dryRunImgIdx]?.url || dryRunResult.images[dryRunImgIdx]}
                         alt={`Ảnh ${dryRunImgIdx + 1}`}
                         className="dry-run-img"
                       />
@@ -823,10 +1131,43 @@ const Workflow = () => {
                     </div>
                   )}
                 </div>
-              </div>
 
-              {/* Cột phải: Content */}
-              <div className="dry-run-content-col">
+                {dryRunResult.images[dryRunImgIdx]?.prompt && (
+                  <div style={{ display: 'flex', gap: '10px', marginTop: '16px', width: '100%' }}>
+                    <button 
+                      onClick={() => {
+                        Swal.fire({ title: 'Đã Duyệt!', text: 'Bối cảnh này rất tốt, hệ thống sẽ tiếp tục phát huy.', icon: 'success', toast: true, position: 'top-end', showConfirmButton: false, timer: 1500, background: 'var(--color-surface)', color: 'white' });
+                        if (dryRunImgIdx < dryRunResult.images.length - 1) setDryRunImgIdx(i => i + 1);
+                      }}
+                      style={{ flex: 1, background: 'rgba(34, 197, 94, 0.1)', color: '#4ade80', border: '1px solid rgba(34, 197, 94, 0.3)', padding: '10px', borderRadius: '8px', cursor: 'pointer', fontSize: '12px', fontWeight: 'bold', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', transition: 'all 0.2s' }}
+                      onMouseEnter={e => { e.currentTarget.style.background = 'rgba(34, 197, 94, 0.2)'; e.currentTarget.style.borderColor = '#22c55e'; }}
+                      onMouseLeave={e => { e.currentTarget.style.background = 'rgba(34, 197, 94, 0.1)'; e.currentTarget.style.borderColor = 'rgba(34, 197, 94, 0.3)'; }}
+                    >
+                      ✅ 10/10 (Duyệt)
+                    </button>
+                    <button 
+                      onClick={handleSendFeedback}
+                      style={{ flex: 1, background: 'rgba(59, 130, 246, 0.1)', color: '#60a5fa', border: '1px solid rgba(59, 130, 246, 0.3)', padding: '10px', borderRadius: '8px', cursor: 'pointer', fontSize: '12px', fontWeight: 'bold', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', transition: 'all 0.2s' }}
+                      onMouseEnter={e => { e.currentTarget.style.background = 'rgba(59, 130, 246, 0.2)'; e.currentTarget.style.borderColor = '#3b82f6'; }}
+                      onMouseLeave={e => { e.currentTarget.style.background = 'rgba(59, 130, 246, 0.1)'; e.currentTarget.style.borderColor = 'rgba(59, 130, 246, 0.3)'; }}
+                    >
+                      💬 Nhận xét sửa lỗi
+                    </button>
+                    <button 
+                      onClick={handleRejectPrompt}
+                      style={{ flex: 1, background: 'rgba(239, 68, 68, 0.1)', color: '#f87171', border: '1px solid rgba(239, 68, 68, 0.3)', padding: '10px', borderRadius: '8px', cursor: 'pointer', fontSize: '12px', fontWeight: 'bold', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', transition: 'all 0.2s' }}
+                      onMouseEnter={e => { e.currentTarget.style.background = 'rgba(239, 68, 68, 0.2)'; e.currentTarget.style.borderColor = '#ef4444'; }}
+                      onMouseLeave={e => { e.currentTarget.style.background = 'rgba(239, 68, 68, 0.1)'; e.currentTarget.style.borderColor = 'rgba(239, 68, 68, 0.3)'; }}
+                    >
+                      🗑️ Xóa luôn cảnh này
+                    </button>
+                  </div>
+                )}
+              </div>
+              )}
+              {/* Cột phải: Content (ẩn khi chỉ train image) */}
+              {dryRunResult.trainMode !== 'image' && (
+              <div className="dry-run-content-col" style={dryRunResult.trainMode === 'content' ? {width: '100%'} : {}}>
                 <div className="dry-run-tab-bar">
                   <button
                     className={`dry-run-tab ${dryRunTab === 'fb' ? 'active' : ''}`}
@@ -853,6 +1194,7 @@ const Workflow = () => {
                   }
                 </div>
               </div>
+              )}
             </div>
 
             <div className="dry-run-modal-footer">

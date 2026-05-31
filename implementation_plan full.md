@@ -65,5 +65,5 @@ Dưới đây là toàn bộ các Giai đoạn (Phases) đã đi qua và những
 *Biến Tool thành một Marketer thực thụ:*
 
 - **Tracking tương tác:** Hệ thống tự động đếm số Like/Comment của từng bài đã đăng.
-- **Tự Học (Machine Learning Feedback):** Báo lại cho n8n/ChatGPT biết bài nào nhiều Like nhất để các bài sau nó viết bắt trend và ra đơn tốt hơn.
+- **Tự Học (Machine Learning Feedback):** Báo lại cho ChatGPT biết bài nào nhiều Like nhất để các bài sau nó viết bắt trend và ra đơn tốt hơn.
 - **Auto-Reply Comment:** Có khách comment "Xin giá", hệ thống chộp luôn ID của post, nhờ AI viết câu trả lời thả thính rồi tự động reply lại khách.
