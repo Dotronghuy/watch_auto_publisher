@@ -36,12 +36,20 @@ export const getFolderIdByName = async (folderName, parentId) => {
 // Hàm lấy danh sách ảnh trong 1 thư mục
 export const getImagesInFolder = async (folderId) => {
   try {
-    const res = await drive.files.list({
-      q: `'${folderId}' in parents and mimeType contains 'image/' and trashed=false`,
-      fields: 'files(id, name, mimeType, size)',
-      orderBy: 'createdTime desc', // Mới nhất lên đầu
-    });
-    return res.data.files;
+    let allFiles = [];
+    let pageToken = null;
+    do {
+      const res = await drive.files.list({
+        q: `'${folderId}' in parents and mimeType contains 'image/' and trashed=false`,
+        fields: 'nextPageToken, files(id, name, mimeType, size)',
+        orderBy: 'createdTime desc', // Mới nhất lên đầu
+        pageSize: 1000,
+        pageToken: pageToken
+      });
+      allFiles = allFiles.concat(res.data.files);
+      pageToken = res.data.nextPageToken;
+    } while (pageToken);
+    return allFiles;
   } catch (error) {
     console.error('Lỗi khi lấy danh sách ảnh:', error.message);
     throw error;
@@ -51,12 +59,20 @@ export const getImagesInFolder = async (folderId) => {
 // Hàm lấy danh sách video trong 1 thư mục
 export const getVideosInFolder = async (folderId) => {
   try {
-    const res = await drive.files.list({
-      q: `'${folderId}' in parents and (mimeType contains 'video/') and trashed=false`,
-      fields: 'files(id, name, mimeType, size)',
-      orderBy: 'createdTime desc', 
-    });
-    return res.data.files;
+    let allFiles = [];
+    let pageToken = null;
+    do {
+      const res = await drive.files.list({
+        q: `'${folderId}' in parents and (mimeType contains 'video/') and trashed=false`,
+        fields: 'nextPageToken, files(id, name, mimeType, size)',
+        orderBy: 'createdTime desc', 
+        pageSize: 1000,
+        pageToken: pageToken
+      });
+      allFiles = allFiles.concat(res.data.files);
+      pageToken = res.data.nextPageToken;
+    } while (pageToken);
+    return allFiles;
   } catch (error) {
     console.error('Lỗi khi lấy danh sách video:', error.message);
     throw error;
@@ -106,11 +122,20 @@ export const downloadFileFromDrive = async (fileId, fileName) => {
 // Hàm lấy tất cả các thư mục con trong 1 thư mục cha
 export const getFoldersInFolder = async (parentId) => {
   try {
-    const res = await drive.files.list({
-      q: `'${parentId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,
-      fields: 'files(id, name)',
-    });
-    return res.data.files;
+    let allFolders = [];
+    let pageToken = null;
+    do {
+      const res = await drive.files.list({
+        q: `'${parentId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,
+        fields: 'nextPageToken, files(id, name)',
+        pageSize: 1000,
+        pageToken: pageToken
+      });
+      allFolders = allFolders.concat(res.data.files);
+      pageToken = res.data.nextPageToken;
+    } while (pageToken);
+    
+    return allFolders;
   } catch (error) {
     console.error('Lỗi khi lấy danh sách folder con:', error.message);
     throw error;

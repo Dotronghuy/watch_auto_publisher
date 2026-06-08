@@ -1,8 +1,7 @@
 # 👤 Customer Persona — I&W Carnival Việt Nam
 
-> **Mục đích:** File này mô tả chân dung khách hàng, insight mua hàng, định vị sản phẩm
-> và kịch bản tư vấn. Gemini đọc file này để hiểu KHÁCH HÀNG LÀ AI và viết content
-> phù hợp với từng nhóm.
+> **Mục đích:** File này mô tả chân dung khách hàng, insight mua hàng, định vị sản phẩm.
+> AI đọc file này để hiểu KHÁCH HÀNG LÀ AI và viết content phù hợp với từng nhóm.
 >
 > File này KHÔNG lặp lại quy tắc viết (xem watch-marketing-content.md)
 > và KHÔNG lặp lại prompt tạo ảnh (xem gpt_image_prompt.md).
@@ -24,17 +23,6 @@ Cam kết cốt lõi:
   - Đổi trả 7 ngày
   - Giao nhanh, đóng gói chỉnh chu
   - Có thể xuất hóa đơn đầy đủ
-```
-
-### Cách Định Vị — Nói Mềm, Đủ Mạnh
-
-```
-KHÔNG NÓI: "Chúng tôi là nơi bảo chứng hàng chính hãng" (quá cứng, pháp lý)
-NÊN NÓI:   "I&W Carnival Việt Nam — phân phối độc quyền, kiểm soát nguồn hàng
-             và trải nghiệm mua trên toàn hệ thống."
-
-HOẶC NGẮN HƠN:
-             "Chính hãng từ nguồn phân phối độc quyền tại Việt Nam."
 ```
 
 ---
@@ -71,29 +59,25 @@ Size mặt:      38–42mm — vừa tay, không quá to, không quá nhỏ
 Kiểu ưa thích: Dễ phối đồ, lên tay nổi bật nhưng không phô
 ```
 
-### 2.4 Điều Khách Thích Nhất Trong Content
+### 2.4 Điều Khách Thích & Không Thích Trong Content
 
 ```
-✅ Video quay chi tiết sản phẩm (mặt, niềng, dây, khóa)
-✅ Ảnh/video đeo trên tay thật — thấy rõ size, độ dày
-✅ Unbox đầy đủ (hộp, sổ, thẻ, seal)
-✅ Caption ngắn, súc tích, có chiều sâu
-✅ Tư vấn rõ ràng về size cổ tay
-✅ Thông tin bảo hành cụ thể
+✅ THÍCH:
+- Video quay chi tiết sản phẩm (mặt, niềng, dây, khóa)
+- Ảnh/video đeo trên tay thật — thấy rõ size, độ dày
+- Unbox đầy đủ (hộp, sổ, thẻ, seal)
+- Caption ngắn, súc tích, có chiều sâu
+- Tư vấn rõ ràng về size cổ tay
+- Thông tin bảo hành cụ thể
+
+❌ KHÔNG THÍCH:
+- Caption quá dài, văn phong triết lý quá sâu
+- Nội dung sến súa hoặc kiểu bán chợ
+- Nhắc giá quá lộ, quá trực tiếp
+- Tư vấn vòng vo, không rõ thông tin
 ```
 
-### 2.5 Điều Khách Không Thích
-
-```
-❌ Caption quá dài, văn phong triết lý quá sâu
-❌ Nội dung sến súa hoặc kiểu bán chợ
-❌ Nhắc giá quá lộ, quá trực tiếp
-❌ Tư vấn vòng vo, không rõ thông tin
-❌ Không cho kiểm hàng
-❌ Giao hàng chậm, đóng gói sơ sài
-```
-
-### 2.6 Thông Điệp Chạm Đúng Nhóm Nam
+### 2.5 Thông Điệp Chạm Đúng Nhóm Nam
 
 ```
 "Một chiếc đồng hồ không cần quá phô trương.
@@ -144,28 +128,21 @@ Nhưng đủ để hoàn thiện cả phong thái."
 
 ## 🎁 PHẦN 4 — Chân Dung Khách Mua Quà
 
-### 4.1 Đặc Điểm
-
 ```
+Đặc điểm:
 - Thường là nữ mua tặng nam (bố, người yêu, chồng, đồng nghiệp)
 - Ít kiến thức về đồng hồ — cần được tư vấn cụ thể
 - Quan tâm đến: hộp đẹp, full box, chính hãng, đổi trả 7 ngày, kiểm hàng, giao nhanh
 - Dịp mua: sinh nhật, Valentine, 8/3, 20/11, Tết, lễ, kỷ niệm
-```
 
-### 4.2 Rào Cản Lớn Nhất
+Rào cản lớn nhất:
+  "Không biết chọn mẫu nào phù hợp với người nhận"
+  → Đây là điểm để kéo inbox cực hiệu quả
 
-```
-"Không biết chọn mẫu nào phù hợp với người nhận"
-→ Đây là điểm để kéo inbox cực hiệu quả
-```
-
-### 4.3 Thông Điệp Kéo Inbox Nhóm Quà Tặng
-
-```
-"Không biết chọn đồng hồ nam không sao.
-Chỉ cần cho I&W Carnival biết độ tuổi, phong cách và cổ tay người nhận —
-bên mình sẽ gợi ý mẫu phù hợp."
+Thông điệp kéo inbox:
+  "Không biết chọn đồng hồ nam không sao.
+  Chỉ cần cho I&W Carnival biết độ tuổi, phong cách và cổ tay người nhận —
+  bên mình sẽ gợi ý mẫu phù hợp."
 ```
 
 ---
@@ -212,10 +189,10 @@ Rào cản 1: "Mua online không biết có đúng hàng không"
 → Giải pháp: Nhấn mạnh kiểm hàng trước khi nhận, full seal, serial number có thể tra
 
 Rào cản 2: "Bên kia rao rẻ hơn"
-→ Giải pháp: Không hạ bệ đối thủ — nâng giá trị của mình (xem kịch bản Phần 8)
+→ Giải pháp: Không hạ bệ đối thủ — nâng giá trị của mình
 
 Rào cản 3: "Tay nhỏ không biết có vừa không"
-→ Giải pháp: Kéo khách gửi ảnh/số đo — tăng tỷ lệ chốt (xem kịch bản Phần 8)
+→ Giải pháp: Kéo khách gửi ảnh/số đo — tăng tỷ lệ chốt
 
 Rào cản 4: "Không biết chọn mẫu nào"
 → Giải pháp: Tư vấn theo phong cách, công việc, cổ tay — đây là điểm mạnh của shop
@@ -228,7 +205,7 @@ Rào cản 5: "Sợ mua xong không có hỗ trợ"
 
 ## 📦 PHẦN 7 — Định Vị Từng Sản Phẩm Chủ Lực
 
-> Gemini dùng phần này để viết content đúng với từng mẫu đồng hồ.
+> AI dùng phần này để viết content đúng với từng mẫu đồng hồ.
 > Không mô tả thông số kỹ thuật — mô tả cảm nhận và phong cách.
 
 ### 751G — Mạnh Mẽ, Chỉn Chu, Hợp Đi Làm & Làm Quà
@@ -236,11 +213,6 @@ Rào cản 5: "Sợ mua xong không có hỗ trợ"
 ```
 Định vị: Mẫu nam mạnh mẽ, khỏe khoắn, lên tay sang, hợp đi làm và làm quà
 Khách phù hợp: Nam 28–45, công sở, ưa phong cách chỉn chu
-
-Cách viết nội dung:
-  "751G dành cho người thích một chiếc đồng hồ nam đủ mạnh mẽ,
-   đủ chỉn chu và đủ nổi bật khi lên tay."
-
 Tông giọng: Tự tin, trưởng thành, không cần giải thích nhiều
 ```
 
@@ -256,10 +228,6 @@ Phân biệt 3 phiên bản:
   G2: Đính đá vừa đủ → nổi bật hơn, vẫn thanh lịch
   G3: Full đá → bắt sáng mạnh, dành cho người thích hiệu ứng ấn tượng
 
-Cách viết nội dung:
-  "55851 là lựa chọn cho người thích một chiếc đồng hồ có điểm nhấn rõ hơn trên cổ tay.
-   G1 gọn gàng. G2 nổi bật vừa đủ. G3 bắt sáng mạnh hơn."
-
 Tông giọng: Năng động, bắt trend, nhưng không rẻ tiền
 ```
 
@@ -269,13 +237,7 @@ Tông giọng: Năng động, bắt trend, nhưng không rẻ tiền
 
 ```
 Định vị: Mẫu khỏe khoắn, nam tính, phù hợp đi làm, đi chơi, dùng hằng ngày
-
 Điểm mạnh: Nhìn khỏe nhất trong dòng — phong cách luxury sport
-
-Cách viết nội dung:
-  "Không quá cầu kỳ. Nhưng lên tay rất nam tính.
-   735G là mẫu bạn đeo mỗi ngày mà không bao giờ thấy chán."
-
 Tông giọng: Mộc mạc, thực tế, không phô trương
 ```
 
@@ -285,182 +247,5 @@ Tông giọng: Mộc mạc, thực tế, không phô trương
 
 ```
 Định vị: Mẫu mới dành cho nam thích thiết kế hiện đại, dễ đeo, hợp đi làm và phối đồ
-
-Cách ra mắt:
-  "Một lựa chọn mới cho người thích đồng hồ nam hiện đại,
-   dễ đeo và đủ chỉn chu mỗi ngày."
-
 Tông giọng: Mới mẻ, tươi, không nặng về truyền thống
-```
-
----
-
-## 💬 PHẦN 8 — Kịch Bản Tư Vấn Khách Hàng
-
-> Gemini dùng phần này để tạo mẫu trả lời inbox/comment.
-> Giọng: Thân thiện, chuyên nghiệp, ngắn gọn — không vòng vo.
-
----
-
-### Kịch Bản 1 — Khách Hỏi Giá
-
-```
-KHÔNG NÊN:
-  "Mẫu này 4 triệu anh nhé."
-
-NÊN DÙNG:
-  "Dạ mẫu này bên em đang có giá 4.xxx.000đ ạ.
-   Hàng chính hãng I&W Carnival, full box/sổ thẻ, bảo hành 5 năm,
-   được kiểm hàng trước khi nhận.
-   Mẫu này lên tay khá khỏe, hợp đi làm và dùng hằng ngày anh nhé."
-
-Lý do: Gắn giá với giá trị — khách hiểu mình đang trả tiền cho gì.
-```
-
----
-
-### Kịch Bản 2 — Khách Nói "Bên Kia Rẻ Hơn"
-
-```
-NÊN DÙNG:
-  "Dạ em hiểu ạ. Hiện cùng một mẫu trên thị trường có thể có nhiều mức giá khác nhau.
-   Bên em là nguồn phân phối chính hãng I&W Carnival tại Việt Nam,
-   hàng mới nguyên niêm phong, full box/sổ thẻ, bảo hành 5 năm và hỗ trợ kiểm hàng trước khi nhận.
-   Nếu anh ưu tiên giá rẻ nhất thì có thể sẽ có nơi thấp hơn,
-   còn nếu anh cần hàng chuẩn, chính sách rõ ràng và yên tâm sau mua thì bên em hỗ trợ rất kỹ ạ."
-
-Lý do: Không hạ bệ đối thủ — nâng giá trị của mình, để khách tự quyết.
-```
-
----
-
-### Kịch Bản 3 — Khách Hỏi "Có Chính Hãng Không?"
-
-```
-NÊN DÙNG:
-  "Dạ chính hãng 100% anh/chị nhé.
-   I&W Carnival Việt Nam là đơn vị phân phối độc quyền chính hãng,
-   sản phẩm mới nguyên niêm phong, full box/sổ thẻ, bảo hành 5 năm
-   và có thể xuất hóa đơn đầy đủ ạ."
-
-Lý do: Ngắn — rõ — mạnh. Không giải thích dài dòng.
-```
-
----
-
-### Kịch Bản 4 — Khách Hỏi "Tay Nhỏ Đeo Được Không?"
-
-```
-NÊN DÙNG:
-  "Dạ được anh ạ. Mẫu bên em thường nằm trong size 38–42mm nên khá dễ lên tay.
-   Anh gửi giúp em chu vi cổ tay hoặc ảnh cổ tay,
-   em sẽ tư vấn mẫu lên tay vừa nhất, tránh bị quá to hoặc quá nhỏ ạ."
-
-Lý do: Kéo khách gửi ảnh/số đo → tăng tỷ lệ chốt vì đã có tương tác cụ thể.
-```
-
----
-
-### Kịch Bản 5 — Khách Không Biết Chọn Mẫu Tặng
-
-```
-NÊN DÙNG:
-  "Dạ không biết chọn mẫu nào không sao ạ.
-   Anh/chị cho em biết người nhận khoảng bao nhiêu tuổi,
-   phong cách ăn mặc thế nào và chu vi cổ tay nếu biết —
-   em sẽ gợi ý 2–3 mẫu phù hợp nhất luôn ạ."
-
-Lý do: Hướng dẫn khách cung cấp thông tin → tư vấn chính xác → tin tưởng → chốt.
-```
-
----
-
-## 📹 PHẦN 9 — Series Nội Dung Ưu Tiên Làm Ngay
-
-> Các series dưới đây được xếp theo thứ tự hiệu quả với tệp khách hàng hiện tại.
-> Gemini có thể dùng phần này để đề xuất ý tưởng video/ảnh.
-
-### Series 1 — "Lên Tay Thật" (Hiệu Quả Nhất)
-
-```
-Mỗi video: 10–15 giây
-Nội dung mỗi video: Một mẫu đồng hồ đeo trên tay thật
-Danh sách: 751G / 55851G1 / 55851G2 / 55851G3 / 735G1 / 735G2 / 55883G
-Text overlay: "Lên tay có khí chất hơn ảnh."
-Cấu trúc video lý tưởng:
-  - 2s: Cận mặt đồng hồ bắt sáng
-  - 3s: Lia dây / niềng / khóa
-  - 3s: Đeo lên cổ tay
-  - 3s: Xoay cổ tay dưới ánh sáng
-  - 2s: Text "Chính hãng | Bảo hành 5 năm | Kiểm hàng trước khi nhận"
-```
-
-### Series 2 — "Chọn Mẫu Theo Cổ Tay"
-
-```
-Mỗi video: 10–15 giây
-Chủ đề các tập:
-  - Tay nhỏ nên chọn mẫu nào?
-  - Tay vừa nên chọn mẫu nào?
-  - Nam đi làm nên chọn mẫu nào?
-  - Mua tặng nam nên chọn mẫu nào?
-  - Thích phong cách khỏe khoắn nên chọn mẫu nào?
-  - Thích sang hơn, tinh tế hơn nên chọn mẫu nào?
-CTA cuối video: "Gửi ảnh cổ tay, I&W Carnival tư vấn mẫu hợp nhất."
-```
-
-### Series 3 — "Quay Chi Tiết Sản Phẩm"
-
-```
-Nội dung mỗi clip:
-  - Cận mặt kính sapphire
-  - Cận dây thép / dây da / dây cao su
-  - Cận niềng và kim
-  - Mặt đen / xanh / xám dưới ánh studio
-  - Cận hộp / sổ / thẻ bảo hành
-  - Lia ánh sáng studio qua mặt đồng hồ
-Text: "Đẹp nhất là khi nhìn gần."
-```
-
----
-
-## 📊 PHẦN 10 — Ghi Chú Hệ Thống
-
-```yaml
-persona_notes:
-  version: "1.0"
-  created: "2026-05"
-  file_purpose: "customer_persona"
-  primary_target:
-    gender: male
-    age_range: "25–45"
-    priority: "Nhóm chính — tập trung nhất"
-  secondary_target:
-    gender: female
-    age_range: "20–35"
-    priority: "Nhóm phụ — khai thác dịp lễ và quà tặng"
-  key_products:
-    - sku_prefix: "751G"
-      positioning: "Mạnh mẽ, chỉn chu, hợp đi làm và làm quà"
-    - sku_prefix: "55851G"
-      variants: ["G1 niềng trơn", "G2 đính đá vừa", "G3 full đá"]
-      positioning: "Trẻ, bắt mắt, dễ chốt"
-    - sku_prefix: "735G"
-      positioning: "Khỏe khoắn, nam tính, dùng hằng ngày"
-    - sku_prefix: "55883G"
-      positioning: "Mẫu mới, hiện đại, dễ đeo"
-  trust_factors_by_priority:
-    1: "Ảnh/video chi tiết rõ nét"
-    2: "Video đeo tay thật"
-    3: "Video unbox full box"
-    4: "Bảo hành 5 năm"
-    5: "Kiểm hàng trước khi nhận"
-    6: "Đổi trả 7 ngày"
-    7: "Tư vấn nhanh, rõ ràng"
-  core_message: >
-    Sang nhưng thực tế. Đẹp nhưng dễ hiểu.
-    Chính hãng nhưng không khô. Gần gũi nhưng không rẻ tiền.
-  related_files:
-    content_style: "watch-marketing-content.md"
-    image_generation: "gpt_image_prompt.md"
 ```

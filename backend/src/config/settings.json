@@ -6,9 +6,10 @@
   "testInterval": "1",
   "igDelayMin": "1",
   "igDelayMax": "2",
+  "chatGptProjectUrl": "https://chatgpt.com/g/g-p-6a21019c9228819187d6284f9b4ff8f9-image-watch-ai/project",
+  "googleSheetId": "1tWg6zzAw6F9_2vlvOFfPy_2tV88xFGPB-4f5NvbwS_M",
   "aiTasks": {
-    "imageChatUrl": "6a1a5e49-0eb0-83ec-8adf-81e749f6b749",
-    "fbChatUrl": "6a1a5d63-13a4-83ec-adc6-477762d82363",
-    "igChatUrl": "6a1a5d8c-2118-83ec-82d6-37b50fb408c4"
+    "fbChatUrl": "6a269446-402c-83ec-b136-7d0a6d1dc389",
+    "igChatUrl": "6a26945f-2bd8-83ec-b978-cc94392526b9"
   }
 }

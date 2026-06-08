@@ -1,58 +1,68 @@
-import { Activity, BarChart2, Calendar, FileText, Image as ImageIcon, Send, TrendingUp, Users, HardDrive, Share2, Database, CheckCircle, Clock } from 'lucide-react';
-import { Facebook, Instagram, Linkedin, Twitter, TikTok, Threads } from '../components/SocialIcons';
+import { Activity, BarChart2, Send, HardDrive, Share2, Database, CheckCircle, Clock, TrendingUp, Zap, Calendar, ArrowRight, Play, RefreshCw, ScanSearch } from 'lucide-react';
+import { Facebook, Instagram, TikTok, Threads } from '../components/SocialIcons';
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { 
-  BarChart, 
-  Bar, 
-  XAxis, 
-  YAxis, 
-  CartesianGrid, 
-  Tooltip, 
-  ResponsiveContainer,
-  Cell
+import {
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell
 } from 'recharts';
 import './Dashboard.css';
 
+const CustomTooltip = ({ active, payload, label }) => {
+  if (active && payload?.length) {
+    return (
+      <div style={{
+        background: 'rgba(18,18,24,.95)', border: '1px solid rgba(255,255,255,.1)',
+        borderRadius: '8px', padding: '8px 12px', backdropFilter: 'blur(8px)'
+      }}>
+        <p style={{ margin: 0, fontSize: '12px', fontWeight: 600, color: '#fff' }}>{label}</p>
+        <p style={{ margin: '4px 0 0', fontSize: '11px', color: 'var(--color-primary)' }}>
+          {payload[0].value} bài đăng
+        </p>
+      </div>
+    );
+  }
+  return null;
+};
+
 const Dashboard = () => {
   const [timeRange, setTimeRange] = useState('7days');
+  const [settings, setSettings] = useState({ timeSlots: [] });
   const [stats, setStats] = useState({
-    activeWorkflows: 0,
-    totalPosts: 0,
-    successRate: 100,
-    storageUsed: 0,
-    chartData: [
-      { name: '01/01', value: 0 }
-    ],
+    activeWorkflows: 0, totalPosts: 0, successRate: 100,
+    storageUsed: 0, storageLimit: 2048, chartData: [],
     socialHealth: { connected: 0, total: 4, platforms: {} },
-    dbHealth: 100,
-    recentActivities: []
+    dbHealth: 100, recentActivities: []
   });
   const navigate = useNavigate();
 
   useEffect(() => {
-    const fetchStats = async () => {
+    const fetchAll = async () => {
       try {
-        const res = await fetch(`http://localhost:3000/api/dashboard?timeRange=${timeRange}`);
-        const data = await res.json();
-        
-        setStats({
-          ...data,
-          chartData: Array.isArray(data.chartData) ? data.chartData : []
-        });
-      } catch (err) {
-        console.error('Failed to fetch stats', err);
-      }
+        const [statsRes, settingsRes] = await Promise.all([
+          fetch(`/api/dashboard?timeRange=${timeRange}`),
+          fetch('/api/settings')
+        ]);
+        const statsData = await statsRes.json();
+        const settingsData = await settingsRes.json();
+        setStats({ ...statsData, chartData: Array.isArray(statsData.chartData) ? statsData.chartData : [] });
+        setSettings(settingsData);
+      } catch (err) { console.error(err); }
     };
-
-    fetchStats();
-    // Tự động làm mới mỗi 10 giây
-    const interval = setInterval(fetchStats, 10000);
+    fetchAll();
+    const interval = setInterval(fetchAll, 10000);
     return () => clearInterval(interval);
   }, [timeRange]);
 
+  const storagePercent = stats.storageUsed > 0 ? Math.min(100, (stats.storageUsed / (stats.storageLimit || 2048)) * 100) : 0;
+  const platforms = stats.socialHealth?.platforms || {};
+  const now = new Date();
+  const currentTime = `${now.getHours().toString().padStart(2,'0')}:${now.getMinutes().toString().padStart(2,'0')}`;
+  const upcomingSlots = (settings.timeSlots || []).filter(slot => slot > currentTime);
+  const passedSlots = (settings.timeSlots || []).filter(slot => slot <= currentTime);
+
   return (
     <div className="dashboard">
+      {/* ─── Header ─── */}
       <div className="dashboard-header">
         <h1>Chào mừng trở lại, Toby!</h1>
         <div className="status-indicator">
@@ -61,170 +71,218 @@ const Dashboard = () => {
         </div>
       </div>
 
+      {/* ═══ Stats Grid ═══ */}
       <div className="stats-grid">
-        <div className="stat-card glass glow-primary">
+        <div className="stat-card" onClick={() => navigate('/database')}>
           <div className="stat-header">
-            <h3>TỔNG BÀI ĐÃ ĐĂNG</h3>
-            <div className="stat-icon-wrapper blue">
-              <Send size={16} />
-            </div>
+            <h3>Tổng bài đã đăng</h3>
+            <div className="stat-icon-wrapper blue"><Send size={14} /></div>
           </div>
-          <div className="stat-value">
-            <h2>{stats.totalPosts}</h2>
-            <span className="trend positive">--</span>
-          </div>
+          <div className="stat-value"><h2>{stats.totalPosts}</h2></div>
         </div>
 
-        <div className="stat-card glass glow-primary">
+        <div className="stat-card" onClick={() => navigate('/calendar')}>
           <div className="stat-header">
-            <h3>TỶ LỆ DUYỆT</h3>
-            <div className="stat-icon-wrapper green">
-              <CheckCircle size={16} />
-            </div>
+            <h3>Tỷ lệ duyệt</h3>
+            <div className="stat-icon-wrapper green"><CheckCircle size={14} /></div>
           </div>
-          <div className="stat-value">
-            <h2>{stats.successRate}%</h2>
-            <span className="trend positive">--</span>
-          </div>
-        </div>
-
-        <div className="stat-card glass glow-primary" onClick={() => navigate('/drive')} style={{cursor: 'pointer'}}>
-          <div className="stat-header">
-            <h3>DUNG LƯỢNG ĐÃ DÙNG</h3>
-            <div className="stat-icon-wrapper orange">
-              <HardDrive size={16} />
-            </div>
-          </div>
-          <div className="stat-value">
-            <h2>{stats.storageUsed} <span className="unit">GB</span></h2>
-          </div>
+          <div className="stat-value"><h2>{stats.successRate}<span className="unit">%</span></h2></div>
           <div className="progress-bar-container">
-            <div className="progress-bar-fill green" style={{width: '10%'}}></div>
+            <div className="progress-bar-fill green" style={{width: `${stats.successRate}%`}}></div>
           </div>
         </div>
 
-        <div className="stat-card glass glow-primary cursor-pointer" onClick={() => navigate('/workflow')} style={{cursor: 'pointer'}}>
+        <div className="stat-card" onClick={() => navigate('/drive')}>
           <div className="stat-header">
-            <h3>SỐ LUỒNG ĐANG CHẠY</h3>
-            <div className="stat-icon-wrapper pink">
-              <Activity size={16} />
-            </div>
+            <h3>Dung lượng Drive</h3>
+            <div className="stat-icon-wrapper orange"><HardDrive size={14} /></div>
           </div>
-          <div className="stat-value">
-            <h2>{stats.activeWorkflows} <span className="unit">Active</span></h2>
+          <div className="stat-value"><h2>{stats.storageUsed}<span className="unit">GB</span></h2></div>
+          <div className="progress-bar-container">
+            <div className="progress-bar-fill blue" style={{width: `${storagePercent}%`}}></div>
           </div>
+        </div>
+
+        <div className="stat-card" onClick={() => navigate('/workflow')}>
+          <div className="stat-header">
+            <h3>Luồng đang chạy</h3>
+            <div className="stat-icon-wrapper pink"><Activity size={14} /></div>
+          </div>
+          <div className="stat-value"><h2>{stats.activeWorkflows}<span className="unit">Active</span></h2></div>
         </div>
       </div>
 
+      {/* ═══ Quick Actions Bar ═══ */}
+      <div className="quick-actions-bar">
+        <button className="qa-btn primary" onClick={() => navigate('/workflow')}>
+          <Play size={13} /> Chạy luồng ngay
+        </button>
+        <button className="qa-btn" onClick={() => navigate('/calendar')}>
+          <Calendar size={13} /> Xem lịch đăng
+        </button>
+        <button className="qa-btn" onClick={async () => {
+          await fetch('/api/trigger-sync', { method: 'POST' });
+        }}>
+          <RefreshCw size={13} /> Đồng bộ dữ liệu
+        </button>
+        <button className="qa-btn" onClick={() => navigate('/database')}>
+          <ScanSearch size={13} /> Quản lý sản phẩm
+        </button>
+      </div>
+
+      {/* ═══ Main Content ═══ */}
       <div className="dashboard-main">
-        <div className="chart-section glass">
+        {/* ─── Chart ─── */}
+        <div className="chart-section">
           <div className="chart-header">
-            <h3>Số bài đã đăng được</h3>
-            <div className="chart-actions">
-              <select className="week-selector" value={timeRange} onChange={(e) => setTimeRange(e.target.value)} style={{
-                background: 'var(--color-surface)',
-                color: 'var(--color-text)',
-                border: '1px solid var(--border-light)',
-                padding: '6px 12px',
-                borderRadius: '6px',
-                outline: 'none',
-                fontSize: '13px'
-              }}>
-                <option value="7days">7 ngày qua</option>
-                <option value="today">Hôm nay</option>
-                <option value="yesterday">Hôm qua</option>
-                <option value="this_month">Tháng này</option>
-                <option value="last_month">Tháng trước</option>
-              </select>
-            </div>
+            <h3>
+              <span className="chart-icon"><BarChart2 size={14} /></span>
+              Số bài đã đăng
+            </h3>
+            <select className="time-range-select" value={timeRange} onChange={(e) => setTimeRange(e.target.value)}>
+              <option value="7days">7 ngày qua</option>
+              <option value="today">Hôm nay</option>
+              <option value="yesterday">Hôm qua</option>
+              <option value="this_month">Tháng này</option>
+              <option value="last_month">Tháng trước</option>
+            </select>
           </div>
           <div className="chart-container">
-            <ResponsiveContainer width="100%" height={300}>
-              <BarChart data={stats.chartData}>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="rgba(255,255,255,0.1)" />
-                <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{fill: 'var(--color-text-muted)', fontSize: 12}} dy={10} />
-                <Tooltip 
-                  cursor={{fill: 'rgba(255,255,255,0.05)'}}
-                  contentStyle={{backgroundColor: 'var(--color-surface-hover)', border: '1px solid var(--border-light)', borderRadius: '8px'}}
-                />
-                <Bar dataKey="value" radius={[4, 4, 0, 0]}>
+            <ResponsiveContainer width="100%" height={200}>
+              <BarChart data={stats.chartData} barCategoryGap="20%">
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="rgba(255,255,255,0.04)" />
+                <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: 'rgba(255,255,255,.35)', fontSize: 10 }} dy={6} />
+                <YAxis axisLine={false} tickLine={false} tick={{ fill: 'rgba(255,255,255,.25)', fontSize: 10 }} width={24} allowDecimals={false} />
+                <Tooltip content={<CustomTooltip />} cursor={{ fill: 'rgba(255,255,255,0.03)' }} />
+                <Bar dataKey="value" radius={[6, 6, 0, 0]} maxBarSize={36}>
                   {stats.chartData.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={index % 2 === 0 ? 'var(--color-primary)' : 'var(--color-info)'} />
+                    <Cell key={`cell-${index}`} fill={entry.value > 0 ? 'url(#barGrad)' : 'rgba(255,255,255,.04)'} />
                   ))}
                 </Bar>
+                <defs>
+                  <linearGradient id="barGrad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="var(--color-primary)" stopOpacity={0.9} />
+                    <stop offset="100%" stopColor="var(--color-primary)" stopOpacity={0.3} />
+                  </linearGradient>
+                </defs>
               </BarChart>
             </ResponsiveContainer>
           </div>
         </div>
 
+        {/* ─── Sidebar ─── */}
         <div className="dashboard-sidebar">
-          <div className="health-cards">
-            <div className="health-card glass cursor-pointer" onClick={() => navigate('/settings')} style={{cursor: 'pointer'}}>
-              <div className="health-header">
-                <Share2 size={16} className="blue" />
-                <span>SOCIAL HEALTH</span>
-              </div>
-              <div className="health-value">
-                <h2>{stats.socialHealth.connected}/{stats.socialHealth.total}</h2>
-                <span className="status-dot"></span>
-              </div>
-              <div className="social-icons">
-                <Facebook size={14} className={stats.socialHealth.platforms?.facebook ? '' : 'text-muted dim'} />
-                <Instagram size={14} className={stats.socialHealth.platforms?.instagram ? '' : 'text-muted dim'} />
-                <TikTok size={14} className={stats.socialHealth.platforms?.tiktok ? '' : 'text-muted dim'} />
-                <Threads size={14} className={stats.socialHealth.platforms?.threads ? '' : 'text-muted dim'} />
-              </div>
+          {/* Today Schedule */}
+          <div className="sidebar-section">
+            <div className="sidebar-section-header">
+              <h4><Clock size={13} style={{color: '#a5b4fc'}} /> Lịch đăng hôm nay</h4>
+              <span className="view-link" onClick={() => navigate('/calendar')}>Xem ↗</span>
             </div>
-
-            <div className="health-card glass">
-              <div className="health-header">
-                <Database size={16} className="green" />
-                <span>DB HEALTH</span>
-              </div>
-              <div className="health-value">
-                <h2>100%</h2>
-                <span className="unit">Opt</span>
-              </div>
-              <div className="progress-bar-container">
-                <div className="progress-bar-fill green" style={{width: '100%'}}></div>
-              </div>
-            </div>
-          </div>
-
-          <div className="recent-activity glass">
-            <div className="recent-header">
-              <h3>Recent Activity</h3>
-              <span className="view-all">View All</span>
-            </div>
-            <ul className="activity-list">
-              {stats.recentActivities && stats.recentActivities.length > 0 ? (
-                stats.recentActivities.slice(0, 5).map((act, index) => {
-                  let Icon = Clock;
-                  let colorClass = 'pink';
-                  if (act.type === 'success') { Icon = CheckCircle; colorClass = 'green'; }
-                  if (act.type === 'info') { Icon = Activity; colorClass = 'blue'; }
-
-                  return (
-                    <li key={act.id || index}>
-                      <div className={`activity-icon ${colorClass}`}><Icon size={14} /></div>
-                      <div className="activity-content">
-                        <p>{act.message}</p>
-                        <span>{new Date(act.timestamp).toLocaleTimeString()}</span>
-                      </div>
-                    </li>
-                  )
-                })
+            <div className="schedule-slots">
+              {(settings.timeSlots || []).length > 0 ? (
+                <>
+                  {passedSlots.map((slot, i) => (
+                    <div key={`p-${i}`} className="slot-item done">
+                      <CheckCircle size={12} />
+                      <span className="slot-time">{slot}</span>
+                      <span className="slot-status">Đã qua</span>
+                    </div>
+                  ))}
+                  {upcomingSlots.map((slot, i) => (
+                    <div key={`u-${i}`} className="slot-item upcoming">
+                      <Clock size={12} />
+                      <span className="slot-time">{slot}</span>
+                      <span className="slot-status">Sắp tới</span>
+                    </div>
+                  ))}
+                </>
               ) : (
-                <li>
-                  <div className="activity-icon blue"><CheckCircle size={14} /></div>
-                  <div className="activity-content">
-                    <p>Hệ thống khởi tạo thành công.</p>
-                    <span>Just now</span>
-                  </div>
-                </li>
+                <div className="slot-empty">Chưa cài đặt khung giờ</div>
               )}
-            </ul>
+            </div>
           </div>
+
+          {/* Platform Status */}
+          <div className="sidebar-section">
+            <div className="sidebar-section-header">
+              <h4><Share2 size={13} style={{color: '#60a5fa'}} /> Trạng thái nền tảng</h4>
+            </div>
+            <div className="platform-grid">
+              <div className={`platform-chip ${platforms.facebook ? 'active' : ''}`}>
+                <Facebook size={13} />
+                <span>Facebook</span>
+                <span className={`chip-dot ${platforms.facebook ? 'on' : 'off'}`}></span>
+              </div>
+              <div className={`platform-chip ${platforms.instagram ? 'active' : ''}`}>
+                <Instagram size={13} />
+                <span>Instagram</span>
+                <span className={`chip-dot ${platforms.instagram ? 'on' : 'off'}`}></span>
+              </div>
+              <div className={`platform-chip ${platforms.tiktok ? 'active' : ''}`}>
+                <TikTok size={13} />
+                <span>TikTok</span>
+                <span className={`chip-dot ${platforms.tiktok ? 'on' : 'off'}`}></span>
+              </div>
+              <div className={`platform-chip ${platforms.threads ? 'active' : ''}`}>
+                <Threads size={13} />
+                <span>Threads</span>
+                <span className={`chip-dot ${platforms.threads ? 'on' : 'off'}`}></span>
+              </div>
+            </div>
+          </div>
+
+          {/* DB + Storage Mini */}
+          <div className="sidebar-section">
+            <div className="sidebar-section-header">
+              <h4><Database size={13} style={{color: '#34d399'}} /> Sức khỏe hệ thống</h4>
+            </div>
+            <div className="health-mini-grid">
+              <div className="health-mini">
+                <div className="health-mini-label">Database</div>
+                <div className="health-mini-value green">100%</div>
+                <div className="progress-bar-container"><div className="progress-bar-fill green" style={{width: '100%'}}></div></div>
+              </div>
+              <div className="health-mini">
+                <div className="health-mini-label">Drive</div>
+                <div className="health-mini-value blue">{storagePercent.toFixed(1)}%</div>
+                <div className="progress-bar-container"><div className="progress-bar-fill blue" style={{width: `${storagePercent}%`}}></div></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* ═══ Bottom: Recent Activity ═══ */}
+      <div className="activity-section">
+        <div className="activity-section-header">
+          <h3><span className="section-icon"><Activity size={13} /></span> Hoạt động gần đây</h3>
+          <span className="view-link">Xem tất cả</span>
+        </div>
+        <div className="activity-grid">
+          {stats.recentActivities && stats.recentActivities.length > 0 ? (
+            stats.recentActivities.slice(0, 6).map((act, idx) => {
+              let Icon = Clock, colorClass = 'pink', borderClass = 'info';
+              if (act.type === 'success') { Icon = CheckCircle; colorClass = 'green'; borderClass = 'success'; }
+              if (act.type === 'info') { Icon = Activity; colorClass = 'blue'; borderClass = 'info'; }
+              return (
+                <div key={idx} className={`activity-card ${borderClass}`}>
+                  <div className={`activity-card-icon ${colorClass}`}><Icon size={13} /></div>
+                  <div className="activity-card-body">
+                    <p>{act.message}</p>
+                    <span>{new Date(act.timestamp).toLocaleString('vi-VN')}</span>
+                  </div>
+                </div>
+              );
+            })
+          ) : (
+            <div className="activity-card success">
+              <div className="activity-card-icon green"><CheckCircle size={13} /></div>
+              <div className="activity-card-body">
+                <p>Hệ thống khởi tạo thành công.</p>
+                <span>Vừa xong</span>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>

@@ -1,24 +1,26 @@
-import { useState, useEffect } from 'react';
-import { ChevronLeft, ChevronRight, Edit2, CheckCircle } from 'lucide-react';
-import Swal from 'sweetalert2';
-import { Twitter } from '../components/SocialIcons';
+import { useState, useEffect, useMemo } from 'react';
+import { ChevronLeft, ChevronRight, CheckCircle, Clock, CalendarDays, BarChart3, Sparkles } from 'lucide-react';
 import './Calendar.css';
 
 const CalendarPage = () => {
   const [currentDate, setCurrentDate] = useState(new Date());
   const [settings, setSettings] = useState({ timeSlots: [] });
   const [history, setHistory] = useState([]);
-  const days = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
-  
+  const [metrics, setMetrics] = useState([]);
+
   useEffect(() => {
-    fetch('http://localhost:3000/api/settings').then(r => r.json()).then(data => setSettings(data));
-    fetch('http://localhost:3000/api/history').then(r => r.json()).then(data => setHistory(data));
+    fetch('/api/settings').then(r => r.json()).then(data => setSettings(data));
+    fetch('/api/history').then(r => r.json()).then(data => setHistory(data));
+    // Also fetch post metrics for richer calendar data
+    fetch('/api/stats').then(r => r.json()).then(data => {
+      if (data.recentPosts) setMetrics(data.recentPosts);
+    }).catch(() => {});
   }, []);
 
   const prevMonth = () => setCurrentDate(new Date(currentDate.getFullYear(), currentDate.getMonth() - 1, 1));
   const nextMonth = () => setCurrentDate(new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 1));
+  const goToday = () => setCurrentDate(new Date());
 
-  // Generate calendar grid
   const year = currentDate.getFullYear();
   const month = currentDate.getMonth();
   const firstDayOfMonth = new Date(year, month, 1).getDay();
@@ -26,129 +28,196 @@ const CalendarPage = () => {
   const daysInPrevMonth = new Date(year, month, 0).getDate();
 
   const dates = [];
-  
-  // Previous month padding
   for (let i = 0; i < firstDayOfMonth; i++) {
     dates.push({ date: new Date(year, month - 1, daysInPrevMonth - firstDayOfMonth + i + 1), isCurrentMonth: false });
   }
-  // Current month
   for (let i = 1; i <= daysInMonth; i++) {
     dates.push({ date: new Date(year, month, i), isCurrentMonth: true });
   }
-  // Next month padding
-  const remaining = 7 - (dates.length % 7);
-  if (remaining < 7) {
-    for (let i = 1; i <= remaining; i++) {
-      dates.push({ date: new Date(year, month + 1, i), isCurrentMonth: false });
-    }
+  const remaining = (7 - (dates.length % 7)) % 7;
+  for (let i = 1; i <= remaining; i++) {
+    dates.push({ date: new Date(year, month + 1, i), isCurrentMonth: false });
   }
 
   const today = new Date();
   today.setHours(0, 0, 0, 0);
-  const colors = ['facebook', 'instagram', 'linkedin', 'twitter'];
 
-  // Map events to dates
+  // Build a map of history events by date key
+  const historyMap = useMemo(() => {
+    const map = {};
+    // From posted_images
+    history.forEach(item => {
+      const d = new Date(item.timestamp);
+      const key = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+      if (!map[key]) map[key] = [];
+      const label = item.sku || item.name || item.productName || `Ảnh #${(item.id || '').toString().slice(-5)}`;
+      map[key].push({ type: 'posted', text: label, platform: 'FB/IG' });
+    });
+    // From post_metrics
+    metrics.forEach(item => {
+      const d = new Date(item.timestamp);
+      const key = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+      if (!map[key]) map[key] = [];
+      const label = item.sku || `Post ${(item.post_id || '').slice(-6)}`;
+      const existing = map[key].find(e => e.text === label);
+      if (!existing) {
+        map[key].push({
+          type: item.platform === 'instagram' ? 'instagram' : 'facebook',
+          text: label,
+          platform: item.platform,
+          likes: item.likes,
+          comments: item.comments
+        });
+      }
+    });
+    return map;
+  }, [history, metrics]);
+
   const calendarCells = dates.map(d => {
     const dTime = d.date.getTime();
     const isToday = dTime === today.getTime();
-    
+    const dayOfWeek = d.date.getDay();
+    const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+    const key = `${d.date.getFullYear()}-${d.date.getMonth()}-${d.date.getDate()}`;
+
     let events = [];
 
-    // For past days, show history
     if (dTime < today.getTime()) {
-      history.forEach(item => {
-        const itemDate = new Date(item.timestamp);
-        itemDate.setHours(0, 0, 0, 0);
-        if (itemDate.getTime() === dTime) {
-          // item có thể có sku, name, hoặc chỉ có id
-          const label = item.sku || item.name || item.productName || `#${item.id?.slice(-6) || '?'}`;
-          events.push({
-            type: 'linkedin',
-            text: `Đã đăng: ${label}`,
-            platform: 'History',
-            isPast: true
-          });
-        }
-      });
+      // Past — show history
+      events = historyMap[key] || [];
     } else {
-      // For today and future, show timeSlots from settings
+      // Today + Future — show scheduled time slots
       if (settings.timeSlots && settings.timeSlots.length > 0) {
-        settings.timeSlots.forEach((slot, idx) => {
-          events.push({
-            type: colors[idx % colors.length],
-            text: `${slot} • Auto Post`,
-            platform: 'Auto'
-          });
+        settings.timeSlots.forEach(slot => {
+          events.push({ type: 'schedule', text: `${slot}`, platform: 'Auto' });
         });
+      }
+      // If today also has history (already posted today)
+      if (isToday && historyMap[key]) {
+        events = [...historyMap[key], ...events];
       }
     }
 
-    return { text: d.date.getDate(), isCurrentMonth: d.isCurrentMonth, isToday, events };
+    return { text: d.date.getDate(), isCurrentMonth: d.isCurrentMonth, isToday, isWeekend, events };
   });
 
   const monthNames = ['Tháng 1', 'Tháng 2', 'Tháng 3', 'Tháng 4', 'Tháng 5', 'Tháng 6', 'Tháng 7', 'Tháng 8', 'Tháng 9', 'Tháng 10', 'Tháng 11', 'Tháng 12'];
-  const currentMonthStr = `${monthNames[month]} ${year}`;
+  const dayHeaders = ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7'];
+
+  // Stats
+  const totalPosted = history.length;
+  const thisMonthPosts = history.filter(item => {
+    const d = new Date(item.timestamp);
+    return d.getFullYear() === year && d.getMonth() === month;
+  }).length;
+  const scheduledPerDay = settings.timeSlots ? settings.timeSlots.length : 0;
 
   return (
     <div className="calendar-page">
       <div className="calendar-main">
+        {/* ─── Header ─── */}
         <div className="calendar-header">
           <div className="month-selector">
-            <button className="btn-icon" onClick={prevMonth}><ChevronLeft size={20} /></button>
-            <h2>{currentMonthStr}</h2>
-            <button className="btn-icon" onClick={nextMonth}><ChevronRight size={20} /></button>
+            <button className="month-nav" onClick={prevMonth}><ChevronLeft size={16} /></button>
+            <h2>{monthNames[month]} {year}</h2>
+            <button className="month-nav" onClick={nextMonth}><ChevronRight size={16} /></button>
           </div>
-          
           <div className="calendar-actions">
-            <button className="btn-ghost" onClick={() => {
-              Swal.fire({
-                title: 'Lịch tự động',
-                text: 'Lịch này được phần mềm tự động tạo ra dựa trên Khung Giờ Vàng bạn đã cài ở phần Cài Đặt. Không cần phải lên lịch bằng tay ở đây nữa!',
-                icon: 'info',
-                background: 'var(--color-surface)',
-                color: 'white',
-                confirmButtonColor: 'var(--color-primary)'
-              });
-            }}>Lịch đăng bài Tự động</button>
-            <button className="btn-primary" onClick={() => {
-              Swal.fire({
-                title: 'Bảng thống kê Chi Tiết',
-                text: 'Bảng thống kê đang được xử lý và sẽ ra mắt trong phiên bản sắp tới.',
-                icon: 'info',
-                toast: true,
-                position: 'top-end',
-                showConfirmButton: false,
-                timer: 3000,
-                background: 'var(--color-surface)',
-                color: 'var(--color-text)'
-              });
-            }}>
-              <Edit2 size={14} className="mr-2" /> XEM CHI TIẾT
-            </button>
+            <button className="today-btn" onClick={goToday}>Hôm nay</button>
           </div>
         </div>
 
+        {/* ─── Calendar Grid ─── */}
         <div className="calendar-grid">
-          {days.map(d => (
-            <div key={d} className="day-header">{d}</div>
+          {dayHeaders.map((d, i) => (
+            <div key={d} className={`day-header ${i === 0 || i === 6 ? 'weekend' : ''}`}>{d}</div>
           ))}
-          
+
           {calendarCells.map((d, i) => (
-            <div key={i} className={`calendar-cell ${!d.isCurrentMonth ? 'dim' : ''} ${d.isToday ? 'today' : ''}`}>
+            <div key={i} className={`calendar-cell ${!d.isCurrentMonth ? 'dim' : ''} ${d.isToday ? 'today' : ''} ${d.isWeekend ? 'weekend' : ''}`}>
               <span className="date-number">{d.text}</span>
-              
+
               {d.events.length > 0 && (
                 <div className="events-container">
-                  {d.events.map((ev, idx) => (
+                  {d.events.slice(0, 3).map((ev, idx) => (
                     <div key={idx} className={`event-badge ${ev.type}`}>
-                      {ev.isPast ? <CheckCircle size={10} /> : (ev.type === 'twitter' ? <Twitter size={10} /> : null)}
+                      {ev.type === 'posted' || ev.type === 'facebook' || ev.type === 'instagram' ? (
+                        <CheckCircle size={9} />
+                      ) : (
+                        <Clock size={9} />
+                      )}
                       <span>{ev.text}</span>
                     </div>
                   ))}
+                  {d.events.length > 3 && (
+                    <span className="event-more">+{d.events.length - 3} khác</span>
+                  )}
                 </div>
               )}
             </div>
           ))}
+        </div>
+      </div>
+
+      {/* ═══ Sidebar ═══ */}
+      <div className="calendar-sidebar">
+        {/* Stats */}
+        <div className="sidebar-card">
+          <h4><BarChart3 size={14} style={{color: '#60a5fa'}} /> Thống kê</h4>
+          <div className="mini-stats">
+            <div className="mini-stat">
+              <div className="stat-num pink">{thisMonthPosts}</div>
+              <div className="stat-label">Tháng này</div>
+            </div>
+            <div className="mini-stat">
+              <div className="stat-num blue">{totalPosted}</div>
+              <div className="stat-label">Tổng cộng</div>
+            </div>
+            <div className="mini-stat">
+              <div className="stat-num purple">{scheduledPerDay}</div>
+              <div className="stat-label">Slot / ngày</div>
+            </div>
+            <div className="mini-stat">
+              <div className="stat-num green">{scheduledPerDay * daysInMonth}</div>
+              <div className="stat-label">Dự kiến / tháng</div>
+            </div>
+          </div>
+        </div>
+
+        {/* Time Slots */}
+        <div className="sidebar-card">
+          <h4><Clock size={14} style={{color: '#a5b4fc'}} /> Khung giờ đăng</h4>
+          {settings.timeSlots && settings.timeSlots.length > 0 ? (
+            <div className="timeslot-list">
+              {settings.timeSlots.map((slot, idx) => (
+                <div key={idx} className="timeslot-item">
+                  <span className="timeslot-time">{slot}</span>
+                  <span className="timeslot-label">Tự động đăng</span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="timeslot-empty">Chưa cài đặt khung giờ</div>
+          )}
+        </div>
+
+        {/* Legend */}
+        <div className="sidebar-card">
+          <h4><CalendarDays size={14} style={{color: '#34d399'}} /> Chú thích</h4>
+          <div className="legend-list">
+            <div className="legend-item">
+              <span className="legend-dot schedule"></span>
+              Lịch đăng tự động
+            </div>
+            <div className="legend-item">
+              <span className="legend-dot posted"></span>
+              Đã đăng thành công
+            </div>
+            <div className="legend-item">
+              <span className="legend-dot today"></span>
+              Hôm nay
+            </div>
+          </div>
         </div>
       </div>
     </div>

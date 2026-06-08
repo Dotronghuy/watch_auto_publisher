@@ -2,6 +2,8 @@ import { publishQueue } from './workers/queue.js';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import cron from 'node-cron';
+import { spawn } from 'child_process';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -82,6 +84,28 @@ export const startScheduler = async () => {
 
     console.log(`✅ Đã lên lịch thành công tổng cộng ${timeSlots.length} khung giờ đăng bài mỗi ngày.`);
   }
+
+  // --- THÊM: Hẹn giờ quét Google Drive tự động lúc 2:00 sáng mỗi ngày ---
+  // Hủy các cron job cũ nếu startScheduler được gọi lại
+  if (global.driveCronJob) {
+    global.driveCronJob.stop();
+  }
+  
+  global.driveCronJob = cron.schedule('0 2 * * *', () => {
+    console.log('⏰ Bắt đầu quét Google Drive tự động (Lịch định kỳ: 2:00 sáng)...');
+    try {
+      const scriptPath = path.join(__dirname, './scripts/scan_drive.js');
+      const child = spawn('node', [scriptPath], {
+        cwd: path.join(__dirname, '../')
+      });
+      child.stdout.on('data', data => console.log(`[Auto-Scan]: ${data.toString().trim()}`));
+      child.stderr.on('data', data => console.error(`[Auto-Scan Error]: ${data.toString().trim()}`));
+      child.on('close', code => console.log(`[Auto-Scan] Kết thúc với mã ${code}`));
+    } catch (e) {
+      console.error('Lỗi khi chạy quét Google Drive tự động:', e.message);
+    }
+  });
+  console.log('✅ Đã lên lịch Auto-Scan Google Drive lúc 02:00 sáng mỗi ngày.');
 
   isSchedulerRunning = false; // Reset để cho phép gọi lại khi user thay đổi settings
 };

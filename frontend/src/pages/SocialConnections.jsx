@@ -1,10 +1,13 @@
 import { useState, useEffect } from 'react';
-import { Key, Copy, Link2, Clock, Plus, X, Save, Check, Eye, EyeOff, BrainCircuit, RefreshCw } from 'lucide-react';
+import { Key, Copy, Link2, Clock, Plus, X, Save, Check, Eye, EyeOff, BrainCircuit, RefreshCw, Sparkles, Trash2, AlertCircle, Play, CheckCircle2, XCircle, FileText, ChevronDown, ChevronRight, Settings, Users } from 'lucide-react';
 import Swal from 'sweetalert2';
 import { Facebook, Instagram, Threads, TikTok } from '../components/SocialIcons';
+import { useAuth } from '../context/AuthContext';
+import { Link } from 'react-router-dom';
 import './SocialConnections.css';
 
 const SocialConnections = () => {
+  const { user } = useAuth();
   const [timeSlots, setTimeSlots] = useState([]);
   const [newTime, setNewTime] = useState('');
   const [mode, setMode] = useState('real');
@@ -12,7 +15,6 @@ const SocialConnections = () => {
   const [igDelayMin, setIgDelayMin] = useState(10);
   const [igDelayMax, setIgDelayMax] = useState(20);
   const [isSaving, setIsSaving] = useState(false);
-  const [copied, setCopied] = useState(false);
   const [connectedSocials, setConnectedSocials] = useState({
     facebook: true,
     instagram: true,
@@ -30,7 +32,7 @@ const SocialConnections = () => {
   const [isResettingAI, setIsResettingAI] = useState(null);
 
   useEffect(() => {
-    fetch('http://localhost:3000/api/settings')
+    fetch('/api/settings')
       .then(res => res.json())
       .then(data => {
         setMode(data.mode || 'real');
@@ -44,7 +46,7 @@ const SocialConnections = () => {
       })
       .catch(err => console.error(err));
 
-    fetch('http://localhost:3000/api/env')
+    fetch('/api/env')
       .then(res => res.json())
       .then(data => {
         setEnvVars({
@@ -60,7 +62,7 @@ const SocialConnections = () => {
   const handleSaveSettings = async () => {
     setIsSaving(true);
     try {
-      await fetch('http://localhost:3000/api/settings', {
+      await fetch('/api/settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ mode, testInterval, timeSlots, igDelayMin, igDelayMax })
@@ -82,14 +84,12 @@ const SocialConnections = () => {
   const handleSaveEnv = async () => {
     setIsSavingEnv(true);
     try {
-      const res = await fetch('http://localhost:3000/api/env', {
+      const res = await fetch('/api/env', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(envVars)
       });
-      if (!res.ok) {
-        throw new Error('Lỗi cập nhật từ Server');
-      }
+      if (!res.ok) throw new Error('Lỗi cập nhật từ Server');
       Swal.fire({
         title: 'Thành công',
         text: 'Đã cập nhật khóa Access Token vào file .env!',
@@ -116,7 +116,7 @@ const SocialConnections = () => {
     });
     
     try {
-      const res = await fetch('http://localhost:3000/api/ai/reset-profile', {
+      const res = await fetch('/api/ai/reset-profile', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ provider })
@@ -139,7 +139,7 @@ const SocialConnections = () => {
 
   const autoSaveSettings = async (updates) => {
     try {
-      await fetch('http://localhost:3000/api/settings', {
+      await fetch('/api/settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updates)
@@ -150,19 +150,18 @@ const SocialConnections = () => {
   };
 
   const addTimeSlot = () => {
-    // Validate 24h format HH:mm
     const timeRegex = /^([01]?[0-9]|2[0-3]):[0-5][0-9]$/;
     if (newTime && timeRegex.test(newTime)) {
       let formattedTime = newTime;
-      if (formattedTime.length === 4) formattedTime = '0' + formattedTime; // pad 8:30 to 08:30
+      if (formattedTime.length === 4) formattedTime = '0' + formattedTime;
       
       if (!timeSlots.includes(formattedTime)) {
         const updated = [...timeSlots, formattedTime].sort();
         setTimeSlots(updated);
-        setNewTime(''); // Reset ô nhập sau khi thêm
+        setNewTime('');
         autoSaveSettings({ timeSlots: updated });
       } else {
-        setNewTime(''); // Đã tồn tại thì reset thôi
+        setNewTime('');
       }
     } else if (newTime) {
       Swal.fire({
@@ -184,296 +183,268 @@ const SocialConnections = () => {
     setTimeSlots(updated);
     autoSaveSettings({ timeSlots: updated });
   };
+
   return (
     <div className="social-connections">
+      {/* ─── Page Header ─── */}
       <div className="page-header">
         <h1>Cài đặt Mạng Xã Hội & API</h1>
-        <p>Quản lý các nền tảng tích hợp và thông tin API để phần mềm tự động lấy bài và đăng lên các kênh.</p>
+        <p>Quản lý nền tảng tích hợp, lịch đăng bài và khóa API để hệ thống tự động vận hành.</p>
       </div>
 
+      {/* ═══ Platform Status Cards ═══ */}
       <div className="platforms-grid">
         <div className="platform-card outline-card">
           <div className="platform-header">
-            <div className="platform-icon facebook"><Facebook size={24} /></div>
+            <div className="platform-icon facebook"><Facebook size={22} /></div>
             <div className="status-badge connected"><span className="dot"></span> Đã kết nối</div>
           </div>
           <div className="platform-info">
             <h3>Facebook</h3>
-            <p className="text-muted">Hoạt động tốt</p>
+            <p className="text-muted">Fanpage hoạt động tốt</p>
           </div>
         </div>
 
         <div className="platform-card outline-card">
           <div className="platform-header">
-            <div className="platform-icon instagram"><Instagram size={24} /></div>
+            <div className="platform-icon instagram"><Instagram size={22} /></div>
             <div className="status-badge connected"><span className="dot"></span> Đã kết nối</div>
           </div>
           <div className="platform-info">
             <h3>Instagram</h3>
-            <p className="text-muted">Hoạt động tốt</p>
+            <p className="text-muted">Đăng ảnh & carousel</p>
           </div>
         </div>
 
         <div className="platform-card outline-card">
           <div className="platform-header">
-            <div className="platform-icon threads"><Threads size={24} /></div>
-            <div className="status-badge disconnected"><span className="dot"></span> Chưa kết nối</div>
+            <div className="platform-icon threads"><Threads size={22} /></div>
+            <div className="status-badge coming-soon"><span className="dot"></span> Sắp ra mắt</div>
           </div>
           <div className="platform-info">
             <h3>Threads</h3>
-            <p className="text-muted">Chưa kết nối tài khoản</p>
+            <p className="text-muted">Đang phát triển</p>
           </div>
-          <button className="btn-ghost mt-4 w-full justify-center" onClick={() => {
-            Swal.fire({
-              title: 'Sắp ra mắt',
-              text: 'Tính năng kết nối với Threads đang được phát triển trong bản cập nhật tới!',
-              icon: 'info',
-              background: 'var(--color-surface)',
-              color: 'var(--color-text)',
-              confirmButtonColor: 'var(--color-primary)'
-            });
-          }}>
-            <Link2 size={14} className="mr-2" /> Kết nối ngay
-          </button>
+          <span className="coming-soon-label"><Sparkles size={12} /> Bản cập nhật tới</span>
         </div>
 
         <div className="platform-card outline-card">
           <div className="platform-header">
-            <div className={`platform-icon ${connectedSocials.tiktok ? '' : 'gray'}`}><TikTok size={24} /></div>
-            <div className={`status-badge ${connectedSocials.tiktok ? 'connected' : 'disconnected'}`}><span className="dot"></span> {connectedSocials.tiktok ? 'Đã kết nối' : 'Cần Session Cookie'}</div>
+            <div className={`platform-icon ${connectedSocials.tiktok ? '' : 'gray'}`}><TikTok size={22} /></div>
+            <div className={`status-badge ${connectedSocials.tiktok ? 'connected' : 'coming-soon'}`}>
+              <span className="dot"></span> {connectedSocials.tiktok ? 'Đã kết nối' : 'Sắp ra mắt'}
+            </div>
           </div>
           <div className="platform-info">
             <h3>TikTok</h3>
-            <p className="text-muted">{connectedSocials.tiktok ? 'Hoạt động tốt' : 'Nhập mã Session Cookie ảo.'}</p>
+            <p className="text-muted">{connectedSocials.tiktok ? 'Hoạt động tốt' : 'Mobile Automation'}</p>
           </div>
           {!connectedSocials.tiktok && (
-            <button className="btn-ghost mt-4 w-full justify-center" onClick={() => {
-              Swal.fire({
-                title: 'Nhập Session Cookie',
-                input: 'text',
-                inputPlaceholder: 'Dán mã cookie của TikTok vào đây...',
-                showCancelButton: true,
-                confirmButtonText: 'Xác thực & Kết nối',
-                cancelButtonText: 'Hủy',
-                background: 'var(--color-surface)',
-                color: 'var(--color-text)',
-                confirmButtonColor: 'var(--color-primary)',
-                showLoaderOnConfirm: true,
-                preConfirm: async (cookie) => {
-                  if (!cookie || cookie.length < 20) {
-                    Swal.showValidationMessage('Mã Cookie không hợp lệ hoặc đã hết hạn!');
-                    return false;
-                  }
-                  // Giả lập thời gian máy chủ ping tới API TikTok để kiểm tra cookie
-                  return new Promise(resolve => setTimeout(() => resolve(cookie), 2000));
-                }
-              }).then(async (result) => {
-                if (result.isConfirmed && result.value) {
-                  const newSocials = { ...connectedSocials, tiktok: true };
-                  setConnectedSocials(newSocials);
-                  await fetch('http://localhost:3000/api/settings', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ connectedSocials: newSocials })
-                  });
-                  Swal.fire({ title: 'Đã kết nối!', text: 'Mã Cookie hợp lệ. Đã liên kết tài khoản TikTok.', icon: 'success', background: 'var(--color-surface)', color: 'white' });
-                }
-              });
-            }}>
-              <Link2 size={14} className="mr-2" /> Nhập mã Cookie
-            </button>
+            <span className="coming-soon-label"><Sparkles size={12} /> Bản cập nhật tới</span>
           )}
         </div>
       </div>
 
-      <div className="developer-settings" style={{marginTop: '24px'}}>
-        <div className="dev-card glass" style={{marginBottom: '24px'}}>
-          <div className="dev-card-header">
-            <Clock size={20} className="blue" />
-            <h3>Cấu hình Lịch Đăng (Global Schedule)</h3>
-          </div>
-          <p className="dev-card-desc">Cấu hình khung Giờ Vàng để đăng bài và Độ trễ giữa các nền tảng mạng xã hội.</p>
-          
-          <div style={{display: 'flex', gap: '24px', marginTop: '16px'}}>
-            {/* Khung Giờ Đăng */}
-            <div style={{flex: 1, backgroundColor: 'rgba(0,0,0,0.2)', padding: '16px', borderRadius: '8px', border: '1px solid var(--border-light)'}}>
-              <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px'}}>
-                <h4 style={{fontSize: '13px', margin: 0}}>🕒 Cấu hình Tần suất</h4>
-                <div style={{display: 'flex', gap: '8px', background: 'var(--color-surface)', borderRadius: '4px', padding: '2px'}}>
-                  <button className={`btn-ghost ${mode === 'real' ? 'active' : ''}`} style={{padding: '4px 8px', fontSize: '11px', background: mode === 'real' ? 'rgba(255,255,255,0.1)' : 'transparent'}} onClick={() => { setMode('real'); autoSaveSettings({ mode: 'real' }); }}>Đăng Thật</button>
-                  <button className={`btn-ghost ${mode === 'test' ? 'active' : ''}`} style={{padding: '4px 8px', fontSize: '11px', background: mode === 'test' ? 'rgba(255,255,255,0.1)' : 'transparent'}} onClick={() => { setMode('test'); autoSaveSettings({ mode: 'test' }); }}>Đăng Test</button>
-                </div>
-              </div>
+      {/* ═══ Settings Sections ═══ */}
+      <div className="settings-sections">
 
-              {mode === 'real' ? (
-                <>
-                  <div style={{display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '12px'}}>
-                    {timeSlots.map(time => (
-                      <div key={time} style={{display: 'flex', alignItems: 'center', backgroundColor: 'rgba(255, 77, 141, 0.1)', color: 'var(--color-primary)', padding: '4px 8px', borderRadius: '4px', fontSize: '12px', border: '1px solid rgba(255, 77, 141, 0.2)'}}>
-                        {time}
-                        <X size={12} style={{marginLeft: '6px', cursor: 'pointer'}} onClick={() => removeTimeSlot(time)} />
+        {/* ── Section 1 & 2: Chỉ Admin mới được xem ── */}
+        {user && user.role === 'admin' && (
+          <>
+            {/* ── Section 1: Lịch Đăng ── */}
+            <div className="section-card">
+              <div className="section-header">
+                <div className="icon-circle blue"><Clock size={16} /></div>
+                <h3>Lịch Đăng & Tần Suất</h3>
+              </div>
+              <p className="section-desc">Cấu hình khung giờ đăng bài và khoảng trễ giữa các nền tảng mạng xã hội.</p>
+
+              <div className="schedule-grid">
+                {/* Left: Tần suất */}
+                <div className="schedule-panel">
+                  <h4>🕒 Khung giờ đăng</h4>
+                  <div className="mode-switcher">
+                    <button className={mode === 'real' ? 'active' : ''} onClick={() => { setMode('real'); autoSaveSettings({ mode: 'real' }); }}>Đăng Thật</button>
+                    <button className={mode === 'test' ? 'active' : ''} onClick={() => { setMode('test'); autoSaveSettings({ mode: 'test' }); }}>Đăng Test</button>
+                  </div>
+
+                  {mode === 'real' ? (
+                    <>
+                      <div className="time-slots-wrap">
+                        {timeSlots.map(time => (
+                          <div key={time} className="time-chip">
+                            {time}
+                            <X size={12} onClick={() => removeTimeSlot(time)} />
+                          </div>
+                        ))}
                       </div>
-                    ))}
-                  </div>
-                  <div style={{display: 'flex', gap: '8px'}}>
-                    <input 
-                      type="text" 
-                      placeholder="VD: 14:30"
-                      maxLength="5"
-                      value={newTime} 
-                      onChange={e => {
-                        let val = e.target.value.replace(/[^\d:]/g, '');
-                        if (val.length === 2 && !val.includes(':') && e.target.value.length > newTime.length) {
-                          val += ':';
-                        }
-                        setNewTime(val);
-                      }}
-                      onKeyDown={e => {
-                        if (e.key === 'Enter') addTimeSlot();
-                      }}
-                      style={{background: 'var(--color-canvas)', border: '1px solid var(--border-light)', color: 'white', padding: '6px 10px', borderRadius: '4px', width: '85px', textAlign: 'center'}} 
-                    />
-                    <button className="btn-outline" onClick={addTimeSlot} style={{padding: '6px 12px'}}><Plus size={14} /> Thêm</button>
-                  </div>
-                </>
-              ) : (
-                <div style={{display: 'flex', alignItems: 'center', gap: '12px', background: 'rgba(255,255,255,0.05)', padding: '12px', borderRadius: '6px'}}>
-                  <span style={{fontSize: '12px'}}>Cứ mỗi</span>
-                  <input type="number" value={testInterval} onChange={e => setTestInterval(e.target.value)} onBlur={() => autoSaveSettings({ testInterval })} min="1" style={{background: 'var(--color-canvas)', border: '1px solid var(--border-light)', color: 'white', padding: '6px 10px', borderRadius: '4px', width: '70px', textAlign: 'center'}} />
-                  <span style={{fontSize: '12px'}}>phút đăng 1 bài</span>
+                      <div className="time-add-row">
+                        <input
+                          className="time-input"
+                          type="text"
+                          placeholder="VD: 14:30"
+                          maxLength="5"
+                          autoComplete="off"
+                          value={newTime}
+                          onChange={e => {
+                            let val = e.target.value.replace(/[^\d:]/g, '');
+                            if (val.length === 2 && !val.includes(':') && e.target.value.length > newTime.length) {
+                              val += ':';
+                            }
+                            setNewTime(val);
+                          }}
+                          onKeyDown={e => { if (e.key === 'Enter') addTimeSlot(); }}
+                        />
+                        <button className="btn-outline" onClick={addTimeSlot} style={{padding: '6px 14px', fontSize: '12px'}}><Plus size={14} /> Thêm</button>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="test-row">
+                      <span>Cứ mỗi</span>
+                      <input className="delay-input" type="number" autoComplete="off" value={testInterval} onChange={e => setTestInterval(e.target.value)} onBlur={() => autoSaveSettings({ testInterval })} min="1" />
+                      <span>phút đăng 1 bài</span>
+                    </div>
+                  )}
                 </div>
-              )}
-            </div>
 
-            {/* Độ trễ IG */}
-            <div style={{flex: 1, backgroundColor: 'rgba(0,0,0,0.2)', padding: '16px', borderRadius: '8px', border: '1px solid var(--border-light)', opacity: mode === 'test' ? 0.5 : 1, pointerEvents: mode === 'test' ? 'none' : 'auto'}}>
-              <h4 style={{fontSize: '13px', marginBottom: '12px'}}>⏳ Độ trễ Instagram (IG Delay)</h4>
-              <p style={{fontSize: '11px', color: 'var(--color-text-muted)', marginBottom: '12px'}}>
-                {mode === 'test' ? 'Không áp dụng khoảng trễ ngẫu nhiên trong chế độ Đăng Test.' : 'Random thời gian đăng lên IG sau khi đã lên bài trên FB.'}
-              </p>
-              <div style={{display: 'flex', gap: '8px', alignItems: 'center', background: 'rgba(255,255,255,0.05)', padding: '12px', borderRadius: '6px'}}>
-                <input type="number" value={igDelayMin} onChange={e => setIgDelayMin(e.target.value)} onBlur={() => autoSaveSettings({ igDelayMin })} min="0" style={{background: 'var(--color-canvas)', border: '1px solid var(--border-light)', color: 'white', padding: '6px 10px', borderRadius: '4px', width: '70px', textAlign: 'center'}} disabled={mode === 'test'} />
-                <span style={{color: 'var(--color-text-muted)', fontSize: '13px'}}>đến</span>
-                <input type="number" value={igDelayMax} onChange={e => setIgDelayMax(e.target.value)} onBlur={() => autoSaveSettings({ igDelayMax })} min="0" style={{background: 'var(--color-canvas)', border: '1px solid var(--border-light)', color: 'white', padding: '6px 10px', borderRadius: '4px', width: '70px', textAlign: 'center'}} disabled={mode === 'test'} />
-                <span style={{fontSize: '13px'}}>Phút</span>
+                {/* Right: IG Delay */}
+                <div className={`schedule-panel ${mode === 'test' ? 'panel-disabled' : ''}`}>
+                  <h4>⏳ Độ trễ Instagram</h4>
+                  <p className="panel-desc">
+                    {mode === 'test' ? 'Không áp dụng trong chế độ Đăng Test.' : 'Thời gian chờ random trước khi đẩy bài từ FB sang IG.'}
+                  </p>
+                  <div className="delay-row">
+                    <input className="delay-input" type="number" autoComplete="off" value={igDelayMin} onChange={e => setIgDelayMin(e.target.value)} onBlur={() => autoSaveSettings({ igDelayMin })} min="0" disabled={mode === 'test'} />
+                    <span className="delay-label">đến</span>
+                    <input className="delay-input" type="number" autoComplete="off" value={igDelayMax} onChange={e => setIgDelayMax(e.target.value)} onBlur={() => autoSaveSettings({ igDelayMax })} min="0" disabled={mode === 'test'} />
+                    <span className="delay-label">Phút</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="section-footer">
+                <button className="btn-primary glow-primary" onClick={handleSaveSettings} disabled={isSaving}>
+                  <Save size={14} style={{marginRight: '6px'}} /> {isSaving ? 'Đang lưu...' : 'Lưu Cấu Hình'}
+                </button>
               </div>
             </div>
-          </div>
 
-          <div style={{marginTop: '20px', display: 'flex', justifyContent: 'flex-end'}}>
-            <button className="btn-primary glow-primary" onClick={handleSaveSettings} disabled={isSaving}>
-              <Save size={16} className="mr-2" style={{marginRight: '8px'}} /> {isSaving ? 'Đang lưu...' : 'Lưu Cấu Hình'}
-            </button>
-          </div>
-        </div>
+            {/* ── Section 2: API Tokens ── */}
+            <div className="section-card">
+              <div className="section-header">
+                <div className="icon-circle pink"><Key size={16} /></div>
+                <h3>Khóa API (Access Token)</h3>
+              </div>
+              <p className="section-desc">Cập nhật trực tiếp các khóa Access Token vào file .env. Thông tin được mã hóa và chỉ lưu trên máy cục bộ.</p>
 
-        <div className="dev-card glass">
-          <div className="dev-card-header">
-            <Key size={20} className="pink" />
-            <h3>Cấu hình API Meta (Facebook & Instagram)</h3>
-          </div>
-          <p className="dev-card-desc">Cập nhật trực tiếp các khóa Access Token lưu trữ trong file .env của Backend.</p>
-          
-          <div className="credential-box" style={{marginBottom: '12px'}}>
-            <div className="cred-label">Facebook Page Access Token</div>
-            <div className="cred-input-group">
-              <input type={showTokens.fb ? "text" : "password"} value={envVars.FB_PAGE_ACCESS_TOKEN} onChange={e => setEnvVars({...envVars, FB_PAGE_ACCESS_TOKEN: e.target.value})} placeholder="EAALZ..." />
-              <button className="btn-icon-square" onClick={() => setShowTokens({...showTokens, fb: !showTokens.fb})}>
-                {showTokens.fb ? <EyeOff size={14} /> : <Eye size={14} />}
-              </button>
-            </div>
-          </div>
-
-          <div className="credential-box" style={{marginBottom: '12px'}}>
-            <div className="cred-label">Instagram Access Token</div>
-            <div className="cred-input-group">
-              <input type={showTokens.ig ? "text" : "password"} value={envVars.IG_ACCESS_TOKEN} onChange={e => setEnvVars({...envVars, IG_ACCESS_TOKEN: e.target.value})} placeholder="EAALZ..." />
-              <button className="btn-icon-square" onClick={() => setShowTokens({...showTokens, ig: !showTokens.ig})}>
-                {showTokens.ig ? <EyeOff size={14} /> : <Eye size={14} />}
-              </button>
-            </div>
-          </div>
-
-          <div className="credential-box" style={{marginBottom: '12px'}}>
-            <div className="cred-label">Instagram User ID</div>
-            <div className="cred-input-group">
-              <input type={showTokens.igId ? "text" : "password"} value={envVars.IG_USER_ID} onChange={e => setEnvVars({...envVars, IG_USER_ID: e.target.value})} placeholder="Ví dụ: 178414..." />
-              <button className="btn-icon-square" onClick={() => setShowTokens({...showTokens, igId: !showTokens.igId})}>
-                {showTokens.igId ? <EyeOff size={14} /> : <Eye size={14} />}
-              </button>
-            </div>
-          </div>
-
-          <div className="credential-box">
-            <div className="cred-label">TikTok Session Cookie (Tùy chọn đăng TikTok)</div>
-            <div className="cred-input-group">
-              <input type={showTokens.tiktok ? "text" : "password"} value={envVars.TIKTOK_SESSION_ID} onChange={e => setEnvVars({...envVars, TIKTOK_SESSION_ID: e.target.value})} placeholder="VD: 5543c8d..." />
-              <button className="btn-icon-square" onClick={() => setShowTokens({...showTokens, tiktok: !showTokens.tiktok})}>
-                {showTokens.tiktok ? <EyeOff size={14} /> : <Eye size={14} />}
-              </button>
-            </div>
-          </div>
-
-          <div style={{marginTop: '20px', display: 'flex', justifyContent: 'flex-end'}}>
-            <button className="btn-primary glow-primary" onClick={handleSaveEnv} disabled={isSavingEnv}>
-              <Save size={16} className="mr-2" style={{marginRight: '8px'}} /> {isSavingEnv ? 'Đang lưu...' : 'Cập nhật File .env'}
-            </button>
-          </div>
-        </div>
-
-        <div className="dev-card glass" style={{marginTop: '24px'}}>
-          <div className="dev-card-header">
-            <BrainCircuit size={20} className="blue" />
-            <h3>Cấu hình Trí tuệ Nhân tạo (Web Automation)</h3>
-          </div>
-          <p className="dev-card-desc">Quản lý phiên đăng nhập của các AI chạy ngầm. Nếu AI bị văng tài khoản hoặc dính Checkpoint, dùng công cụ Login Helper dưới đây để dọn rác và đăng nhập lại.</p>
-          
-          <div style={{display: 'flex', gap: '24px', marginTop: '16px'}}>
-            {/* ChatGPT */}
-            <div style={{flex: 1, backgroundColor: 'rgba(0,0,0,0.2)', padding: '16px', borderRadius: '8px', border: '1px solid var(--border-light)'}}>
-              <div style={{display: 'flex', alignItems: 'center', marginBottom: '16px'}}>
-                <div style={{background: 'linear-gradient(135deg, #10a37f, #0d8a6a)', width: '40px', height: '40px', borderRadius: '10px', display: 'flex', justifyContent: 'center', alignItems: 'center', marginRight: '16px'}}>
-                   <BrainCircuit size={20} color="white" />
+              <div className="tokens-grid">
+                <div className="token-box">
+                  <label>Facebook Page Access Token</label>
+                  <div className="token-input-row">
+                    <input type={showTokens.fb ? "text" : "password"} autoComplete="off" value={envVars.FB_PAGE_ACCESS_TOKEN} onChange={e => setEnvVars({...envVars, FB_PAGE_ACCESS_TOKEN: e.target.value})} placeholder="EAALZ..." />
+                    <button onClick={() => setShowTokens({...showTokens, fb: !showTokens.fb})}>{showTokens.fb ? <EyeOff size={14} /> : <Eye size={14} />}</button>
+                  </div>
                 </div>
+
+                <div className="token-box">
+                  <label>Instagram Access Token</label>
+                  <div className="token-input-row">
+                    <input type={showTokens.ig ? "text" : "password"} autoComplete="off" value={envVars.IG_ACCESS_TOKEN} onChange={e => setEnvVars({...envVars, IG_ACCESS_TOKEN: e.target.value})} placeholder="EAALZ..." />
+                    <button onClick={() => setShowTokens({...showTokens, ig: !showTokens.ig})}>{showTokens.ig ? <EyeOff size={14} /> : <Eye size={14} />}</button>
+                  </div>
+                </div>
+
+                <div className="token-box">
+                  <label>Instagram User ID</label>
+                  <div className="token-input-row">
+                    <input type={showTokens.igId ? "text" : "password"} autoComplete="off" value={envVars.IG_USER_ID} onChange={e => setEnvVars({...envVars, IG_USER_ID: e.target.value})} placeholder="VD: 178414..." />
+                    <button onClick={() => setShowTokens({...showTokens, igId: !showTokens.igId})}>{showTokens.igId ? <EyeOff size={14} /> : <Eye size={14} />}</button>
+                  </div>
+                </div>
+
+                <div className="token-box">
+                  <label>TikTok Session Cookie (Tùy chọn)</label>
+                  <div className="token-input-row">
+                    <input type={showTokens.tiktok ? "text" : "password"} autoComplete="off" value={envVars.TIKTOK_SESSION_ID} onChange={e => setEnvVars({...envVars, TIKTOK_SESSION_ID: e.target.value})} placeholder="VD: 5543c8d..." />
+                    <button onClick={() => setShowTokens({...showTokens, tiktok: !showTokens.tiktok})}>{showTokens.tiktok ? <EyeOff size={14} /> : <Eye size={14} />}</button>
+                  </div>
+                </div>
+              </div>
+
+              <div className="section-footer">
+                <button className="btn-primary glow-primary" onClick={handleSaveEnv} disabled={isSavingEnv}>
+                  <Save size={14} style={{marginRight: '6px'}} /> {isSavingEnv ? 'Đang lưu...' : 'Cập nhật File .env'}
+                </button>
+              </div>
+            </div>
+          </>
+        )}
+
+        {/* ── Section 3: AI Login ── */}
+        <div className="section-card">
+          <div className="section-header">
+            <div className="icon-circle green"><BrainCircuit size={16} /></div>
+            <h3>Trí Tuệ Nhân Tạo (Web Automation)</h3>
+          </div>
+          <p className="section-desc">Quản lý phiên đăng nhập AI chạy ngầm. Nếu bị văng hoặc dính Checkpoint, dùng Login Helper để dọn rác và đăng nhập lại.</p>
+
+          <div className="ai-grid">
+            <div className="ai-card">
+              <div className="ai-card-top">
+                <div className="ai-avatar chatgpt"><BrainCircuit size={20} color="white" /></div>
                 <div>
-                  <h4 style={{fontSize: '15px', margin: '0 0 4px 0', color: '#fff'}}>ChatGPT Plus</h4>
-                  <span style={{fontSize: '12px', color: '#10a37f'}}>Mô hình: GPT-4 Vision</span>
+                  <div className="ai-name">ChatGPT Plus</div>
+                  <div className="ai-model chatgpt">Mô hình: GPT-4 Vision</div>
                 </div>
               </div>
-              <button 
-                className="btn-outline w-full justify-center" 
+              <button
+                className="btn-outline w-full justify-center"
                 onClick={() => handleResetAI('chatgpt')}
                 disabled={isResettingAI === 'chatgpt'}
-                style={{borderColor: '#10a37f', color: '#10a37f'}}
+                style={{borderColor: '#10a37f', color: '#10a37f', fontSize: '12px'}}
               >
-                {isResettingAI === 'chatgpt' ? <RefreshCw className="spin mr-2" size={14}/> : <RefreshCw size={14} className="mr-2" />} 
-                {isResettingAI === 'chatgpt' ? 'Đang chờ thao tác trên Chrome...' : 'Làm mới & Đăng nhập lại'}
+                {isResettingAI === 'chatgpt' ? <RefreshCw className="spin" size={14} style={{marginRight: '6px'}}/> : <RefreshCw size={14} style={{marginRight: '6px'}} />}
+                {isResettingAI === 'chatgpt' ? 'Đang chờ thao tác...' : 'Làm mới & Đăng nhập lại'}
               </button>
             </div>
 
-            {/* Gemini */}
-            <div style={{flex: 1, backgroundColor: 'rgba(0,0,0,0.2)', padding: '16px', borderRadius: '8px', border: '1px solid var(--border-light)'}}>
-              <div style={{display: 'flex', alignItems: 'center', marginBottom: '16px'}}>
-                <div style={{background: 'linear-gradient(135deg, #1a73e8, #1557b0)', width: '40px', height: '40px', borderRadius: '10px', display: 'flex', justifyContent: 'center', alignItems: 'center', marginRight: '16px'}}>
-                   <BrainCircuit size={20} color="white" />
-                </div>
+            <div className="ai-card">
+              <div className="ai-card-top">
+                <div className="ai-avatar gemini"><BrainCircuit size={20} color="white" /></div>
                 <div>
-                  <h4 style={{fontSize: '15px', margin: '0 0 4px 0', color: '#fff'}}>Gemini Advanced</h4>
-                  <span style={{fontSize: '12px', color: '#1a73e8'}}>Mô hình: Gemini 1.5 Pro</span>
+                  <div className="ai-name">Gemini Advanced</div>
+                  <div className="ai-model gemini">Mô hình: Gemini 1.5 Pro</div>
                 </div>
               </div>
-              <button 
-                className="btn-outline w-full justify-center" 
+              <button
+                className="btn-outline w-full justify-center"
                 onClick={() => handleResetAI('gemini')}
                 disabled={isResettingAI === 'gemini'}
-                style={{borderColor: '#1a73e8', color: '#1a73e8'}}
+                style={{borderColor: '#4285f4', color: '#4285f4', fontSize: '12px'}}
               >
-                {isResettingAI === 'gemini' ? <RefreshCw className="spin mr-2" size={14}/> : <RefreshCw size={14} className="mr-2" />} 
-                {isResettingAI === 'gemini' ? 'Đang chờ thao tác trên Chrome...' : 'Làm mới & Đăng nhập lại'}
+                {isResettingAI === 'gemini' ? <RefreshCw className="spin" size={14} style={{marginRight: '6px'}}/> : <RefreshCw size={14} style={{marginRight: '6px'}} />}
+                {isResettingAI === 'gemini' ? 'Đang chờ thao tác...' : 'Làm mới & Đăng nhập lại'}
               </button>
             </div>
           </div>
         </div>
+
+        {/* ── Section 4: User Management (Admin Only) ── */}
+        {user && user.role === 'admin' && (
+          <div className="section-card" style={{ borderColor: 'var(--color-primary)', background: 'linear-gradient(to right, rgba(255, 77, 141, 0.05), transparent)' }}>
+            <div className="section-header">
+              <div className="icon-circle pink"><Users size={16} /></div>
+              <h3 style={{ color: 'var(--color-primary)' }}>Quản lý Nhân sự (Admin)</h3>
+            </div>
+            <p className="section-desc">Phân quyền truy cập, tạo tài khoản và quản lý mật khẩu cho nhân viên trong hệ thống.</p>
+            
+            <div className="section-footer" style={{ borderTop: 'none', padding: '0 20px 20px 20px', justifyContent: 'flex-start' }}>
+              <Link to="/settings/users" className="btn-primary glow-primary" style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', textDecoration: 'none' }}>
+                Truy cập trang Quản lý Nhân sự <ChevronRight size={16} />
+              </Link>
+            </div>
+          </div>
+        )}
 
       </div>
     </div>

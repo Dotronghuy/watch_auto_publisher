@@ -12,27 +12,36 @@ import {
 } from 'lucide-react';
 import Swal from 'sweetalert2';
 import { motion } from 'framer-motion';
+import { useAuth } from '../context/AuthContext';
 import './Sidebar.css';
 
 const Sidebar = () => {
-  const navItems = [
-    { name: 'Tổng quan', path: '/', icon: LayoutDashboard },
-    { name: 'Lưu trữ', path: '/drive', icon: Cloud },
-    { name: 'Luồng công việc', path: '/workflow', icon: Workflow },
-    { name: 'Lịch đăng', path: '/calendar', icon: Calendar },
-    { name: 'Dữ liệu SP', path: '/database', icon: Database },
-    { name: 'Cài đặt', path: '/settings', icon: Settings },
+  const { hasPermission, logout } = useAuth();
+
+  const allNavItems = [
+    { name: 'Tổng quan', path: '/', icon: LayoutDashboard, permission: 'dashboard' },
+    { name: 'Lưu trữ', path: '/drive', icon: Cloud, permission: 'drive' },
+    { name: 'Luồng công việc', path: '/workflow', icon: Workflow, permission: 'workflow' },
+    { name: 'Lịch đăng', path: '/calendar', icon: Calendar, permission: 'calendar' },
+    { name: 'Dữ liệu SP', path: '/database', icon: Database, permission: 'database' },
+    { name: 'Cài đặt', path: '/settings', icon: Settings, permission: 'settings' }
   ];
+
+  const navItems = allNavItems.filter(item => hasPermission(item.permission));
+
+  const handleLogout = (e) => {
+    e.preventDefault();
+    logout();
+  };
 
   return (
     <aside className="sidebar">
       <div className="sidebar-header">
-        <div className="logo-icon glass">
-          <Workflow size={20} color="var(--color-primary)" />
+        <div className="logo-icon glass" style={{ padding: 0, overflow: 'hidden' }}>
+          <img src="/logo-z.png" alt="ZenWatch Logo" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
         </div>
         <div className="logo-text">
-          <h2>Omni Flow</h2>
-          <span>Gói Pro</span>
+          <h2>ZenWatch Flow</h2>
         </div>
       </div>
 
@@ -90,7 +99,7 @@ const Sidebar = () => {
             </a>
           </li>
           <li>
-            <a href="#" className="footer-link">
+            <a href="#" className="footer-link" onClick={handleLogout}>
               <LogOut size={18} />
               <span>Đăng xuất</span>
             </a>

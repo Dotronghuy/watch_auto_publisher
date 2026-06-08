@@ -1,0 +1,26 @@
+[
+  {
+    "id": "1",
+    "username": "admin",
+    "password": "$2b$10$3MA15YKWlwEveyTaRX9OK.cqgi324DpNl1Hhu7XBA793JHfoZNEee",
+    "role": "admin",
+    "permissions": [
+      "dashboard",
+      "drive",
+      "workflow",
+      "calendar",
+      "database",
+      "settings"
+    ]
+  },
+  {
+    "id": "1780720266099",
+    "username": "tronghuy",
+    "password": "$2b$10$vGtfGjeI7NUbeeSpKd6HeevDQyrt5gJr1K5f6/yg/5aO.fg4muqMy",
+    "role": "staff",
+    "permissions": [
+      "workflow",
+      "settings"
+    ]
+  }
+]

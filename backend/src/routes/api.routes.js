@@ -7,6 +7,7 @@ import Papa from 'papaparse';
 import dotenv from 'dotenv';
 import { google } from 'googleapis';
 import multer from 'multer';
+import { spawn } from 'child_process';
 import { startScheduler } from '../scheduler.js';
 import { autoPublishRoutine, dryRunRoutine, resetGlobalStop, triggerGlobalStop, getIsRunning, trainImageOnly, trainContentOnly } from '../services/publish.service.js';
 import { getProductInfoBySku } from '../services/sheet.service.js';
@@ -77,6 +78,7 @@ const router = express.Router();
 // Lưu trữ các client SSE đang kết nối
 let clients = [];
 let logHistory = [];
+let isScanningDrive = false;
 
 // ------- STOP SIGNAL -------
 // Khi stopSignal.aborted === true, autoPublishRoutine sẽ dừng ở bước an toàn tiếp theo
@@ -378,6 +380,51 @@ router.post('/dry-run', async (req, res) => {
     addActivity(msg, isAborted ? 'warning' : 'error');
     res.status(500).json({ success: false, error: err.message });
   }
+});
+
+// 4d. Trigger quét Google Drive (chạy ngầm)
+router.post('/trigger-scan', (req, res) => {
+  if (isScanningDrive) {
+    return res.status(400).json({ success: false, message: 'Hệ thống đang trong quá trình quét Drive, vui lòng đợi!' });
+  }
+
+  isScanningDrive = true;
+  addActivity('Bắt đầu quét Google Drive (Thủ công)', 'info');
+  sendLogToClients({ time: new Date().toLocaleTimeString(), sender: 'System', message: '🚀 Đang khởi tạo tiến trình quét toàn bộ Google Drive...', type: 'info' });
+
+  // Spawn tiến trình con chạy scan_drive.js
+  const scriptPath = path.join(__dirname, '../scripts/scan_drive.js');
+  const child = spawn('node', [scriptPath], {
+    cwd: path.join(__dirname, '../../') // CWD là thư mục backend/
+  });
+
+  child.stdout.on('data', (data) => {
+    const output = data.toString().trim();
+    if (output) {
+      // Bắn log trực tiếp lên Live Monitor
+      sendLogToClients({ time: new Date().toLocaleTimeString(), sender: 'Scanner', message: output, type: 'info' });
+    }
+  });
+
+  child.stderr.on('data', (data) => {
+    const errorOutput = data.toString().trim();
+    if (errorOutput) {
+      sendLogToClients({ time: new Date().toLocaleTimeString(), sender: 'Scanner Error', message: errorOutput, type: 'error' });
+    }
+  });
+
+  child.on('close', (code) => {
+    isScanningDrive = false;
+    if (code === 0) {
+      sendLogToClients({ time: new Date().toLocaleTimeString(), sender: 'System', message: '✅ Quá trình quét Drive và cập nhật Sheets hoàn tất thành công!', type: 'success' });
+      addActivity('Quét Google Drive hoàn tất', 'success');
+    } else {
+      sendLogToClients({ time: new Date().toLocaleTimeString(), sender: 'System', message: `❌ Quá trình quét Drive thất bại (Mã lỗi: ${code})`, type: 'error' });
+      addActivity('Quét Google Drive thất bại', 'error');
+    }
+  });
+
+  res.json({ success: true, message: 'Tiến trình quét Drive đã được kích hoạt ngầm.' });
 });
 
 // 5. Server-Sent Events (SSE) Endpoint cho Live Monitor
@@ -690,6 +737,184 @@ router.post('/analyze-samples', async (req, res) => {
     res.json({ success: true, ...result });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════
+// DELETE-PROMPT: Xóa bối cảnh xấu + "mắng" AI
+// ═══════════════════════════════════════════════════════════
+router.post('/delete-prompt', async (req, res) => {
+  try {
+    const { promptText } = req.body;
+    if (!promptText) return res.status(400).json({ success: false, message: 'Thiếu promptText' });
+
+    const promptGuidePath = path.join(__dirname, '../../config/gpt_image_prompt.md');
+    if (!fs.existsSync(promptGuidePath)) {
+      return res.status(404).json({ success: false, message: 'Không tìm thấy file gpt_image_prompt.md' });
+    }
+
+    let content = fs.readFileSync(promptGuidePath, 'utf8');
+    
+    // Tìm block chứa prompt (từ ### TITLE → đến --- tiếp theo)
+    const lines = content.split('\n');
+    let startIdx = -1;
+    let endIdx = -1;
+    
+    for (let i = 0; i < lines.length; i++) {
+      if (lines[i].includes(promptText.substring(0, 80))) {
+        // Tìm ngược lên ### header
+        for (let j = i; j >= 0; j--) {
+          if (lines[j].trim().startsWith('###')) {
+            startIdx = j;
+            break;
+          }
+        }
+        // Tìm xuôi xuống --- (hoặc ### tiếp theo)
+        for (let j = i + 1; j < lines.length; j++) {
+          if (lines[j].trim() === '---' || lines[j].trim().startsWith('###')) {
+            endIdx = lines[j].trim() === '---' ? j + 1 : j;
+            break;
+          }
+        }
+        if (endIdx === -1) endIdx = lines.length;
+        break;
+      }
+    }
+
+    let deletedSection = '';
+    if (startIdx >= 0 && endIdx > startIdx) {
+      deletedSection = lines.slice(startIdx, endIdx).join('\n');
+      lines.splice(startIdx, endIdx - startIdx);
+      fs.writeFileSync(promptGuidePath, lines.join('\n'), 'utf8');
+      console.log(`🗑️ Đã xóa block prompt từ dòng ${startIdx + 1} → ${endIdx} trong gpt_image_prompt.md`);
+    } else {
+      console.log('⚠️ Không tìm thấy block prompt khớp, tiếp tục gửi feedback cho AI...');
+    }
+
+    // Gửi tin nhắn "mắng" AI qua ChatGPT
+    const scoldPrompt = `[HỆ THỐNG CẢNH BÁO]:
+Bối cảnh/scene dưới đây vừa bị LOẠI BỎ bởi người dùng vì chất lượng kém hoặc không phù hợp:
+"${promptText.substring(0, 300)}"
+
+Lý do: Ảnh tạo ra từ bối cảnh này bị đánh giá là KHÔNG ĐẠT TIÊU CHUẨN (giả trân, góc chụp xấu, tỉ lệ sai, hoặc không phù hợp phong cách luxury).
+
+TUYỆT ĐỐI KHÔNG sử dụng lại bối cảnh này hoặc các bối cảnh tương tự trong tương lai.
+Chỉ cần trả lời ngắn gọn: "Đã ghi nhận và loại bỏ bối cảnh này khỏi danh sách!"`;
+    
+    try {
+      await generateContentOnChatGPT(scoldPrompt, 'image_feedback', null);
+      console.log('✅ Đã gửi cảnh báo cho AI về bối cảnh bị loại.');
+    } catch (aiErr) {
+      console.log(`⚠️ Lỗi khi gửi feedback cho AI (không nghiêm trọng): ${aiErr.message}`);
+    }
+
+    sendLogToClients({ 
+      time: new Date().toLocaleTimeString(), 
+      sender: 'System', 
+      message: `🗑️ Đã đào thải 1 bối cảnh xấu khỏi prompt guide và nhắc nhở AI!`, 
+      type: 'highlight' 
+    });
+
+    res.json({ success: true, message: 'Đã xóa prompt và gửi cảnh báo cho AI', deletedLines: endIdx - startIdx });
+
+  } catch (err) {
+    console.error('❌ Lỗi delete-prompt:', err.message);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════
+// FEEDBACK-PROMPT: Nhận xét + yêu cầu AI vẽ lại ảnh
+// ═══════════════════════════════════════════════════════════
+const feedbackUpload = multer({ 
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => {
+      const dir = path.join(__dirname, '../../temp_images');
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      cb(null, dir);
+    },
+    filename: (req, file, cb) => cb(null, `feedback_ref_${Date.now()}${path.extname(file.originalname)}`)
+  }),
+  limits: { fileSize: 20 * 1024 * 1024 }
+});
+
+router.post('/feedback-prompt', feedbackUpload.single('referenceImage'), async (req, res) => {
+  try {
+    const { promptText, feedbackText } = req.body;
+    if (!promptText) return res.status(400).json({ success: false, message: 'Thiếu promptText' });
+
+    sendLogToClients({ 
+      time: new Date().toLocaleTimeString(), 
+      sender: 'System', 
+      message: `💬 Đang gửi nhận xét cho AI và yêu cầu vẽ lại ảnh...`, 
+      type: 'highlight' 
+    });
+
+    // Tạo feedback prompt cho ChatGPT
+    const feedbackMsg = `[PHẢN HỒI TỪ NGƯỜI DÙNG]:
+Ảnh được tạo từ prompt sau bị chê:
+"${promptText.substring(0, 400)}"
+
+Nhận xét của người dùng: "${feedbackText || 'Không đạt yêu cầu, cần cải thiện'}"
+
+YÊU CẦU:
+1. Ghi nhớ phản hồi này để KHÔNG lặp lại lỗi tương tự.
+2. Tạo lại 1 ảnh mới với bối cảnh tương tự nhưng đã sửa theo nhận xét.
+3. Giữ nguyên chiếc đồng hồ 100% như gốc, chỉ thay đổi bối cảnh/góc chụp.`;
+
+    // Nếu có ảnh tham chiếu, dùng generateBackgroundOnChatGPT
+    // Nếu không, dùng generateContentOnChatGPT với image_feedback
+    let newImageUrl = null;
+
+    if (req.file) {
+      // Có ảnh tham chiếu → gửi ảnh + prompt cho GPT-4 Vision
+      console.log(`📤 Có ảnh tham chiếu: ${req.file.filename}`);
+      const refImagePath = req.file.path;
+      
+      const generatedPaths = await generateBackgroundOnChatGPT(
+        refImagePath,
+        [{ prompt: feedbackMsg, sampleImage: refImagePath }],
+        null,   // no abort signal
+        null,   // no sample
+        false,  // continue existing session
+        []      // no extra images
+      );
+      
+      if (generatedPaths && generatedPaths.length > 0) {
+        // Trả về file path → convert sang URL
+        const filename = path.basename(generatedPaths[0]);
+        newImageUrl = `http://localhost:3000/temp_images/${filename}`;
+      }
+    } else {
+      // Không có ảnh tham chiếu → gửi text feedback
+      const generatedPaths = await generateBackgroundOnChatGPT(
+        null,
+        [{ prompt: feedbackMsg }],
+        null,
+        null,
+        false,
+        []
+      );
+      
+      if (generatedPaths && generatedPaths.length > 0) {
+        const filename = path.basename(generatedPaths[0]);
+        newImageUrl = `http://localhost:3000/temp_images/${filename}`;
+      }
+    }
+
+    sendLogToClients({ 
+      time: new Date().toLocaleTimeString(), 
+      sender: 'GPT-4 Vision', 
+      message: newImageUrl ? '✅ AI đã tiếp thu nhận xét và sinh ảnh mới!' : '⚠️ AI đã tiếp thu nhưng chưa sinh được ảnh mới.', 
+      type: newImageUrl ? 'success' : 'warning',
+      image: newImageUrl || undefined 
+    });
+
+    res.json({ success: true, message: 'Đã gửi feedback cho AI', newImageUrl });
+
+  } catch (err) {
+    console.error('❌ Lỗi feedback-prompt:', err.message);
+    res.status(500).json({ success: false, message: err.message });
   }
 });
 

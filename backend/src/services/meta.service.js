@@ -2,7 +2,7 @@ import axios from 'axios';
 import fs from 'fs';
 import FormData from 'form-data';
 
-const GRAPH_API_VERSION = 'v19.0';
+const GRAPH_API_VERSION = 'v21.0';
 const GRAPH_API_BASE = `https://graph.facebook.com/${GRAPH_API_VERSION}`;
 
 // ============================================================
@@ -372,6 +372,7 @@ export const publishIGReels = async (videoPath, content, hashtags = []) => {
         media_type: 'REELS',
         upload_type: 'resumable',
         caption: caption,
+        share_to_feed: true,
         access_token: igToken,
       }
     }

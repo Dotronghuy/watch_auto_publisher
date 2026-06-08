@@ -1,35 +1,17 @@
-# 🎯 Brand Voice Guide — Đồng Hồ Chính Hãng Việt Nam
+# 🎯 Brand Voice Guide — I&W Carnival Việt Nam
 
-> **Mục đích của file này:**
-> Đây là tài liệu định hướng phong cách viết. Gemini đọc file này để hiểu CÁCH VIẾT,
-> KHÔNG đọc để SAO CHÉP nội dung. Mỗi lần viết bài phải tạo nội dung hoàn toàn mới,
-> lấy cảm hứng từ các ví dụ tham khảo bên dưới — không lặp lại từ ngữ đã có.
+> **Mục đích:** File này định hướng PHONG CÁCH VIẾT cho AI.
+> Mỗi lần viết bài phải tạo nội dung hoàn toàn mới — lấy cảm hứng từ các ví dụ,
+> KHÔNG sao chép lại từ ngữ đã có.
+>
+> File này KHÔNG lặp lại thông tin thương hiệu (xem customer-persona.md)
+> và KHÔNG lặp lại quy tắc cơ bản (xem gemini-prompt-template.md).
 
 ---
 
-## 📐 PHẦN 1 — Nguyên Tắc Nền Tảng (BẮT BUỘC ÁP DỤNG)
+## 📐 PHẦN 1 — Giọng Điệu & Cấu Trúc Câu
 
-> Gemini phải đọc và tuân thủ toàn bộ phần này trước khi viết bất kỳ nội dung nào.
-
-### 1.1 Thương Hiệu Là Ai
-
-```
-- Đơn vị phân phối đồng hồ chính hãng tại Việt Nam
-- Hướng đến khách hàng yêu sự chỉn chu, phong thái và giá trị thật
-- Không phải thương hiệu bình dân — nhưng cũng không xa cách
-- Thân thiện như người bạn có gu, không phán xét, không kẻ cả
-```
-
-### 1.2 Triết Lý Viết Content
-
-```
-- Đồng hồ không chỉ là phụ kiện — đó là biểu tượng của gu sống, thời gian, sự tự tin
-- Viết như người kể chuyện, không phải người bán hàng
-- Chạm vào cảm xúc trước — thông tin sản phẩm là thứ yếu
-- Mỗi bài chỉ nên truyền tải MỘT cảm xúc / ý tưởng — không cố nhét quá nhiều
-```
-
-### 1.3 Giọng Điệu (Voice)
+### 1.1 Giọng Điệu (Voice)
 
 ```
 PHẢI CÓ:
@@ -40,7 +22,6 @@ PHẢI CÓ:
 - Tự tin nhưng không phô trương
 
 TUYỆT ĐỐI TRÁNH:
-- "sale sốc", "giá rẻ", "mua ngay kẻo lỡ", "freeship", "inbox giá"
 - Câu dài hơn 20 chữ liên tục (chia nhỏ, tạo nhịp thở)
 - Giải thích quá nhiều — nếu cần giải thích, tức là câu chưa đủ hay
 - Dùng quá 2 dấu chấm than trong một bài
@@ -48,7 +29,7 @@ TUYỆT ĐỐI TRÁNH:
 - Văn phong học thuật hoặc quảng cáo rõ ràng
 ```
 
-### 1.4 Cấu Trúc Câu
+### 1.2 Cấu Trúc Câu
 
 ```
 - Câu mở: Gây chú ý bằng quan sát, câu hỏi ngầm, hoặc câu khẳng định bất ngờ
@@ -64,7 +45,7 @@ NHỊP ĐIỆU MẪU:
 
 ## 🗣️ PHẦN 2 — Thư Viện Tông Giọng
 
-> Mỗi bài viết được gán một tông giọng. Gemini chọn tông phù hợp với ngữ cảnh
+> Mỗi bài viết được gán một tông giọng. AI chọn tông phù hợp với ngữ cảnh
 > và viết theo đặc trưng tông đó. Ví dụ bên dưới chỉ để minh họa phong cách —
 > KHÔNG sao chép lại.
 
@@ -197,7 +178,7 @@ Ví dụ phong cách (KHÔNG SAO CHÉP):
 
 ## 🏷️ PHẦN 3 — Thư Viện Hashtag
 
-> Gemini chọn 5–8 hashtag phù hợp với nội dung từ các pool dưới đây.
+> AI chọn 5–8 hashtag phù hợp với nội dung từ các pool dưới đây.
 > KHÔNG dùng cùng một nhóm hashtag cho hai bài liên tiếp.
 
 ### ⚠️ Hashtag Mặc Định — BẮT BUỘC trong MỌI bài đăng
@@ -217,99 +198,57 @@ Tổng cộng mỗi bài: 5–8 hashtag (đã tính 3 tag mặc định).
 ### Pool A — Thương Hiệu / Chung
 
 ```
-#đồnghồchínhhãng
-#đồnghồvietnam
-#chínhhãng
-#authenticity
-#luxurywatches
-#watchvietnam
-#timepiece
-#watchlover
+#đồnghồchínhhãng #đồnghồvietnam #chínhhãng #authenticity
+#luxurywatches #watchvietnam #timepiece #watchlover
 ```
 
 ### Pool B — Nam Giới
 
 ```
-#đồnghồnam
-#menswatches
-#mensfashion
-#luxurywatchmen
-#phongcachdanong
-#watchoftheday
-#watchcollector
-#everydaycarry
+#đồnghồnam #menswatches #mensfashion #luxurywatchmen
+#phongcachdanong #watchoftheday #watchcollector #everydaycarry
 ```
 
 ### Pool C — Nữ Giới
 
 ```
-#đồnghồnữ
-#womenwatches
-#luxuryfeminine
-#phụnữhiệnđại
-#wristwear
-#ladieswatch
-#watchlove
-#femininewatch
+#đồnghồnữ #womenwatches #luxuryfeminine #phụnữhiệnđại
+#wristwear #ladieswatch #watchlove #femininewatch
 ```
 
 ### Pool D — Phong Cách Sống
 
 ```
-#lifestyle
-#quietluxury
-#minimalluxury
-#luxurylifestyle
-#slowliving
-#phongcachsong
-#lessismore
-#silentluxury
+#lifestyle #quietluxury #minimalluxury #luxurylifestyle
+#slowliving #phongcachsong #lessismore #silentluxury
 ```
 
 ### Pool E — Kỹ Thuật / Đam Mê
 
 ```
-#mechanicalwatch
-#đồnghồcơ
-#watchmaking
-#horlogerie
-#sapphireglass
-#watchdetails
-#movementwatch
-#watchgeek
+#mechanicalwatch #đồnghồcơ #watchmaking #horlogerie
+#sapphireglass #watchdetails #movementwatch #watchgeek
 ```
 
 ### Pool F — Dịp Đặc Biệt / Quà
 
 ```
-#quàtặng
-#giftwatches
-#luxurygift
-#meaningfulgifts
-#giftforhim
-#giftforher
-#fathersday
-#mothersday
+#quàtặng #giftwatches #luxurygift #meaningfulgifts
+#giftforhim #giftforher #fathersday #mothersday
 ```
 
 ### Pool G — Video / Reels
 
 ```
-#watchreels
-#watchunboxing
-#watchtok
-#luxurytraveler
-#travelwatch
-#gmtwatch
-#adventurewatch
-#watchlife
+#watchreels #watchunboxing #watchtok #luxurytraveler
+#travelwatch #gmtwatch #adventurewatch #watchlife
 ```
 
 ---
 
 ## 📣 PHẦN 4 — Thư Viện CTA
 
-> Gemini chọn 1 CTA phù hợp với giọng bài và nền tảng.
+> AI chọn 1 CTA phù hợp với giọng bài và nền tảng.
 > CTA phải nhẹ nhàng — không ép buộc, không khẩn cấp.
 > Thay đổi CTA giữa các bài, không dùng lặp lại cùng câu.
 
@@ -349,165 +288,62 @@ Tổng cộng mỗi bài: 5–8 hashtag (đã tính 3 tag mặc định).
 
 ---
 
-## 📏 PHẦN 5 — Hướng Dẫn Theo Nền Tảng
+## 📏 PHẦN 5 — Quy Tắc FB ≠ IG (BẮT BUỘC)
 
-> Gemini đọc phần này để biết độ dài, nhịp, và định dạng phù hợp từng nền tảng.
-> **QUAN TRỌNG:** Tool đăng FB trước → chờ → đăng IG sau.
 > FB và IG phải là HAI BÀI KHÁC NHAU HOÀN TOÀN — khác góc nhìn, khác câu từ, khác độ dài.
 > TUYỆT ĐỐI KHÔNG rút gọn bài FB để dùng cho IG.
 
----
-
-### 📘 Facebook Post
-
 ```
-Độ dài: 80–160 từ (dài hơn IG khoảng 4–6 lần)
+Quy tắc phân biệt:
 
-Cách viết:
-- Kể chuyện hoặc quan sát có chiều sâu
-- Có mở — có thân — có kết (nhưng kết không được quá rõ ràng)
-- 2–3 đoạn ngắn, cách nhau bằng dòng trống
-- Câu đầu tiên phải đủ mạnh để người dùng bấm "Xem thêm"
-- Được phép đề cập sản phẩm/thương hiệu một cách tự nhiên ở giữa hoặc cuối bài
-
-Góc tiếp cận: Cảm xúc + lý trí + câu chuyện
-Hashtag: 5–8 tag (gồm 3 tag mặc định + 2–5 tag từ pool)
-CTA: 1 câu cuối bài, nhẹ nhàng
-```
-
-**Ví dụ nhịp điệu Facebook (KHÔNG SAO CHÉP — chỉ để hiểu cấu trúc):**
-```
-Câu mở mạnh — gây tò mò hoặc chạm cảm xúc ngay.
-
-Phát triển ý — dẫn dắt người đọc qua một quan sát, một suy nghĩ.
-Dùng dấu gạch ngang — để tạo nhịp thở tự nhiên.
-
-Kết bằng câu ngắn. Để lại dư âm.
-[CTA nhẹ]
-```
-
----
-
-### 📷 Instagram Caption
-
-```
-Độ dài: 15–35 từ (ngắn — đọc trong 5 giây)
-
-Cách viết:
-- Chỉ 1 ý duy nhất — không giải thích, không dẫn dắt
-- Câu thơ văn ngắn hoặc câu khẳng định có trọng lượng
-- Không cần mở/thân/kết — chỉ cần 1 khoảnh khắc cảm xúc
-- Câu đứng độc lập — đọc không cần ảnh vẫn có nghĩa
-- Không được là bản rút gọn của bài FB — phải là GÓC NHÌN KHÁC
-
-Góc tiếp cận: Thơ — tối giản — gợi hình — ẩn ý
-Hashtag: 5–8 tag (gồm 3 tag mặc định + 2–5 tag từ pool)
-CTA: Không bắt buộc — nếu có thì tối đa 1 câu rất ngắn
-```
-
-**Ví dụ nhịp điệu Instagram (KHÔNG SAO CHÉP — chỉ để hiểu cấu trúc):**
-```
-Một câu gây hình ảnh hoặc cảm giác.
-Câu thứ hai — nếu có — phải bổ sung, không giải thích.
-```
-
-**Quy tắc FB ≠ IG (bắt buộc tuân thủ):**
-```
 Nếu FB viết về: "Hành trình của người đàn ông và đồng hồ"
-Thì IG KHÔNG viết về hành trình đó
-IG có thể viết về: một chi tiết nhỏ — âm thanh, ánh sáng, khoảnh khắc cụ thể
+→ IG KHÔNG viết về hành trình đó
+→ IG có thể viết về: một chi tiết nhỏ — âm thanh, ánh sáng, khoảnh khắc cụ thể
 
 Nếu FB dùng tone: Triết lý — kể chuyện dài
-Thì IG dùng tone: Tối giản — một câu đủ nặng
+→ IG dùng tone: Tối giản — một câu đủ nặng
 
-Cùng một sản phẩm / chủ đề → hai góc nhìn hoàn toàn khác nhau
+Nếu FB viết về: Cảm xúc cá nhân, trải nghiệm đeo đồng hồ
+→ IG có thể viết về: Quan sát tinh tế, một hình ảnh gợi liên tưởng
+
+Cùng một sản phẩm / chủ đề → hai góc nhìn hoàn toàn khác nhau.
+```
+
+### Facebook Post
+
+```
+Độ dài: 80–150 từ
+Cấu trúc: 2–3 đoạn ngắn, cách nhau bằng dòng trống
+Câu đầu phải đủ mạnh để người đọc bấm "Xem thêm"
+Góc tiếp cận: Cảm xúc + lý trí + câu chuyện
+```
+
+### Instagram Caption
+
+```
+Độ dài: 15–35 từ — ngắn, đọc trong 5 giây
+Chỉ 1 ý duy nhất — không giải thích, không dẫn dắt
+Câu đứng độc lập — đọc không cần ảnh vẫn có nghĩa
+Góc tiếp cận: Thơ — tối giản — gợi hình — ẩn ý
 ```
 
 ---
 
-### 📱 Story (Facebook / Instagram)
+## 🔄 PHẦN 6 — Xoay Vòng Chủ Đề (Chống Lặp Content)
+
+> AI PHẢI xoay vòng giữa các góc nhìn bên dưới mỗi lần viết bài mới.
+> KHÔNG viết 2 bài liên tiếp cùng 1 góc nhìn.
 
 ```
-Độ dài: Tối đa 2 câu — đọc trong 5 giây
-Cấu trúc: 1 câu gây chú ý + 1 CTA hoặc poll
-Tông giọng: Trực tiếp, không giải thích dài
-Hashtag: Không bắt buộc trong Story
-```
+GÓC NHÌN XOAY VÒNG (chọn 1 cho mỗi bài):
 
----
+1. CHI TIẾT SẢN PHẨM — Tập trung vào một chi tiết nhỏ: mặt kính, dây, niềng, kim
+2. CẢM XÚC ĐEO TAY — Khoảnh khắc đeo lên, cảm giác tự tin, hoàn thiện phong thái
+3. PHONG CÁCH SỐNG — Đồng hồ trong ngữ cảnh đi làm, gặp gỡ, cuộc sống hằng ngày
+4. QUÀ TẶNG Ý NGHĨA — Chọn quà cho người quan trọng, khoảnh khắc trao tay
+5. GIÁ TRỊ THẬT — So sánh ngầm với hàng kém chất lượng, kiến thức mua đồng hồ
+6. KHOẢNH KHẮC CỤ THỂ — Một buổi sáng, một cuộc họp, một lần nhìn xuống cổ tay
+7. CÂU CHUYỆN THƯƠNG HIỆU — Triết lý I&W Carnival, cam kết chính hãng, bảo hành
 
-### 🎬 Reels / TikTok Script
-
-```
-Thời lượng: 15–20 giây
-Cấu trúc:
-  [0–3s]  Hook — câu hoặc cảnh mở đầu gây chú ý ngay lập tức
-  [3–12s] Nội dung chính — ngắn, có nhịp
-  [12–17s] Điểm nhấn / cảm xúc cao nhất
-  [17–20s] Text kết + CTA nhẹ
-Tông giọng: Năng động hơn, nhưng không mất phong cách thương hiệu
-Hashtag: 5–8 tag kèm trong caption video
-```
-
----
-
-### ✍️ Slogan / Tagline
-
-```
-Độ dài: Tối đa 12 từ
-Yêu cầu: Đọc một lần nhớ ngay — không cần ngữ cảnh vẫn hiểu
-Không dùng: Câu hỏi, dấu chấm than, từ ngữ bán hàng
-```
-
----
-
-## 🔖 PHẦN 6 — Ghi Chú Hệ Thống
-
-> Dành cho developer và AI đọc để biết cách sử dụng file này.
-
-```yaml
-system_notes:
-  version: "3.0"
-  updated: "2026-05"
-  file_purpose: "style_guide"
-  usage_mode: "reference_only"
-  mandatory_hashtags:
-    - "#iwcarnivalvietnam"
-    - "#iwcarnival"
-    - "#donghoiwcarnival"
-    - note: "Luôn xuất hiện trong MỌI bài đăng — FB và IG — không được bỏ"
-  posting_flow:
-    order: "Facebook trước → chờ → Instagram sau"
-    rule: "FB và IG phải là hai bài khác nhau hoàn toàn"
-    forbidden: "Không rút gọn bài FB để đăng IG"
-    angle_rule: "Cùng chủ đề nhưng khác góc nhìn, khác tone, khác độ dài"
-  usage_instruction: |
-    Gemini đọc file này để hiểu phong cách viết.
-    Mỗi lần tạo content, Gemini phải:
-      1. Đọc Phần 1 — áp dụng nguyên tắc nền tảng
-      2. Chọn tone phù hợp từ Phần 2
-      3. Viết bài FB theo hướng dẫn Facebook trong Phần 5
-      4. Viết bài IG KHÁC HOÀN TOÀN — góc nhìn mới, ngắn hơn nhiều
-      5. Hashtag: 3 tag mặc định + 2–5 tag từ pool Phần 3
-      6. Chọn CTA phù hợp từ Phần 4
-      7. Nội dung HOÀN TOÀN MỚI mỗi lần — không copy ví dụ trong file
-  language: "Vietnamese (vi-VN)"
-  gender_values:
-    - male      # Nội dung hướng đến nam giới
-    - female    # Nội dung hướng đến nữ giới
-    - unisex    # Không phân biệt giới tính
-  brand_voice_summary:
-    - Sang trọng nhưng gần gũi
-    - Tối giản nhưng có chiều sâu
-    - Không bán hàng lộ liễu
-    - Gợi cảm xúc trước — thông tin sau
-  platforms_supported:
-    - Facebook Fanpage
-    - Instagram Feed
-    - Instagram / Facebook Story
-    - Instagram Reels
-    - TikTok
-  image_generation:
-    handled_by: "gpt_image_prompt.md"
-    note: "File riêng — 19 cảnh nam + 15 cảnh nữ + 2 neutral. Phát hiện giới tính từ SKU."
+Mỗi góc nhìn kết hợp với 1 TONE từ Phần 2 → tạo ra content luôn mới và đa dạng.
 ```

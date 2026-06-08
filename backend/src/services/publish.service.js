@@ -4,12 +4,13 @@ import FormData from 'form-data';
 import sharp from 'sharp';
 import { getFolderIdByName, getImagesInFolder, getVideosInFolder, downloadFileFromDrive, getFoldersInFolder } from './drive.service.js';
 import { getProductInfoBySku, updateProductPostInfo, getAllProductsPostInfo, clearExpiredPostInfo } from './sheet.service.js';
+import { readFromSheet } from './sheets.service.js';
 import { getPostedImageIds, addPostedImageId, addPostMetric } from '../utils/history.js';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { generateBackgroundOnChatGPT, generateContentOnChatGPT } from './playwright.service.js';
 import { telegramEvents, sendBatchToTelegram } from './telegram.service.js';
-import { publishToInstagram, publishCarouselToInstagram, publishFBReels, publishIGReels } from './meta.service.js';
+import { publishToInstagram, publishCarouselToInstagram, publishFBReels, publishIGReels, publishThreadChain } from './meta.service.js';
 import { addMusicToVideo } from './video.service.js';
 import { addActivity } from '../utils/activity.js';
 import { liveLog } from '../utils/liveLog.js';
@@ -47,6 +48,116 @@ export const triggerGlobalStop = () => {
   globalStopController.abort();
 };
 
+const getSmartFilteredSkus = async (skuFolders, allProductsInfo) => {
+  const sheetData = await readFromSheet();
+
+  if (!sheetData || sheetData.length === 0) {
+    liveLog('⚠️ [Smart Filter] Không đọc được Google Sheets, chuyển về chế độ ngẫu nhiên.', 'warning', 'System');
+    return skuFolders.sort(() => 0.5 - Math.random());
+  }
+
+  // Lọc các SKU có trong Google Sheets và có ảnh (0_Anh_AVT = OK)
+  const validSkusFromSheet = sheetData.filter(row =>
+    row['Kết Quả'] !== 'KHONG CO ANH' &&
+    row['0_Anh_AVT'] === 'OK'
+  );
+
+  const parseVietnameseDate = (dateString) => {
+    if (!dateString) return 0;
+    const parts = dateString.split(' ');
+    if (parts.length !== 2) return 0;
+    const [timePart, datePart] = parts;
+    const [hour, min, sec] = timePart.split(':').map(Number);
+    const [day, month, year] = datePart.split('/').map(Number);
+    return new Date(year, month - 1, day, hour, min, sec).getTime();
+  };
+
+  // Phân nhóm SKU theo cột "Tập Trung" (cột H)
+  // 1 = bán chạy (80%), 2 = bán ít (15%), 0 = chưa bán (5%)
+  let groups = { '1': [], '2': [], '0': [] };
+
+  for (const skuFolder of skuFolders) {
+    // Cooldown check
+    const productInfo = allProductsInfo.find(p => p.sku === skuFolder.name);
+    if (productInfo && productInfo.postDate) {
+      const lastPostTime = parseVietnameseDate(productInfo.postDate);
+      const cycleMs = productInfo.cycleMinutes * 60 * 1000;
+      if (Date.now() - lastPostTime < cycleMs) continue;
+    }
+
+    // Kiểm tra SKU có trong Sheet
+    const sheetRow = validSkusFromSheet.find(row =>
+      row['Mã SKU'] === skuFolder.name || row['Ma_SKU'] === skuFolder.name
+    );
+
+    if (sheetRow) {
+      const priority = String(sheetRow['Tập Trung'] || '0').trim();
+      const group = ['1', '2', '0'].includes(priority) ? priority : '0';
+      groups[group].push({
+        folder: skuFolder,
+        hasMultipleMedia: (sheetRow['1_Anh_Hang'] === 'OK' || sheetRow['2_Anh_Tu_Chup'] === 'OK') ? 2 : 1
+      });
+    }
+  }
+
+  // Bộ đếm: đảm bảo không quá 2 bài liên tiếp KHÔNG thuộc nhóm 1
+  if (!getSmartFilteredSkus._nonGroup1Count) getSmartFilteredSkus._nonGroup1Count = 0;
+
+  // Weighted random: quay xổ số mỗi lần chọn SKU
+  // 80% nhóm 1 (bán chạy) → 15% nhóm 2 (bán ít) → 5% nhóm 0 (chưa bán)
+  const roll = Math.random() * 100;
+  let selectedGroup;
+
+  // Bảo hiểm: nếu đã 2 lần liên tiếp không phải nhóm 1 → ép nhóm 1
+  const forceGroup1 = getSmartFilteredSkus._nonGroup1Count >= 2 && groups['1'].length > 0;
+
+  if (forceGroup1) {
+    selectedGroup = '1';
+    getSmartFilteredSkus._nonGroup1Count = 0;
+    liveLog('🔒 [Smart Filter] Bảo hiểm: ép chọn nhóm 1 sau 2 lần liên tiếp nhóm khác', 'info', 'System');
+  } else if (roll < 80 && groups['1'].length > 0) {
+    selectedGroup = '1';
+    getSmartFilteredSkus._nonGroup1Count = 0;
+  } else if (roll < 95 && groups['2'].length > 0) {
+    selectedGroup = '2';
+    getSmartFilteredSkus._nonGroup1Count++;
+  } else if (groups['0'].length > 0) {
+    selectedGroup = '0';
+    getSmartFilteredSkus._nonGroup1Count++;
+  } else {
+    // Fallback: chọn nhóm nào có SKU
+    selectedGroup = groups['1'].length > 0 ? '1' :
+      groups['2'].length > 0 ? '2' : '0';
+    getSmartFilteredSkus._nonGroup1Count = selectedGroup === '1' ? 0 : getSmartFilteredSkus._nonGroup1Count + 1;
+  }
+
+  const groupLabels = { '1': 'Bán chạy', '2': 'Bán ít', '0': 'Chưa bán' };
+  liveLog(`🎯 [Smart Filter] Quay xổ số → Nhóm ${selectedGroup} (${groupLabels[selectedGroup]}) | ` +
+    `Tổng: 1:${groups['1'].length} | 2:${groups['2'].length} | 0:${groups['0'].length}`,
+    'info', 'System');
+
+  // Nhóm được chọn lên đầu (shuffle nội bộ), các nhóm khác xếp sau
+  const sortByMedia = (a, b) => {
+    if (a.hasMultipleMedia !== b.hasMultipleMedia) return b.hasMultipleMedia - a.hasMultipleMedia;
+    return 0.5 - Math.random();
+  };
+
+  const result = [
+    ...groups[selectedGroup].sort(sortByMedia),
+    ...Object.entries(groups)
+      .filter(([k]) => k !== selectedGroup)
+      .sort(([a], [b]) => Number(b) - Number(a)) // Ưu tiên nhóm cao hơn trước
+      .flatMap(([, v]) => v.sort(sortByMedia))
+  ];
+
+  if (result.length === 0) {
+    liveLog('⚠️ [Smart Filter] Không có SKU khả dụng, dùng random.', 'warning', 'System');
+    return skuFolders.sort(() => 0.5 - Math.random());
+  }
+
+  return result.map(item => item.folder);
+};
+
 // ============================================================
 // DRY RUN: Chạy toàn bộ luồng nhưng KHÔNG đăng lên MXH
 // Trả về: { sku, postMode, fbContent, igContent, imagePaths }
@@ -72,7 +183,7 @@ export const dryRunRoutine = async () => {
       const files = fs.readdirSync(tempDir);
       for (const file of files) {
         if (file !== '.gitkeep' && (file.includes('_rmbg') || file.includes('_1024'))) {
-          try { fs.unlinkSync(path.join(tempDir, file)); } catch (e) {}
+          try { fs.unlinkSync(path.join(tempDir, file)); } catch (e) { }
         }
       }
     }
@@ -81,8 +192,11 @@ export const dryRunRoutine = async () => {
   let localFilePaths = [];
 
   try {
-    const skuFolders = await getFoldersInFolder(ROOT_DRIVE_FOLDER_ID);
-    if (skuFolders.length === 0) throw new Error('Không tìm thấy thư mục SKU nào trong Drive!');
+    const brandFolders = await getFoldersInFolder(ROOT_DRIVE_FOLDER_ID);
+    const iwFolder = brandFolders.find(f => f.name.toLowerCase().includes('i&w carnival') || f.name.toLowerCase().includes('i&w'));
+    if (!iwFolder) throw new Error('Không tìm thấy thư mục I&W Carnival trong Drive!');
+    const skuFolders = await getFoldersInFolder(iwFolder.id);
+    if (skuFolders.length === 0) throw new Error('Không tìm thấy thư mục SKU nào trong thư mục I&W Carnival!');
 
     const postedIds = await getPostedImageIds();
 
@@ -102,20 +216,7 @@ export const dryRunRoutine = async () => {
       return new Date(year, month - 1, day, hour, min, sec).getTime();
     };
 
-    const eligibleSkus = [];
-    for (const skuFolder of skuFolders) {
-      const productInfo = allProductsInfo.find(p => p.sku === skuFolder.name);
-      if (productInfo && productInfo.postDate) {
-        const lastPostTime = parseVietnameseDate(productInfo.postDate);
-        const cycleMs = productInfo.cycleMinutes * 60 * 1000;
-        if (Date.now() - lastPostTime < cycleMs) continue;
-      }
-      eligibleSkus.push(skuFolder);
-    }
-
-    if (eligibleSkus.length === 0) throw new Error('Tất cả SKU đang trong cooldown!');
-
-    const shuffledSkus = eligibleSkus.sort(() => 0.5 - Math.random());
+    const shuffledSkus = await getSmartFilteredSkus(skuFolders, allProductsInfo);
     const folderTypes = ['0_Anh_AVT', '1_Anh_Hang', '2_Anh_Tu_Chup', '3_Video_Doc'];
     let selectedImages = [];
     let selectedSku = null;
@@ -145,7 +246,11 @@ export const dryRunRoutine = async () => {
             postMode = 'REELS';
           } else {
             const numToPick = Math.min(freshMedia.length, Math.floor(Math.random() * 5) + 4);
-            selectedImages = freshMedia.sort(() => 0.5 - Math.random()).slice(0, numToPick);
+            // Ảnh số 1 (theo tên file) luôn ở đầu, còn lại random
+            const sorted = [...freshMedia].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+            const firstImage = sorted[0];
+            const rest = sorted.slice(1).sort(() => 0.5 - Math.random()).slice(0, numToPick - 1);
+            selectedImages = [firstImage, ...rest];
             postMode = 'ALBUM';
           }
           break;
@@ -161,6 +266,7 @@ export const dryRunRoutine = async () => {
 
     // 2. Tải ảnh về
     for (const img of selectedImages) {
+      checkAbort();
       let pathStr = await downloadFileFromDrive(img.id, img.name);
 
       if (postMode === 'AI') {
@@ -192,6 +298,7 @@ export const dryRunRoutine = async () => {
     }
 
     // 3. AI xử lý (ChatGPT + Gemini)
+    checkAbort();
     let fbContent = '';
     let igContent = '';
     let currentImgPromptsArray = [];
@@ -220,7 +327,7 @@ export const dryRunRoutine = async () => {
             const searchContent = sectionMatch ? sectionMatch[0] : mdContent;
             const blockRegex = /###\s+(?:MALE|FEMALE|NEUTRAL)-\d+[\s\S]*?(?=\n###|\n## |$)/gi;
             const blocks = [...searchContent.matchAll(blockRegex)].map(m => m[0]);
-            
+
             const validScenes = blocks.map(block => {
               const sampleImgMatch = block.match(/\*\*Sample Image:\*\*\s*(.+)/i);
               const promptMatch = block.match(/\*\*English instruction for GPT:\*\*\s*>\s*([\s\S]*?)(?=\n---|###|## |$)/i);
@@ -240,7 +347,7 @@ export const dryRunRoutine = async () => {
                 : genderTag === 'FEMALE'
                   ? 'The person in the scene must have FEMININE hands and appearance (female wrist, manicured nails, female clothing).'
                   : '';
-              
+
               currentSceneTextsArray = shuffledScenes.map(s => s.text);
               imgPromptsArray = shuffledScenes.map(s => {
                 let sImgPath = null;
@@ -264,7 +371,40 @@ export const dryRunRoutine = async () => {
 
           const sampleImg = getRandomSampleImage();
           if (sampleImg) liveLog(`🖼️ [DRY RUN] Dùng ảnh mẫu: ${path.basename(sampleImg)}`, 'info', 'ChatGPT');
-          aiGeneratedImagePaths = await generateBackgroundOnChatGPT(localFilePaths[0], imgPromptsArray, globalStopController.signal, sampleImg, false);
+
+          let extraWatchImages = [];
+          try {
+            liveLog('📸 [DRY RUN] Đang tìm ảnh tham khảo từ Ảnh_Hãng/Ảnh_Tự_Chụp...', 'typing', 'Google Drive');
+            let extraFilesToDownload = [];
+            const skuSubFolders = await getFoldersInFolder(selectedSku.id);
+            liveLog(`DEBUG: Tìm thấy ${skuSubFolders.length} thư mục con trong SKU`, 'info', 'System');
+
+            const anhHangFolder = skuSubFolders.find(f => f.name.includes('1_') || f.name.toLowerCase().includes('hãng') || f.name.toLowerCase().includes('hang'));
+            const tuChupFolder = skuSubFolders.find(f => f.name.includes('2_') || f.name.toLowerCase().includes('tự') || f.name.toLowerCase().includes('tu'));
+            liveLog(`DEBUG: Thư mục 1: ${anhHangFolder?.name || 'Không thấy'}, Thư mục 2: ${tuChupFolder?.name || 'Không thấy'}`, 'info', 'System');
+
+            for (const f of [anhHangFolder, tuChupFolder]) {
+              if (f) {
+                const imgs = await getImagesInFolder(f.id);
+                liveLog(`DEBUG: Thư mục ${f.name} có ${imgs.length} file ảnh hợp lệ (chứa chữ image/)`, 'info', 'System');
+                extraFilesToDownload.push(...imgs);
+              }
+            }
+            if (extraFilesToDownload.length > 0) {
+              const maxExtra = Math.min(extraFilesToDownload.length, 4);
+              extraFilesToDownload = extraFilesToDownload.sort(() => 0.5 - Math.random()).slice(0, maxExtra);
+              for (const file of extraFilesToDownload) {
+                checkAbort();
+                const p = await downloadFileFromDrive(file.id, file.name);
+                extraWatchImages.push(p);
+              }
+              liveLog(`✅ Đã tải ${extraWatchImages.length} ảnh tham khảo cho ChatGPT`, 'success', 'Google Drive');
+            }
+          } catch (e) {
+            liveLog(`⚠️ [DRY RUN] Lỗi khi lấy ảnh tham khảo: ${e.message}`, 'warning', 'Google Drive');
+          }
+
+          aiGeneratedImagePaths = await generateBackgroundOnChatGPT(localFilePaths[0], imgPromptsArray, globalStopController.signal, sampleImg, false, extraWatchImages);
           currentImgPromptsArray = imgPromptsArray;
           const lastWatchPath = path.join(__dirname, '../../temp_images/last_watch_image.png');
           if (fs.existsSync(localFilePaths[0])) { fs.copyFileSync(localFilePaths[0], lastWatchPath); fs.unlinkSync(localFilePaths[0]); }
@@ -287,16 +427,13 @@ export const dryRunRoutine = async () => {
 
         if (fs.existsSync(geminiTemplatePath)) {
           const templateRaw = fs.readFileSync(geminiTemplatePath, 'utf8');
-          let additionalContext = '';
-          const marketingPath = path.join(__dirname, '../../config/watch-marketing-content.md');
-          if (fs.existsSync(marketingPath)) additionalContext += `\n\n--- QUY TẮC MARKETING BỔ SUNG ---\n${fs.readFileSync(marketingPath, 'utf8')}`;
-          const personaPath = path.join(__dirname, '../../config/customer-persona.md');
-          if (fs.existsSync(personaPath)) additionalContext += `\n\n--- CHÂN DUNG KHÁCH HÀNG BỔ SUNG ---\n${fs.readFileSync(personaPath, 'utf8')}`;
+          // KHÔNG nối thêm marketing + persona vào prompt nữa
+          // vì 2 file đó đã được upload làm Sources trong dự án Content_Watch_AI trên ChatGPT
 
           const fillTemplate = (tmpl) => tmpl
             .replace(/\{\{SKU\}\}/g, selectedSku.name)
             .replace(/\{\{PRODUCT_INFO\}\}/g, productInfoText || 'Không có thông tin')
-            .replace(/\{\{GENDER\}\}/g, genderLabel) + additionalContext;
+            .replace(/\{\{GENDER\}\}/g, genderLabel);
 
           const fbIgMatch = templateRaw.match(/## FB_AND_IG_PROMPT_TEMPLATE\s*\n([\s\S]*?)(?=\n---\n## |\n## REELS_|$)/);
           if (fbIgMatch) fbPromptFinal = fillTemplate(fbIgMatch[1].trim());
@@ -341,8 +478,8 @@ export const dryRunRoutine = async () => {
           if (fbContent && igContent) {
             console.log(`✅ [ChatGPT] Sinh thành công: FB (${fbContent.length} ký tự) | IG (${igContent.length} ký tự)`);
           } else {
-             fbContent = "Failed to generate FB content";
-             igContent = "Failed to generate IG content";
+            fbContent = "Failed to generate FB content";
+            igContent = "Failed to generate IG content";
           }
         }
 
@@ -424,7 +561,7 @@ telegramEvents.on('trigger_start_training', () => {
 export const startTelegramTrainingLoop = async () => {
   isRoutineRunning = true;
   let isTraining = true;
-  
+
   const checkAbort = () => {
     if (globalStopController.signal.aborted) {
       const err = new Error('Luồng bị dừng theo yêu cầu của người dùng.');
@@ -437,13 +574,17 @@ export const startTelegramTrainingLoop = async () => {
     try {
       console.log('--- ĐÃ CHẠY VÀO VÒNG LẶP TRAIN ẢNH ---');
       liveLog('Bắt đầu vòng lặp Train Ảnh mới...', 'highlight', 'System');
-      const skuFolders = await getFoldersInFolder(ROOT_DRIVE_FOLDER_ID);
-      if (skuFolders.length === 0) throw new Error('Không tìm thấy thư mục SKU nào trong Drive!');
+      const brandFolders = await getFoldersInFolder(ROOT_DRIVE_FOLDER_ID);
+      const iwFolder = brandFolders.find(f => f.name.toLowerCase().includes('i&w carnival') || f.name.toLowerCase().includes('i&w'));
+      if (!iwFolder) throw new Error('Không tìm thấy thư mục I&W Carnival trong Drive!');
+      const skuFolders = await getFoldersInFolder(iwFolder.id);
+      if (skuFolders.length === 0) throw new Error('Không tìm thấy thư mục SKU nào trong thư mục I&W Carnival!');
 
       const postedIds = await getPostedImageIds();
       checkAbort();
 
-      const shuffledSkus = [...skuFolders].sort(() => 0.5 - Math.random());
+      const allProductsInfo = await getAllProductsPostInfo();
+      const shuffledSkus = await getSmartFilteredSkus(skuFolders, allProductsInfo);
       let selectedSku = null;
       let avtImageFile = null;
 
@@ -465,7 +606,7 @@ export const startTelegramTrainingLoop = async () => {
       }
 
       liveLog('✅ [TRAIN ẢNH] Đã chọn SKU: ' + selectedSku.name, 'highlight', 'Google Drive');
-      
+
       let pathStr = await downloadFileFromDrive(avtImageFile.id, avtImageFile.name);
       const bgRemovedPath = pathStr.replace(/\.[^/.]+$/, '_rmbg.png');
       const finalPaddedPath = pathStr.replace(/\.[^/.]+$/, '_1024.png');
@@ -505,7 +646,7 @@ export const startTelegramTrainingLoop = async () => {
         const searchContent = sectionMatch ? sectionMatch[0] : mdContent;
         const blockRegex = /###\s+(?:MALE|FEMALE|NEUTRAL)-\d+[\s\S]*?(?=\n###|\n## |$)/gi;
         const blocks = [...searchContent.matchAll(blockRegex)].map(m => m[0]);
-        
+
         const validScenes = blocks.map(block => {
           const sampleImgMatch = block.match(/\*\*Sample Image:\*\*\s*(.+)/i);
           const promptMatch = block.match(/\*\*English instruction for GPT:\*\*\s*>\s*([\s\S]*?)(?=\n---|###|## |$)/i);
@@ -540,10 +681,44 @@ export const startTelegramTrainingLoop = async () => {
       }
 
       const sampleImg = getRandomSampleImage();
-      const aiGeneratedImagePaths = await generateBackgroundOnChatGPT(pathStr, imgPromptsArray, globalStopController.signal, sampleImg, false);
+
+      let extraWatchImages = [];
+      try {
+        liveLog('📸 [TRAIN ẢNH] Đang tìm ảnh tham khảo từ Ảnh_Hãng/Ảnh_Tự_Chụp...', 'typing', 'Google Drive');
+        let extraFilesToDownload = [];
+        const skuSubFolders = await getFoldersInFolder(selectedSku.id);
+        liveLog(`DEBUG: Tìm thấy ${skuSubFolders.length} thư mục con trong SKU`, 'info', 'System');
+
+        const anhHangFolder = skuSubFolders.find(f => f.name.includes('1_') || f.name.toLowerCase().includes('hãng') || f.name.toLowerCase().includes('hang'));
+        const tuChupFolder = skuSubFolders.find(f => f.name.includes('2_') || f.name.toLowerCase().includes('tự') || f.name.toLowerCase().includes('tu'));
+
+        liveLog(`DEBUG: Thư mục 1: ${anhHangFolder?.name || 'Không thấy'}, Thư mục 2: ${tuChupFolder?.name || 'Không thấy'}`, 'info', 'System');
+
+        for (const f of [anhHangFolder, tuChupFolder]) {
+          if (f) {
+            const imgs = await getImagesInFolder(f.id);
+            liveLog(`DEBUG: Thư mục ${f.name} có ${imgs.length} file ảnh hợp lệ (chứa chữ image/)`, 'info', 'System');
+            extraFilesToDownload.push(...imgs);
+          }
+        }
+
+        if (extraFilesToDownload.length > 0) {
+          const maxExtra = Math.min(extraFilesToDownload.length, 4);
+          extraFilesToDownload = extraFilesToDownload.sort(() => 0.5 - Math.random()).slice(0, maxExtra);
+          for (const file of extraFilesToDownload) {
+            const p = await downloadFileFromDrive(file.id, file.name);
+            extraWatchImages.push(p);
+          }
+          liveLog(`✅ Đã tải ${extraWatchImages.length} ảnh tham khảo cho ChatGPT`, 'success', 'Google Drive');
+        }
+      } catch (e) {
+        liveLog(`⚠️ [TRAIN ẢNH] Lỗi khi lấy ảnh tham khảo: ${e.message}`, 'warning', 'Google Drive');
+      }
+
+      const aiGeneratedImagePaths = await generateBackgroundOnChatGPT(pathStr, imgPromptsArray, globalStopController.signal, sampleImg, false, extraWatchImages);
       const lastWatchPath = path.join(__dirname, '../../temp_images/last_watch_image.png');
       if (fs.existsSync(pathStr)) { fs.copyFileSync(pathStr, lastWatchPath); fs.unlinkSync(pathStr); }
-      
+
       const imageUrls = [];
       for (let i = 0; i < aiGeneratedImagePaths.length; i++) {
         if (fs.existsSync(aiGeneratedImagePaths[i])) {
@@ -555,12 +730,12 @@ export const startTelegramTrainingLoop = async () => {
       }
 
       liveLog('🎉 [TRAIN ẢNH] Đã vẽ xong! Đang đẩy ảnh qua Telegram...', 'success', 'System');
-      
+
       await sendBatchToTelegram(imageUrls, lastWatchPath, sampleImg);
-      
+
       liveLog('⏳ Đang chờ bác chấm điểm trên Telegram...', 'highlight', 'System');
       const shouldContinue = await waitForTelegramDecision();
-      
+
       if (!shouldContinue) {
         isTraining = false;
         liveLog('⏸️ Hệ thống Train Ảnh đã ngưng theo yêu cầu (hoặc timeout).', 'warning', 'System');
@@ -576,7 +751,7 @@ export const startTelegramTrainingLoop = async () => {
 
 export const trainImageOnly = async () => {
   if (isRoutineRunning) throw new Error('Hệ thống đang chạy một tiến trình khác!');
-  
+
   // Khởi động luồng chạy ngầm
   startTelegramTrainingLoop().catch(console.error);
 
@@ -610,13 +785,37 @@ export const trainContentOnly = async () => {
   liveLog('📝 [TRAIN CONTENT] Bắt đầu tạo nội dung để training...', 'highlight', 'System');
 
   try {
-    const skuFolders = await getFoldersInFolder(ROOT_DRIVE_FOLDER_ID);
-    if (skuFolders.length === 0) throw new Error('Không tìm thấy thư mục SKU nào trong Drive!');
+    const brandFolders = await getFoldersInFolder(ROOT_DRIVE_FOLDER_ID);
+    const iwFolder = brandFolders.find(f => f.name.toLowerCase().includes('i&w carnival') || f.name.toLowerCase().includes('i&w'));
+    if (!iwFolder) throw new Error('Không tìm thấy thư mục I&W Carnival trong Drive!');
+    const skuFolders = await getFoldersInFolder(iwFolder.id);
+    if (skuFolders.length === 0) throw new Error('Không tìm thấy thư mục SKU nào trong thư mục I&W Carnival!');
 
     checkAbort();
 
-    // Chọn ngẫu nhiên 1 SKU
-    const selectedSku = skuFolders[Math.floor(Math.random() * skuFolders.length)];
+    const allProductsInfo = await getAllProductsPostInfo();
+    const shuffledSkus = await getSmartFilteredSkus(skuFolders, allProductsInfo);
+
+    let selectedSku = null;
+    let selectedImages = [];
+    let postMode = 'SINGLE';
+
+    // Tìm SKU đầu tiên có thư mục AVT và có ảnh mới
+    for (const skuFolder of shuffledSkus) {
+      const avtFolderId = await getFolderIdByName('0_Anh_AVT', skuFolder.id);
+      if (!avtFolderId) continue;
+
+      const mediaFiles = await getImagesInFolder(avtFolderId);
+      if (mediaFiles.length > 0) {
+        selectedSku = skuFolder;
+        selectedImages = [mediaFiles[Math.floor(Math.random() * mediaFiles.length)]];
+        postMode = 'AI';
+        break;
+      }
+    }
+
+    if (!selectedSku) throw new Error('Không tìm thấy SKU nào có ảnh AVT để test Content!');
+
     liveLog(`✅ [TRAIN CONTENT] Đã chọn SKU: ${selectedSku.name}`, 'highlight', 'Google Drive');
 
     const productInfo = await getProductInfoBySku(selectedSku.name);
@@ -630,16 +829,13 @@ export const trainContentOnly = async () => {
     let fbPromptFinal = null;
     if (fs.existsSync(geminiTemplatePath)) {
       const templateRaw = fs.readFileSync(geminiTemplatePath, 'utf8');
-      let additionalContext = '';
-      const marketingPath = path.join(__dirname, '../../config/watch-marketing-content.md');
-      if (fs.existsSync(marketingPath)) additionalContext += `\n\n--- QUY TẮC MARKETING BỔ SUNG ---\n${fs.readFileSync(marketingPath, 'utf8')}`;
-      const personaPath = path.join(__dirname, '../../config/customer-persona.md');
-      if (fs.existsSync(personaPath)) additionalContext += `\n\n--- CHÂN DUNG KHÁCH HÀNG BỔ SUNG ---\n${fs.readFileSync(personaPath, 'utf8')}`;
+      // KHÔNG cần nối thêm marketing + persona vào prompt nữa
+      // vì 2 file đó đã được upload làm Sources trong dự án Content_Watch_AI trên ChatGPT
 
       const fillTemplate = (tmpl) => tmpl
         .replace(/\{\{SKU\}\}/g, selectedSku.name)
         .replace(/\{\{PRODUCT_INFO\}\}/g, productInfoText || 'Không có thông tin')
-        .replace(/\{\{GENDER\}\}/g, genderLabel) + additionalContext;
+        .replace(/\{\{GENDER\}\}/g, genderLabel);
 
       const fbIgMatch = templateRaw.match(/## FB_AND_IG_PROMPT_TEMPLATE\s*\n([\s\S]*?)(?=\n---\n## |\n## REELS_|$)/);
       if (fbIgMatch) fbPromptFinal = fillTemplate(fbIgMatch[1].trim());
@@ -726,8 +922,11 @@ export const autoPublishRoutine = async () => {
   let localFilePaths = [];
 
   try {
-    const skuFolders = await getFoldersInFolder(ROOT_DRIVE_FOLDER_ID);
-    if (skuFolders.length === 0) throw new Error('Không tìm thấy thư mục SKU nào trong Drive!');
+    const brandFolders = await getFoldersInFolder(ROOT_DRIVE_FOLDER_ID);
+    const iwFolder = brandFolders.find(f => f.name.toLowerCase().includes('i&w carnival') || f.name.toLowerCase().includes('i&w'));
+    if (!iwFolder) throw new Error('Không tìm thấy thư mục I&W Carnival trong Drive!');
+    const skuFolders = await getFoldersInFolder(iwFolder.id);
+    if (skuFolders.length === 0) throw new Error('Không tìm thấy thư mục SKU nào trong thư mục I&W Carnival!');
 
     const postedIds = await getPostedImageIds();
 
@@ -777,8 +976,8 @@ export const autoPublishRoutine = async () => {
       throw new Error('Tất cả các mã SKU đang trong thời gian chờ (Cooldown). Không có mã nào hợp lệ để đăng!');
     }
 
-    // Trộn ngẫu nhiên danh sách hợp lệ
-    const shuffledSkus = eligibleSkus.sort(() => 0.5 - Math.random());
+    // Áp dụng Smart Filter để ưu tiên
+    const shuffledSkus = await getSmartFilteredSkus(eligibleSkus, []);
 
     const folderTypes = ['0_Anh_AVT', '1_Anh_Hang', '2_Anh_Tu_Chup', '3_Video_Doc'];
     let selectedImages = [];
@@ -817,7 +1016,11 @@ export const autoPublishRoutine = async () => {
           } else {
             // Chế độ Album: Bốc ngẫu nhiên 4-8 tấm
             const numToPick = Math.min(freshMedia.length, Math.floor(Math.random() * 5) + 4); // Random 4 đến 8
-            selectedImages = freshMedia.sort(() => 0.5 - Math.random()).slice(0, numToPick);
+            // Ảnh số 1 (theo tên file) luôn ở đầu, còn lại random
+            const sorted = [...freshMedia].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+            const firstImage = sorted[0];
+            const rest = sorted.slice(1).sort(() => 0.5 - Math.random()).slice(0, numToPick - 1);
+            selectedImages = [firstImage, ...rest];
             postMode = 'ALBUM';
           }
           break;
@@ -850,6 +1053,7 @@ export const autoPublishRoutine = async () => {
 
     // 2. Tải tất cả ảnh về
     for (const img of selectedImages) {
+      checkAbort();
       let pathStr = await downloadFileFromDrive(img.id, img.name);
 
       // Nếu là ảnh AI, xử lý trực tiếp bằng Node.js để kiểm soát độ chính xác tuyệt đối 1024x1024
@@ -902,6 +1106,7 @@ export const autoPublishRoutine = async () => {
     }
 
     // 3. Sử dụng Playwright để xử lý AI (Tạo ảnh & Viết Content)
+    checkAbort();
     let postContent = '';
     let fbContent = '';
     let igContent = '';
@@ -959,11 +1164,11 @@ export const autoPublishRoutine = async () => {
                 : genderTag === 'FEMALE'
                   ? 'The person in the scene must have FEMININE hands and appearance (female wrist, manicured nails, female clothing).'
                   : '';
-              
+
               imgPromptsArray = selectedScenes.map(sceneText => {
                 return `This is a luxury watch with transparent background (background already removed). Composite this exact watch into the following lifestyle scene:\n\n${sceneText}\n\n${genderNote}\n\nCRITICAL RULES:\n- Do NOT redraw, redesign, or modify the watch in any way.\n- Keep the watch dial, hands, case, bracelet, brand text, and colors EXACTLY as in the provided image.\n- Lighting must be consistent between the watch and the environment.\n- Output: photorealistic, 4K commercial product photography quality.`;
               });
-              
+
               console.log(`📋 [Nhánh AI] Đã chọn ${imgPromptsArray.length} cảnh ${genderTag} khác nhau từ file .md!`);
             } else {
               // Fallback: nếu không có scene nào hợp lệ trong section → dùng NEUTRAL hoặc toàn bộ
@@ -980,7 +1185,40 @@ export const autoPublishRoutine = async () => {
 
           const sampleImg = getRandomSampleImage();
           if (sampleImg) liveLog(`🖼️ Dùng ảnh mẫu tham chiếu: ${path.basename(sampleImg)}`, 'highlight', 'ChatGPT');
-          aiGeneratedImagePaths = await generateBackgroundOnChatGPT(localFilePaths[0], imgPromptsArray, globalStopController.signal, sampleImg, false);
+
+          let extraWatchImages = [];
+          try {
+            liveLog('📸 [AUTO PUBLISH] Đang tìm ảnh tham khảo từ Ảnh_Hãng/Ảnh_Tự_Chụp...', 'typing', 'Google Drive');
+            let extraFilesToDownload = [];
+            const skuSubFolders = await getFoldersInFolder(selectedSku.id);
+            liveLog(`DEBUG: Tìm thấy ${skuSubFolders.length} thư mục con trong SKU`, 'info', 'System');
+
+            const anhHangFolder = skuSubFolders.find(f => f.name.includes('1_') || f.name.toLowerCase().includes('hãng') || f.name.toLowerCase().includes('hang'));
+            const tuChupFolder = skuSubFolders.find(f => f.name.includes('2_') || f.name.toLowerCase().includes('tự') || f.name.toLowerCase().includes('tu'));
+            liveLog(`DEBUG: Thư mục 1: ${anhHangFolder?.name || 'Không thấy'}, Thư mục 2: ${tuChupFolder?.name || 'Không thấy'}`, 'info', 'System');
+
+            for (const f of [anhHangFolder, tuChupFolder]) {
+              if (f) {
+                const imgs = await getImagesInFolder(f.id);
+                liveLog(`DEBUG: Thư mục ${f.name} có ${imgs.length} file ảnh hợp lệ (chứa chữ image/)`, 'info', 'System');
+                extraFilesToDownload.push(...imgs);
+              }
+            }
+            if (extraFilesToDownload.length > 0) {
+              const maxExtra = Math.min(extraFilesToDownload.length, 4);
+              extraFilesToDownload = extraFilesToDownload.sort(() => 0.5 - Math.random()).slice(0, maxExtra);
+              for (const file of extraFilesToDownload) {
+                checkAbort();
+                const p = await downloadFileFromDrive(file.id, file.name);
+                extraWatchImages.push(p);
+              }
+              liveLog(`✅ Đã tải ${extraWatchImages.length} ảnh tham khảo cho ChatGPT`, 'success', 'Google Drive');
+            }
+          } catch (e) {
+            liveLog(`⚠️ [AUTO PUBLISH] Lỗi khi lấy ảnh tham khảo: ${e.message}`, 'warning', 'Google Drive');
+          }
+
+          aiGeneratedImagePaths = await generateBackgroundOnChatGPT(localFilePaths[0], imgPromptsArray, globalStopController.signal, sampleImg, false, extraWatchImages);
 
           // Xóa ảnh gốc vì không cần thiết đăng ảnh gốc nữa
           if (fs.existsSync(localFilePaths[0])) fs.unlinkSync(localFilePaths[0]);
@@ -999,7 +1237,7 @@ export const autoPublishRoutine = async () => {
 
       // 3.2 ĐỌC TEMPLATE VÀ GỌI GEMINI ĐỂ VIẾT CONTENT
       try {
-        console.log(`🤖 [Nhánh ${postMode}] Gửi ảnh sang Gemini để viết Content...`);
+        console.log(`🤖 [Nhánh ${postMode}] Gửi ảnh sang ChatGPT để viết Content...`);
 
         // Detect giới tính từ SKU để điền vào template
         const skuUp = (selectedSku?.name || '').toUpperCase();
@@ -1014,23 +1252,13 @@ export const autoPublishRoutine = async () => {
 
         if (fs.existsSync(geminiTemplatePath)) {
           const templateRaw = fs.readFileSync(geminiTemplatePath, 'utf8');
+          // KHÔNG nối thêm marketing + persona vào prompt nữa
+          // vì 2 file đó đã được upload làm Sources trong dự án Content_Watch_AI trên ChatGPT
 
-          // Đọc thêm tài liệu hướng dẫn phụ (nếu có upload)
-          let additionalContext = '';
-          const marketingPath = path.join(__dirname, '../../config/watch-marketing-content.md');
-          if (fs.existsSync(marketingPath)) {
-            additionalContext += `\n\n--- QUY TẮC MARKETING BỔ SUNG ---\n${fs.readFileSync(marketingPath, 'utf8')}`;
-          }
-          const personaPath = path.join(__dirname, '../../config/customer-persona.md');
-          if (fs.existsSync(personaPath)) {
-            additionalContext += `\n\n--- CHÂN DUNG KHÁCH HÀNG BỔ SUNG ---\n${fs.readFileSync(personaPath, 'utf8')}`;
-          }
-
-          // Hàm điền placeholder vào template và nhúng tài liệu
           const fillTemplate = (tmpl) => tmpl
             .replace(/\{\{SKU\}\}/g, selectedSku.name)
             .replace(/\{\{PRODUCT_INFO\}\}/g, productInfoText || 'Không có thông tin')
-            .replace(/\{\{GENDER\}\}/g, genderLabel) + additionalContext;
+            .replace(/\{\{GENDER\}\}/g, genderLabel);
 
           // Parse section FB_AND_IG
           const fbIgMatch = templateRaw.match(/## FB_AND_IG_PROMPT_TEMPLATE\s*\n([\s\S]*?)(?=\n---\n## |\n## REELS_|$)/);
@@ -1092,7 +1320,7 @@ export const autoPublishRoutine = async () => {
             console.log(`✅ [ChatGPT] Sinh thành công: FB (${fbContent.length} ký tự) | IG (${igContent.length} ký tự)`);
           } else {
             // Fallback: nếu không parse được, tách thủ công theo từ khóa INSTAGRAM
-            console.log(`⚠️ [Gemini] Regex chính không match. Output gốc: ${combinedOutput.substring(0, 200)}...`);
+            console.log(`⚠️ [ChatGPT] Regex chính không match. Output gốc: ${combinedOutput.substring(0, 200)}...`);
             const splitIdx = combinedOutput.search(/INSTAGRAM/i);
             if (splitIdx !== -1) {
               // Tìm dòng sau chữ INSTAGRAM:
@@ -1100,11 +1328,11 @@ export const autoPublishRoutine = async () => {
               const beforeIG = combinedOutput.slice(0, splitIdx).replace(/^.*?FACEBOOK:?\s*/is, '');
               fbContent = beforeIG.trim() || combinedOutput;
               igContent = afterIG.trim() || combinedOutput;
-              console.log(`⚠️ [Gemini] Dùng fallback split: FB (${fbContent.length} ký tự) | IG (${igContent.length} ký tự)`);
+              console.log(`⚠️ [ChatGPT] Dùng fallback split: FB (${fbContent.length} ký tự) | IG (${igContent.length} ký tự)`);
             } else {
               fbContent = combinedOutput;
               igContent = combinedOutput;
-              console.log(`⚠️ [Gemini] Không tìm thấy INSTAGRAM — dùng chung 1 nội dung.`);
+              console.log(`⚠️ [ChatGPT] Không tìm thấy INSTAGRAM — dùng chung 1 nội dung.`);
             }
           }
         }
@@ -1122,7 +1350,7 @@ export const autoPublishRoutine = async () => {
           liveLog('⏹️ Đã dừng tiến trình Gemini theo yêu cầu.', 'error', 'System');
           throw geminiError;
         }
-        console.log(`⚠️ Lỗi Playwright Gemini: ${geminiError.message}. Dùng nội dung dự phòng.`);
+        console.log(`⚠️ Lỗi Playwright ChatGPT: ${geminiError.message}. Dùng nội dung dự phòng.`);
         fbContent = `[Đăng Tự Động] Khám phá ngay siêu phẩm đồng hồ ${selectedSku.name} tuyệt đẹp. #iwcarnivalvietnam #iwcarnival #donghoiwcarnival`;
         igContent = fbContent;
         postContent = fbContent;
@@ -1139,11 +1367,12 @@ export const autoPublishRoutine = async () => {
     }
 
     // 5. Đăng Facebook
+    checkAbort();
     const pageToken = process.env.FB_PAGE_ACCESS_TOKEN;
     if (!pageToken) throw new Error('Thiếu FB_PAGE_ACCESS_TOKEN');
 
     let postId = null;
-    
+
     // Hàm trợ giúp để tính toán thời gian delay IG
     const getIgDelayMs = () => {
       try {
@@ -1157,10 +1386,10 @@ export const autoPublishRoutine = async () => {
           const randomMinutes = min + Math.random() * (max - min);
           return Math.round(randomMinutes * 60 * 1000);
         }
-      } catch (e) {}
+      } catch (e) { }
       return 0; // Mặc định 0 nếu lỗi (không chờ)
     };
-    
+
     // Hàm sleep hỗ trợ AbortSignal - có thể bị dừng giữa chừng
     const sleep = (ms, abortSignal) => new Promise((resolve, reject) => {
       const timer = setTimeout(resolve, ms);
@@ -1180,21 +1409,21 @@ export const autoPublishRoutine = async () => {
 
       // CHÈN NHẠC VÀO VIDEO NẾU CÓ
       if (fs.existsSync(musicDir)) {
-          const musicFiles = fs.readdirSync(musicDir).filter(f => f.toLowerCase().endsWith('.mp3'));
-          if (musicFiles.length > 0) {
-              const randomMusic = musicFiles[Math.floor(Math.random() * musicFiles.length)];
-              const musicPath = path.join(musicDir, randomMusic);
-              const mixedVideoPath = finalVideoPath.replace('.mp4', `_mixed_${Date.now()}.mp4`);
-              
-              console.log(`🎧 Đã bốc trúng bài nhạc: ${randomMusic}`);
-              try {
-                  finalVideoPath = await addMusicToVideo(finalVideoPath, musicPath, mixedVideoPath);
-              } catch (e) {
-                  console.log(`⚠️ Bỏ qua chèn nhạc do lỗi FFmpeg: ${e.message}`);
-              }
-          } else {
-              console.log(`⚠️ Thư mục music_library trống, sẽ đăng video gốc.`);
+        const musicFiles = fs.readdirSync(musicDir).filter(f => f.toLowerCase().endsWith('.mp3'));
+        if (musicFiles.length > 0) {
+          const randomMusic = musicFiles[Math.floor(Math.random() * musicFiles.length)];
+          const musicPath = path.join(musicDir, randomMusic);
+          const mixedVideoPath = finalVideoPath.replace('.mp4', `_mixed_${Date.now()}.mp4`);
+
+          console.log(`🎧 Đã bốc trúng bài nhạc: ${randomMusic}`);
+          try {
+            finalVideoPath = await addMusicToVideo(finalVideoPath, musicPath, mixedVideoPath);
+          } catch (e) {
+            console.log(`⚠️ Bỏ qua chèn nhạc do lỗi FFmpeg: ${e.message}`);
           }
+        } else {
+          console.log(`⚠️ Thư mục music_library trống, sẽ đăng video gốc.`);
+        }
       }
 
       // ĐĂNG VIDEO REELS LÊN FACEBOOK
@@ -1203,59 +1432,62 @@ export const autoPublishRoutine = async () => {
 
       // ĐĂNG VIDEO REELS LÊN INSTAGRAM (Bơm thẳng file nội bộ)
       try {
-         const delayMs = getIgDelayMs();
-         if (delayMs > 0) {
-             liveLog(`⏳ Đang chờ ${(delayMs / 60000).toFixed(2)} phút trước khi đẩy video sang IG (Chống spam)...`, 'typing', 'System');
-             await sleep(delayMs, globalStopController.signal);
-         }
-         
-         console.log(`🚀 Đang đẩy trực tiếp Video từ ổ cứng sang IG Reels...`);
-         
-         // Thêm vòng lặp Retry phòng khi IG bị lỗi máy chủ nội bộ
-         let igSuccess = false;
-         for (let i = 1; i <= 3; i++) {
-             try {
-                 await publishIGReels(finalVideoPath, igContent);
-                 igSuccess = true;
-                 break; // Thành công thì thoát vòng lặp
-             } catch (igErr) {
-                 console.log(`⚠️ IG báo lỗi (Lần thử ${i}/3): ${igErr.message}`);
-                 if (i < 3) {
-                     console.log(`⏳ Đợi 15 giây rồi thử lại...`);
-                     await new Promise(r => setTimeout(r, 15000));
-                 }
-             }
-         }
-         
-         if (!igSuccess) {
-             console.log(`❌ Đã thử 3 lần nhưng IG vẫn từ chối xử lý video này.`);
-         }
+        const delayMs = getIgDelayMs();
+        if (delayMs > 0) {
+          liveLog(`⏳ Đang chờ ${(delayMs / 60000).toFixed(2)} phút trước khi đẩy video sang IG (Chống spam)...`, 'typing', 'System');
+          await sleep(delayMs, globalStopController.signal);
+        }
+
+        console.log(`🚀 Đang đẩy trực tiếp Video từ ổ cứng sang IG Reels...`);
+
+        // Thêm vòng lặp Retry phòng khi IG bị lỗi máy chủ nội bộ
+        let igSuccess = false;
+        for (let i = 1; i <= 3; i++) {
+          try {
+            await publishIGReels(finalVideoPath, igContent);
+            igSuccess = true;
+            break; // Thành công thì thoát vòng lặp
+          } catch (igErr) {
+            console.log(`⚠️ IG báo lỗi (Lần thử ${i}/3): ${igErr.message}`);
+            if (i < 3) {
+              console.log(`⏳ Đợi 15 giây rồi thử lại...`);
+              await new Promise(r => setTimeout(r, 15000));
+            }
+          }
+        }
+
+        if (!igSuccess) {
+          console.log(`❌ Đã thử 3 lần nhưng IG vẫn từ chối xử lý video này.`);
+        }
       } catch (e) {
         console.log(`⚠️ Lỗi không xác định khi đăng IG Reels: ${e.message}`);
       }
 
       // XÓA FILE VIDEO ĐÃ ĐƯỢC CHÈN NHẠC (ĐỂ TRÁNH RÁC Ổ CỨNG)
       if (finalVideoPath !== localFilePaths[0] && fs.existsSync(finalVideoPath)) {
-          fs.unlinkSync(finalVideoPath);
+        fs.unlinkSync(finalVideoPath);
       }
 
     } else if (localFilePaths.length === 1) {
       // ĐĂNG 1 ẢNH (SINGLE POST)
       const fbFormData = new FormData();
       fbFormData.append('source', fs.createReadStream(localFilePaths[0]));
+      fbFormData.append('published', 'true'); // Đăng ảnh công khai
+      fbFormData.append('no_story', 'false'); // Bắt buộc tạo Story trên Timeline
       fbFormData.append('message', postContent);
       fbFormData.append('access_token', pageToken);
 
-      const fbResponse = await axios.post(`https://graph.facebook.com/v19.0/me/photos`, fbFormData, {
+      console.log(`Đang tải 1 ảnh trực tiếp lên FB Timeline...`);
+      const uploadRes = await axios.post(`https://graph.facebook.com/v21.0/me/photos`, fbFormData, {
         headers: { ...fbFormData.getHeaders() }
       });
-      postId = fbResponse.data.post_id;
+      const photoId = uploadRes.data.id;
+      postId = uploadRes.data.post_id || uploadRes.data.id;
       await addPostMetric('facebook', postId, selectedSku.name, postContent);
 
       // Lấy Public URL của ảnh vừa đăng để dùng cho Instagram
       try {
-        const photoId = fbResponse.data.id;
-        const imgMetaRes = await axios.get(`https://graph.facebook.com/v19.0/${photoId}`, {
+        const imgMetaRes = await axios.get(`https://graph.facebook.com/v21.0/${photoId}`, {
           params: { fields: 'images', access_token: pageToken }
         });
         const publicUrl = imgMetaRes.data.images[0].source;
@@ -1264,8 +1496,8 @@ export const autoPublishRoutine = async () => {
         // Đăng lên Instagram với IG content riêng
         const delayMs = getIgDelayMs();
         if (delayMs > 0) {
-            liveLog(`⏳ Đang chờ ${(delayMs / 60000).toFixed(2)} phút trước khi đẩy ảnh sang IG...`, 'typing', 'System');
-            await sleep(delayMs, globalStopController.signal);
+          liveLog(`⏳ Đang chờ ${(delayMs / 60000).toFixed(2)} phút trước khi đẩy ảnh sang IG...`, 'typing', 'System');
+          await sleep(delayMs, globalStopController.signal);
         }
         await publishToInstagram(igContent, publicUrl);
       } catch (igErr) {
@@ -1273,41 +1505,47 @@ export const autoPublishRoutine = async () => {
       }
 
     } else {
-      // ĐĂNG ALBUM (MULTI-PHOTO)
-      console.log(`Đang tải lên ${localFilePaths.length} ảnh ẩn để tạo Album FB...`);
+      // ĐĂNG ALBUM (MULTI-PHOTO) CHUẨN FACEBOOK API
+      console.log(`Đang tải lên ${localFilePaths.length} ảnh để tạo Album...`);
       const attachedMedia = [];
       const publicUrls = [];
 
-      for (const filePath of localFilePaths) {
+      for (let idx = 0; idx < localFilePaths.length; idx++) {
+        const filePath = localFilePaths[idx];
         const fbFormData = new FormData();
         fbFormData.append('source', fs.createReadStream(filePath));
-        fbFormData.append('published', 'false'); // Ảnh ẩn
+        fbFormData.append('published', 'false'); // Bắt buộc tải ẩn để gộp
         fbFormData.append('access_token', pageToken);
 
-        const uploadRes = await axios.post(`https://graph.facebook.com/v19.0/me/photos`, fbFormData, {
+        const uploadRes = await axios.post(`https://graph.facebook.com/v21.0/me/photos`, fbFormData, {
           headers: { ...fbFormData.getHeaders() }
         });
+        
         const photoId = uploadRes.data.id;
         attachedMedia.push({ media_fbid: photoId });
 
         // Trích xuất Public URL cho Instagram
         try {
-          const imgMetaRes = await axios.get(`https://graph.facebook.com/v19.0/${photoId}`, {
+          const imgMetaRes = await axios.get(`https://graph.facebook.com/v21.0/${photoId}`, {
             params: { fields: 'images', access_token: pageToken }
           });
           publicUrls.push(imgMetaRes.data.images[0].source);
         } catch (e) {
-          console.log(`⚠️ Lỗi trích xuất link ảnh ẩn FB: ${e.message}`);
+          console.log(`⚠️ Lỗi trích xuất link ảnh FB: ${e.message}`);
         }
       }
 
-      console.log(`Đã tạo xong các ID ảnh FB. Bắt đầu đăng bài Feed...`);
-      const feedRes = await axios.post(`https://graph.facebook.com/v19.0/me/feed`, {
+      console.log(`Đã tải xong ${localFilePaths.length} ảnh. Bắt đầu đẩy bài viết Album ra Newsfeed...`);
+      const feedRes = await axios.post(`https://graph.facebook.com/v21.0/me/feed`, {
         message: postContent,
         attached_media: attachedMedia,
+        published: true, // Ép buộc hiển thị công khai
         access_token: pageToken
       });
       postId = feedRes.data.id;
+      console.log(`✅ Đã đăng thành công Bài viết Album (${localFilePaths.length} ảnh) lên FB Newsfeed! (ID: ${postId})`);
+      console.log(`🌐 Link bài viết: https://facebook.com/${postId}`);
+      
       await addPostMetric('facebook', postId, selectedSku.name, postContent);
 
       // Đăng lên Instagram Carousel
@@ -1315,12 +1553,12 @@ export const autoPublishRoutine = async () => {
         try {
           const delayMs = getIgDelayMs();
           if (delayMs > 0) {
-              liveLog(`⏳ Đang chờ ${(delayMs / 60000).toFixed(2)} phút trước khi đẩy Album sang IG...`, 'typing', 'System');
-              await sleep(delayMs, globalStopController.signal);
+            liveLog(`⏳ Đang chờ ${(delayMs / 60000).toFixed(2)} phút trước khi đẩy Album sang IG...`, 'typing', 'System');
+            await sleep(delayMs, globalStopController.signal);
           }
           console.log(`✅ Đang đẩy ${publicUrls.length} ảnh sang Instagram Carousel (nội dung IG riêng)...`);
           const igRes = await publishCarouselToInstagram(igContent, publicUrls);
-          if(igRes && igRes.mediaId) await addPostMetric('instagram', igRes.mediaId, selectedSku.name, igContent);
+          if (igRes && igRes.mediaId) await addPostMetric('instagram', igRes.mediaId, selectedSku.name, igContent);
         } catch (igErr) {
           console.log(`⚠️ Lỗi đăng Carousel Instagram: ${igErr.response?.data?.error?.message || igErr.message}`);
         }
@@ -1328,7 +1566,33 @@ export const autoPublishRoutine = async () => {
     }
 
     console.log(`✅ Đã đăng thành công lên FB (Post ID: ${postId})`);
-    
+
+    // Đăng lên Threads (nếu đã cấu hình)
+    if (process.env.THREADS_ACCESS_TOKEN && process.env.THREADS_USER_ID) {
+      try {
+        liveLog('🧵 Đang đăng lên Threads...', 'typing', 'System');
+        // Lấy public URL của ảnh đầu tiên (nếu có)
+        let threadsImageUrl = null;
+        if (localFilePaths.length > 0) {
+          try {
+            // Dùng ảnh đầu tiên đã upload lên FB
+            const firstPhotoId = postId;
+            const imgMeta = await axios.get(`https://graph.facebook.com/v21.0/${firstPhotoId}`, {
+              params: { fields: 'full_picture', access_token: process.env.FB_PAGE_ACCESS_TOKEN }
+            });
+            threadsImageUrl = imgMeta.data.full_picture;
+          } catch (e) { }
+        }
+        const threadsContent = igContent || postContent; // Ưu tiên IG content (ngắn gọn hơn)
+        await publishThreadChain(threadsContent, threadsImageUrl);
+        liveLog('✅ Đã đăng lên Threads thành công!', 'success', 'System');
+        addActivity(`Đăng thành công ${selectedSku.name} lên Threads!`, 'success');
+      } catch (threadsErr) {
+        console.log(`⚠️ Lỗi đăng Threads (không ảnh hưởng FB/IG): ${threadsErr.message}`);
+        liveLog(`⚠️ Threads: ${threadsErr.message}`, 'warning', 'System');
+      }
+    }
+
     // Đẩy lịch sử lên giao diện Dashboard
     addActivity(`Đăng thành công sản phẩm ${selectedSku.name} lên Fanpage!`, 'success');
 

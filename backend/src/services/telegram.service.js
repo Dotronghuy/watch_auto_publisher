@@ -108,8 +108,27 @@ export const startTelegramBot = () => {
     if (imgData) {
       bot.sendMessage(chatId, `⏳ Đã nhận góp ý cho ảnh ${id}. Đang gửi cho ChatGPT sửa lại... (vui lòng chờ vài chục giây)`).catch(e => console.error(e.message));
       try {
-        const feedbackMsg = `I am sending you 2 images:\n1. The FIRST image is the ORIGINAL PRODUCT (the watch with transparent/white background). You MUST keep this exact design.\n2. The SECOND image is the PREVIOUS AI generated image.\n\nThe user wants to modify the SECOND image with this feedback: "${msg.text}".\n\nPlease redraw the scene completely according to the feedback, BUT MAKE SURE the watch looks EXACTLY like the FIRST image (same colors, same dial, same strap).`;
-        const newPaths = await generateBackgroundOnChatGPT([reviewState.watchImagePath, imgData.path], [feedbackMsg], null, reviewState.sampleImagePath, false);
+        const feedbackMsg = `The user reviewed the SECOND image (the AI-generated photo) and wants changes.
+
+USER FEEDBACK: "${msg.text}"
+
+INSTRUCTIONS:
+- The SECOND image is the PREVIOUS AI-generated result that needs to be modified.
+- Redraw the scene according to the user's feedback above.
+- The watch in the final image MUST look EXACTLY like the FIRST image — same dial, same bezel, same hands, same bracelet, same brand text, same colors. Do NOT change ANY detail of the watch.
+- Only modify the scene, background, composition, or styling as requested by the user.
+- Output: photorealistic, 4K commercial photography quality.`;
+
+        // IMAGE 1: ảnh đồng hồ gốc (watchImagePath) → truyền qua imagePath
+        // IMAGE 2: ảnh AI đã tạo cần sửa (imgData.path) → truyền qua sampleImage trong prompt object
+        const newPaths = await generateBackgroundOnChatGPT(
+          reviewState.watchImagePath,
+          [{ prompt: feedbackMsg, sampleImage: imgData.path }],
+          null,
+          null,
+          false,
+          []
+        );
         
         if (newPaths && newPaths.length > 0) {
           const newPath = newPaths[0];
@@ -128,7 +147,7 @@ export const startTelegramBot = () => {
           }, { filename: 'image.png', contentType: 'image/png' }).catch(e => console.error(e.message));
         }
       } catch (err) {
-        bot.sendMessage(chatId, `❌ Lỗi khi sửa ảnh: ${err.message}`);
+        bot.sendMessage(chatId, `❌ Lỗi khi sửa ảnh: ${err.message}`).catch(e => console.error(e.message));
       }
     }
   });
@@ -157,7 +176,7 @@ const askForNextBatch = () => {
         ]
       ]
     }
-  });
+  }).catch(e => console.error('Lỗi gửi tin nhắn Telegram:', e.message));
   resetTimeout();
 };
 
@@ -176,30 +195,42 @@ export const sendBatchToTelegram = async (images, watchImagePath, sampleImagePat
   reviewState.sampleImagePath = sampleImagePath;
   reviewState.waitingFeedbackForId = null;
 
-  bot.sendMessage(chatId, `🚀 <b>Đã tạo xong ${images.length} ảnh!</b>\nMời bác chấm điểm từng ảnh:`, { parse_mode: 'HTML' });
+  bot.sendMessage(chatId, `🚀 <b>Đã tạo xong ${images.length} ảnh!</b>\nMời bác chấm điểm từng ảnh:`, { parse_mode: 'HTML' }).catch(e => console.error('Lỗi gửi tin nhắn Telegram:', e.message));
 
   for (let i = 0; i < images.length; i++) {
     const img = reviewState.images[i];
-    try {
-      const photoData = fs.createReadStream(img.path);
-      await bot.sendPhoto(chatId, photoData, {
-        caption: `📸 <b>Ảnh ${img.id}</b>\nPrompt: ${img.prompt.substring(0, 100)}...`,
-        parse_mode: 'HTML',
-        reply_markup: {
-          inline_keyboard: [
-            [
-              { text: '✅ Duyệt', callback_data: `approve_${img.id}` },
-              { text: '💬 Nhận xét', callback_data: `feedback_${img.id}` },
-              { text: '🗑️ Xóa cảnh', callback_data: `delete_${img.id}` }
+    let sendSuccess = false;
+    for (let retry = 0; retry < 3; retry++) {
+      try {
+        const photoData = fs.createReadStream(img.path);
+        await bot.sendPhoto(chatId, photoData, {
+          caption: `📸 <b>Ảnh ${img.id}</b>\nPrompt: ${img.prompt.substring(0, 100)}...`,
+          parse_mode: 'HTML',
+          reply_markup: {
+            inline_keyboard: [
+              [
+                { text: '✅ Duyệt', callback_data: `approve_${img.id}` },
+                { text: '💬 Nhận xét', callback_data: `feedback_${img.id}` },
+                { text: '🗑️ Xóa cảnh', callback_data: `delete_${img.id}` }
+              ]
             ]
-          ]
+          }
+        }, { filename: 'image.png', contentType: 'image/png' });
+        
+        sendSuccess = true;
+        // Nghỉ 2 giây giữa mỗi ảnh để tránh sập connection / Telegram Rate Limit
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        break; // Gửi thành công, thoát retry loop
+      } catch (e) {
+        console.error(`❌ Lỗi gửi ảnh ${img.id} lên Telegram (lần ${retry + 1}/3):`, e.message);
+        if (retry < 2) {
+          console.log(`⏳ Chờ 5 giây rồi thử lại...`);
+          await new Promise(resolve => setTimeout(resolve, 5000));
         }
-      }, { filename: 'image.png', contentType: 'image/png' });
-      
-      // Nghỉ 2 giây giữa mỗi ảnh để tránh sập connection / Telegram Rate Limit
-      await new Promise(resolve => setTimeout(resolve, 2000));
-    } catch (e) {
-      console.error(`❌ Lỗi gửi ảnh ${img.id} lên Telegram:`, e.message);
+      }
+    }
+    if (!sendSuccess) {
+      console.error(`❌ Bỏ qua ảnh ${img.id} sau 3 lần thử thất bại.`);
     }
   }
   

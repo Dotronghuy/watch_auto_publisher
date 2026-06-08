@@ -52,7 +52,7 @@ const updateAiTaskUrl = (type, url) => {
     }
 };
 
-export const generateBackgroundOnChatGPT = async (imagePath, promptsArray, abortSignal = null, sampleImagePath = null, isNewSession = true) => {
+export const generateBackgroundOnChatGPT = async (imagePath, promptsArray, abortSignal = null, sampleImagePath = null, isNewSession = true, extraWatchImages = []) => {
     console.log('\n--- BẮT ĐẦU TIẾN TRÌNH PLAYWRIGHT ---');
     const userDataDir = path.join(__dirname, '../../chrome_data_chatgpt');
     
@@ -67,11 +67,12 @@ export const generateBackgroundOnChatGPT = async (imagePath, promptsArray, abort
     const page = context.pages().length > 0 ? context.pages()[0] : await context.newPage();
     
     try {
-        let targetUrl = 'https://chatgpt.com';
+        let targetUrl = 'https://chatgpt.com/g/g-p-6a21019c9228819187d6284f9b4ff8f9-image-watch-ai/project';
+        let savedChatId = null;
         if (!isNewSession) {
-            const savedChatId = getAiTaskUrl('imageChatUrl');
+            savedChatId = getAiTaskUrl('imageChatUrl');
             if (savedChatId) {
-                targetUrl = `https://chatgpt.com/c/${savedChatId}`;
+                targetUrl = savedChatId.startsWith('http') ? savedChatId : `https://chatgpt.com/c/${savedChatId}`;
             }
         }
         console.log(`🌐 Đang truy cập ${targetUrl}...`);
@@ -164,13 +165,27 @@ export const generateBackgroundOnChatGPT = async (imagePath, promptsArray, abort
             const inputs = await page.$$('input[type="file"]');
             if (inputs.length > 0) {
                 const filesToUpload = [];
+                // Ảnh 1: Ảnh AVT sản phẩm (nền trắng/trong suốt)
                 if (imagePath && fs.existsSync(imagePath)) filesToUpload.push(imagePath);
+                
+                // Ảnh 2-5: Ảnh tham khảo thực tế từ Drive (đủ 4 góc độ)
+                if (extraWatchImages && extraWatchImages.length > 0) {
+                    for (const extraImg of extraWatchImages) {
+                        if (fs.existsSync(extraImg)) {
+                            filesToUpload.push(extraImg);
+                            console.log(`✅ Đã chọn kèm ảnh tham khảo Drive: ${path.basename(extraImg)}`);
+                        }
+                    }
+                }
+                
+                // Ảnh 6: Ảnh bố cục mẫu (scene/background mẫu muốn tạo ra)
                 if (currentSampleImage && fs.existsSync(currentSampleImage)) {
                     filesToUpload.push(currentSampleImage);
-                    console.log(`✅ Đã chọn kèm ảnh mẫu tham chiếu (${path.basename(currentSampleImage)})`);
+                    console.log(`✅ Đã chọn kèm ảnh bố cục mẫu (${path.basename(currentSampleImage)})`);
                 }
+                
                 if (filesToUpload.length > 0) {
-                    const activeInput = inputs[inputs.length - 1]; // Lấy thẻ cuối cùng (active)
+                    const activeInput = inputs[inputs.length - 1];
                     await activeInput.setInputFiles(filesToUpload);
                     console.log(`✅ Đã chọn ${filesToUpload.length} file ảnh xong.`);
                 }
@@ -186,7 +201,25 @@ export const generateBackgroundOnChatGPT = async (imagePath, promptsArray, abort
             await page.waitForTimeout(300);
             
             let finalPrompt;
-            if (currentSampleImage) {
+            const hasExtraRefs = (extraWatchImages && extraWatchImages.length > 0);
+            if (currentSampleImage && hasExtraRefs) {
+                finalPrompt = `I am sending you ${1 + extraWatchImages.length + 1} images in this EXACT order:
+- IMAGE 1: The luxury watch with transparent/white background — this is the MAIN PRODUCT.
+- IMAGE 2 to ${1 + extraWatchImages.length}: REAL PRODUCT PHOTOS from different angles. Use these as REFERENCE to understand the watch's TRUE colors, textures, bracelet style, dial details, and proportions.
+- LAST IMAGE (IMAGE ${1 + extraWatchImages.length + 1}): A lifestyle/scene reference photo — this is the DESIRED SCENE/BACKGROUND COMPOSITION you must recreate.
+
+YOUR TASK: Place the watch from Image 1 into the scene shown in the LAST IMAGE. Use Image 2-${1 + extraWatchImages.length} as visual reference to ensure the watch looks exactly like the real product.
+
+STRICT RULES:
+1. IGNORE ALL PREVIOUS IMAGES IN THIS CHAT. Only use the images attached to THIS message.
+2. KEEP the watch design from Image 1 100% identical — do NOT change the dial, bezel, hands, brand text, bracelet, or colors.
+3. KEEP the background, lighting, atmosphere from the LAST IMAGE exactly as shown. DO NOT invent a new background.
+4. The watch must be naturally integrated — correct lighting angle, realistic shadow, proper scale.
+5. Output: photorealistic, high-end commercial photography quality, 4K.
+
+Scene constraint:
+${currentPrompt}`;
+            } else if (currentSampleImage) {
                 finalPrompt = `I am sending you TWO images:
 - IMAGE 1 (first image): The luxury watch with a transparent/white background — this is the PRODUCT to feature.
 - IMAGE 2 (second image): A real lifestyle reference photo — this is the SCENE/BACKGROUND to use.
@@ -194,7 +227,8 @@ export const generateBackgroundOnChatGPT = async (imagePath, promptsArray, abort
 YOUR TASK: Place the watch from Image 1 onto the wrist or surface in Image 2's scene. The final result must look like a real professional product photo.
 
 STRICT RULES:
-1. IGNORE ALL PREVIOUS IMAGES IN THIS CHAT. YOU MUST ONLY USE IMAGE 1 AS THE PRODUCT.\n2. KEEP the watch design from Image 1 100% identical — do NOT change the dial, bezel, hands, brand text, bracelet, or colors in any way.
+1. IGNORE ALL PREVIOUS IMAGES IN THIS CHAT. YOU MUST ONLY USE IMAGE 1 AS THE PRODUCT.
+2. KEEP the watch design from Image 1 100% identical — do NOT change the dial, bezel, hands, brand text, bracelet, or colors in any way.
 3. KEEP the background, lighting, atmosphere, and composition from Image 2 exactly as the original. DO NOT invent a new background.
 4. The watch must be naturally integrated — correct lighting angle, realistic shadow, proper scale.
 5. Output: photorealistic, high-end commercial photography quality, 4K.
@@ -352,13 +386,10 @@ export const generateContentOnChatGPT = async (prompt, type, imagePath = null) =
     const page = context.pages().length > 0 ? context.pages()[0] : await context.newPage();
     
     try {
-        let targetUrl = 'https://chatgpt.com';
-        const savedChatId = type === 'fb' ? getAiTaskUrl('fbChatUrl') : (type === 'ig' ? getAiTaskUrl('igChatUrl') : getAiTaskUrl('fbChatUrl'));
-        if (savedChatId) {
-            targetUrl = `https://chatgpt.com/c/${savedChatId}`;
-        }
+        // Luôn sử dụng URL gốc của Dự án Content AI (Bảo đảm 100% chạy trong Dự án)
+        let targetUrl = 'https://chatgpt.com/g/g-p-6a225013edb8819184026aa7da611aa4-content-watch-ai/project';
         
-        console.log(`🌐 Đang truy cập ${targetUrl}...`);
+        console.log(`🌐 Đang truy cập Dự án Content AI: ${targetUrl}...`);
         await page.goto(targetUrl, { waitUntil: 'domcontentloaded' });
         
         await page.waitForTimeout(3000);
@@ -407,13 +438,12 @@ export const generateContentOnChatGPT = async (prompt, type, imagePath = null) =
             await page.keyboard.press('Enter');
         }
         
-        if (!savedChatId) {
-            await page.waitForTimeout(3000);
-            const currentUrl = page.url();
-            if (currentUrl.includes('/c/')) {
-                const saveType = type === 'fb' ? 'fbChatUrl' : (type === 'ig' ? 'igChatUrl' : 'fbChatUrl');
-                updateAiTaskUrl(saveType, currentUrl);
-            }
+        // Ghi nhớ URL nếu chưa có (lấy URL hiện tại sau khi nó chuyển hướng)
+        await page.waitForTimeout(3000);
+        const currentUrl = page.url();
+        if (currentUrl.includes('/c/')) {
+            const saveType = type === 'fb' ? 'fbChatUrl' : (type === 'ig' ? 'igChatUrl' : 'fbChatUrl');
+            updateAiTaskUrl(saveType, currentUrl);
         }
         
         // Đánh dấu các tin nhắn cũ

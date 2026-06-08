@@ -6,6 +6,16 @@ export default defineConfig({
   plugins: [react()],
   server: {
     port: 5173,
-    open: true, // Tự động mở browser vào đúng cổng frontend
+    open: true,
+    proxy: {
+      '/api': {
+        target: 'http://localhost:3000',
+        changeOrigin: true
+      },
+      '/images': {
+        target: 'http://localhost:3000',
+        changeOrigin: true
+      }
+    }
   },
 })

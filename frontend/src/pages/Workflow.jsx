@@ -22,13 +22,24 @@ const NODE_HEIGHT_GPT = 170;
 const NODE_HEIGHT_GEMINI = 220;
 const NODE_HEIGHT_PUBLISH = 110;
 
+// Đọc vị trí node đã lưu từ localStorage
+const getSavedNodes = () => {
+  try {
+    const saved = localStorage.getItem('workflow_node_positions');
+    if (saved) return JSON.parse(saved);
+  } catch (e) {}
+  return INITIAL_NODES;
+};
+
 const Workflow = () => {
   const [logs, setLogs] = useState([]);
   const [imageGallery, setImageGallery] = useState([]);
   const [carouselIdx, setCarouselIdx] = useState(0);
   const [previewText, setPreviewText] = useState(null);
   const [isGPTActive, setIsGPTActive] = useState(false);
-  const [nodes, setNodes] = useState(INITIAL_NODES);
+  const [nodes, setNodes] = useState(getSavedNodes);
+  const [nodeHeights, setNodeHeights] = useState({ source: NODE_HEIGHT_SOURCE, gpt: NODE_HEIGHT_GPT, gemini: NODE_HEIGHT_GEMINI, publish: NODE_HEIGHT_PUBLISH });
+  const nodeRefs = useRef({ source: null, gpt: null, gemini: null, publish: null });
   const [prompts, setPrompts] = useState(INITIAL_PROMPTS);
   const [editingPrompt, setEditingPrompt] = useState(null);
   const [mdFiles, setMdFiles] = useState({ gpt: [], gemini: [] });
@@ -43,6 +54,7 @@ const Workflow = () => {
   const [dryRunImgIdx, setDryRunImgIdx] = useState(0);
   const [dryRunTab, setDryRunTab] = useState('fb'); // 'fb' | 'ig'
   const [trainMode, setTrainMode] = useState(null); // null | 'image' | 'content' | 'full'
+  const [activeBranch, setActiveBranch] = useState(null); // null | 1 | 2 | 3 — nhánh đang chạy
   // Sample images state
   const [sampleImages, setSampleImages] = useState([]);
   const [sampleImgUploading, setSampleImgUploading] = useState(false);
@@ -57,7 +69,7 @@ const Workflow = () => {
   // ─── LẤY DANH SÁCH & UPLOAD FILE .MD ───
   const fetchMdFiles = useCallback(async (nodeId) => {
     try {
-      const res = await fetch(`http://localhost:3000/api/prompt-md-files/${nodeId}`);
+      const res = await fetch(`/api/prompt-md-files/${nodeId}`);
       if (res.ok) {
         const data = await res.json();
         setMdFiles(prev => ({ ...prev, [nodeId]: data.files }));
@@ -76,7 +88,7 @@ const Workflow = () => {
   // ─── QUẢN LÝ ẢNH MẬu THAM CHIỪu ───
   const fetchSampleImages = async () => {
     try {
-      const res = await fetch('http://localhost:3000/api/sample-images');
+      const res = await fetch('/api/sample-images');
       if (res.ok) { const d = await res.json(); setSampleImages(d.files || []); }
     } catch (e) { console.error('Lỗi lấy danh sách ảnh mẫu:', e); }
   };
@@ -88,7 +100,7 @@ const Workflow = () => {
     try {
       const formData = new FormData();
       for (let i = 0; i < files.length; i++) formData.append('images', files[i]);
-      const res = await fetch('http://localhost:3000/api/sample-images', { method: 'POST', body: formData });
+      const res = await fetch('/api/sample-images', { method: 'POST', body: formData });
       const data = await res.json();
       if (res.ok) {
         Swal.fire({ title: '✅ Đã tải ảnh mẫu lên!', text: data.message, icon: 'success', background: 'var(--color-surface)', color: 'white', toast: true, position: 'top-end', timer: 3000, showConfirmButton: false });
@@ -104,7 +116,7 @@ const Workflow = () => {
 
   const handleDeleteSampleImg = async (filename) => {
     try {
-      const res = await fetch(`http://localhost:3000/api/sample-images/${encodeURIComponent(filename)}`, { method: 'DELETE' });
+      const res = await fetch(`/api/sample-images/${encodeURIComponent(filename)}`, { method: 'DELETE' });
       if (res.ok) fetchSampleImages();
     } catch (err) { console.error(err); }
   };
@@ -125,7 +137,7 @@ const Workflow = () => {
         formData.append('mdFiles', files[i]);
       }
       
-      const res = await fetch(`http://localhost:3000/api/upload-prompt-md/${uploadingNode}`, { 
+      const res = await fetch(`/api/upload-prompt-md/${uploadingNode}`, { 
         method: 'POST', 
         body: formData 
       });
@@ -147,7 +159,7 @@ const Workflow = () => {
 
   const handleDeleteMdFile = async (nodeId, filename) => {
     try {
-      const res = await fetch(`http://localhost:3000/api/prompt-md-files/${nodeId}/${filename}`, { method: 'DELETE' });
+      const res = await fetch(`/api/prompt-md-files/${nodeId}/${filename}`, { method: 'DELETE' });
       const data = await res.json();
       if (res.ok) {
         fetchMdFiles(nodeId);
@@ -160,7 +172,7 @@ const Workflow = () => {
   };
 
   useEffect(() => {
-    const eventSource = new EventSource('http://localhost:3000/api/logs/stream');
+    const eventSource = new EventSource('/api/logs/stream');
     eventSource.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
@@ -189,6 +201,15 @@ const Workflow = () => {
         if (data.sender === 'GPT-4 Vision' && data.type !== 'success') setIsGPTActive(true);
         else if (data.sender === 'GPT-4 Vision' && data.type === 'success') setIsGPTActive(false);
         
+        // Detect nhánh đang chạy từ log
+        if (data.message) {
+          if (data.message.includes('[AI]') || data.message.includes('Chế độ AI')) setActiveBranch(1);
+          else if (data.message.includes('[ALBUM]') || data.message.includes('Chế độ ALBUM')) setActiveBranch(2);
+          else if (data.message.includes('[REELS]') || data.message.includes('Chế độ REELS')) setActiveBranch(3);
+          // Reset khi luồng kết thúc
+          if (data.message.includes('Hoàn tất') || data.message.includes('thất bại') || data.message.includes('Đã dừng')) setActiveBranch(null);
+        }
+
         // Xử lý ảnh: thêm vào gallery và nhảy tới ảnh mới nhất
         if (data.image) {
           setImageGallery(prev => {
@@ -250,7 +271,7 @@ const Workflow = () => {
       const { nodeId, startX, startY } = dragging.current;
       const wx = (e.clientX - transform.x) / transform.scale - startX;
       const wy = (e.clientY - transform.y) / transform.scale - startY;
-      setNodes(prev => ({ ...prev, [nodeId]: { ...prev[nodeId], x: Math.max(0, wx), y: Math.max(0, wy) } }));
+      setNodes(prev => ({ ...prev, [nodeId]: { ...prev[nodeId], x: wx, y: wy } }));
     };
 
     const onMouseDownGlobal = (e) => {
@@ -261,6 +282,13 @@ const Workflow = () => {
     };
 
     const onMouseUp = () => {
+      // Lưu vị trí node khi thả chuột
+      if (dragging.current) {
+        setNodes(prev => {
+          try { localStorage.setItem('workflow_node_positions', JSON.stringify(prev)); } catch (e) {}
+          return prev;
+        });
+      }
       dragging.current = null;
       panning.current = null;
       if (canvasRef.current && spaceHeld.current) canvasRef.current.style.cursor = 'grab';
@@ -300,51 +328,57 @@ const Workflow = () => {
     };
   }, [transform]);
 
+  // ───────────────── ĐO CHIỀU CAO THỰC TẾ CỦA NODE ─────────────────
+  useEffect(() => {
+    const observer = new ResizeObserver(() => {
+      const newHeights = {};
+      for (const key of ['source', 'gpt', 'gemini', 'publish']) {
+        const el = nodeRefs.current[key];
+        if (el) newHeights[key] = el.offsetHeight;
+      }
+      if (Object.keys(newHeights).length > 0) {
+        setNodeHeights(prev => ({ ...prev, ...newHeights }));
+      }
+    });
+    for (const key of ['source', 'gpt', 'gemini', 'publish']) {
+      if (nodeRefs.current[key]) observer.observe(nodeRefs.current[key]);
+    }
+    return () => observer.disconnect();
+  }, []);
+
   // ───────────────── TÍNH TOÁN CÁC ĐIỂM NỐI ─────────────────
-  // Port xuất phải của Node (right-center)
-  const portOut = (node, heightFraction = 0.5) => ({
-    x: node.x + NODE_WIDTH,
-    y: node.y + (typeof heightFraction === 'number' ? heightFraction : 0.5) * 100,
-  });
-
-  // Port nhập trái của Node (left-center)
-  const portIn = (node, heightFraction = 0.5) => ({
-    x: node.x,
-    y: node.y + (typeof heightFraction === 'number' ? heightFraction : 0.5) * 100,
-  });
-
   const cubicPath = (from, to) => {
     const cx = (from.x + to.x) / 2;
     return `M ${from.x} ${from.y} C ${cx} ${from.y}, ${cx} ${to.y}, ${to.x} ${to.y}`;
   };
 
   const { source, gpt, gemini, publish } = nodes;
+  const hS = nodeHeights.source, hG = nodeHeights.gpt, hM = nodeHeights.gemini, hP = nodeHeights.publish;
 
-  // Nhánh 1: source port-out-1 (30% height ~57px) → gpt port-in (center ~85px)
-  const path1_from = { x: source.x + NODE_WIDTH, y: source.y + 57 };
-  const path1_to   = { x: gpt.x, y: gpt.y + 85 };
+  // Tọa độ path = node.x/y + chiều cao thực * tỉ lệ port CSS
+  // Source ports: 30%, 60%, 90%
+  const path1_from = { x: source.x + NODE_WIDTH, y: source.y + hS * 0.30 };
+  const path2_from = { x: source.x + NODE_WIDTH, y: source.y + hS * 0.60 };
+  const path3_from = { x: source.x + NODE_WIDTH, y: source.y + hS * 0.90 };
 
-  // Nhánh 2: source port-out-2 (60% height ~114px) → gemini port-in-2 (70% ~154px)
-  const path2_from = { x: source.x + NODE_WIDTH, y: source.y + 114 };
-  const path2_to   = { x: gemini.x, y: gemini.y + 154 };
+  // GPT port-in: 50%, port-out: 50%
+  const path1_to   = { x: gpt.x, y: gpt.y + hG * 0.50 };
+  const pathGPT_from = { x: gpt.x + NODE_WIDTH, y: gpt.y + hG * 0.50 };
 
-  // Nhánh 3: source port-out-3 (90% height ~171px) → gemini port-in-3 (bottom ~198px)
-  const path3_from = { x: source.x + NODE_WIDTH, y: source.y + 171 };
-  const path3_to   = { x: gemini.x, y: gemini.y + 198 };
+  // Gemini ports-in: 30%, 70%, 90% | port-out: 50%
+  const pathGPT_to   = { x: gemini.x, y: gemini.y + hM * 0.30 };
+  const path2_to     = { x: gemini.x, y: gemini.y + hM * 0.70 };
+  const path3_to     = { x: gemini.x, y: gemini.y + hM * 0.90 };
+  const pathPub_from = { x: gemini.x + NODE_WIDTH, y: gemini.y + hM * 0.50 };
 
-  // GPT → Gemini port-in-1 (30% ~66px)
-  const pathGPT_from = { x: gpt.x + NODE_WIDTH, y: gpt.y + 85 };
-  const pathGPT_to   = { x: gemini.x, y: gemini.y + 66 };
-
-  // Gemini → Publish
-  const pathPub_from = { x: gemini.x + NODE_WIDTH, y: gemini.y + 110 };
-  const pathPub_to   = { x: publish.x, y: publish.y + 55 };
+  // Publish port-in: 50%
+  const pathPub_to = { x: publish.x, y: publish.y + hP * 0.50 };
 
   const handleSavePrompt = async (key, value) => {
     setPrompts(prev => ({ ...prev, [key]: value }));
     setEditingPrompt(null);
     try {
-      await fetch('http://localhost:3000/api/settings', {
+      await fetch('/api/settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ prompts: { ...prompts, [key]: value } })
@@ -360,7 +394,7 @@ const Workflow = () => {
     setDryRunResult(null);
     setTrainMode('full');
     try {
-      const res = await fetch('http://localhost:3000/api/dry-run', { method: 'POST' });
+      const res = await fetch('/api/dry-run', { method: 'POST' });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Dry Run thất bại');
       setDryRunResult(data);
@@ -388,7 +422,7 @@ const Workflow = () => {
     setDryRunResult(null);
     setTrainMode('image');
     try {
-      const res = await fetch('http://localhost:3000/api/train-image', { method: 'POST' });
+      const res = await fetch('/api/train-image', { method: 'POST' });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Training ảnh thất bại');
       if (data.trainMode === 'image' && data.images.length === 0) {
@@ -420,7 +454,7 @@ const Workflow = () => {
     setDryRunResult(null);
     setTrainMode('content');
     try {
-      const res = await fetch('http://localhost:3000/api/train-content', { method: 'POST' });
+      const res = await fetch('/api/train-content', { method: 'POST' });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Training content thất bại');
       setDryRunResult(data);
@@ -463,7 +497,7 @@ const Workflow = () => {
     if (!confirm.isConfirmed) return;
 
     try {
-      const res = await fetch('http://localhost:3000/api/delete-prompt', {
+      const res = await fetch('/api/delete-prompt', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ promptText: currentImg.prompt })
@@ -594,7 +628,7 @@ const Workflow = () => {
         formData.append('referenceImage', formValues.file);
       }
 
-      const res = await fetch('http://localhost:3000/api/feedback-prompt', {
+      const res = await fetch('/api/feedback-prompt', {
         method: 'POST',
         body: formData
       });
@@ -659,30 +693,31 @@ const Workflow = () => {
           }}>
             {/* SVG đường nối */}
             <svg style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', overflow: 'visible', pointerEvents: 'none' }}>
-              {/* Nhánh 1: Source → GPT (active) */}
-              <path d={cubicPath(path1_from, path1_to)} className="path-line active-path" />
-              <circle cx={path1_to.x} cy={path1_to.y} r="4" fill="var(--color-primary)" />
+              {/* Nhánh 1: Source → GPT */}
+              <path d={cubicPath(path1_from, path1_to)} className={`path-line ${activeBranch === 1 ? 'active-path' : 'dim-path'}`} />
+              <circle cx={path1_to.x} cy={path1_to.y} r={activeBranch === 1 ? 4 : 3} fill={activeBranch === 1 ? 'var(--color-primary)' : 'rgba(160,160,180,0.5)'} />
 
-              {/* Nhánh 2: Source → Gemini (ảnh gốc - dim) */}
-              <path d={cubicPath(path2_from, path2_to)} className="path-line dim-path" />
-              <circle cx={path2_to.x} cy={path2_to.y} r="3" fill="rgba(160,160,180,0.5)" />
+              {/* Nhánh 2: Source → Gemini (ảnh gốc) */}
+              <path d={cubicPath(path2_from, path2_to)} className={`path-line ${activeBranch === 2 ? 'active-path' : 'dim-path'}`} />
+              <circle cx={path2_to.x} cy={path2_to.y} r={activeBranch === 2 ? 4 : 3} fill={activeBranch === 2 ? 'var(--color-primary)' : 'rgba(160,160,180,0.5)'} />
 
-              {/* Nhánh 3: Source → Gemini (video - faint) */}
-              <path d={cubicPath(path3_from, path3_to)} className="path-line faint-path" />
-              <circle cx={path3_to.x} cy={path3_to.y} r="3" fill="rgba(120,120,140,0.35)" />
+              {/* Nhánh 3: Source → Gemini (video) */}
+              <path d={cubicPath(path3_from, path3_to)} className={`path-line ${activeBranch === 3 ? 'active-path' : 'faint-path'}`} />
+              <circle cx={path3_to.x} cy={path3_to.y} r={activeBranch === 3 ? 4 : 3} fill={activeBranch === 3 ? 'var(--color-primary)' : 'rgba(120,120,140,0.35)'} />
 
               {/* GPT → Gemini */}
-              <path d={cubicPath(pathGPT_from, pathGPT_to)} className="path-line active-path" />
-              <circle cx={pathGPT_to.x} cy={pathGPT_to.y} r="4" fill="var(--color-primary)" />
+              <path d={cubicPath(pathGPT_from, pathGPT_to)} className={`path-line ${activeBranch === 1 ? 'active-path' : 'dim-path'}`} />
+              <circle cx={pathGPT_to.x} cy={pathGPT_to.y} r={activeBranch === 1 ? 4 : 3} fill={activeBranch === 1 ? 'var(--color-primary)' : 'rgba(160,160,180,0.5)'} />
 
               {/* Gemini → Publish */}
-              <path d={cubicPath(pathPub_from, pathPub_to)} className="path-line dim-path" />
-              <circle cx={pathPub_to.x} cy={pathPub_to.y} r="3" fill="rgba(160,160,180,0.5)" />
+              <path d={cubicPath(pathPub_from, pathPub_to)} className={`path-line ${activeBranch ? 'active-path' : 'dim-path'}`} />
+              <circle cx={pathPub_to.x} cy={pathPub_to.y} r={activeBranch ? 4 : 3} fill={activeBranch ? 'var(--color-primary)' : 'rgba(160,160,180,0.5)'} />
             </svg>
 
             {/* Nối node cards */}
             <div style={{ position: 'relative', width: '100%', height: '100%' }}>
               <div
+                ref={el => nodeRefs.current.source = el}
                 className="node-card drive-node"
                 style={{ top: source.y, left: source.x, cursor: 'grab' }}
                 onMouseDown={e => onMouseDown(e, 'source')}
@@ -695,18 +730,19 @@ const Workflow = () => {
                 </div>
                 <div className="field mt-2">
                   <label>Phân nhánh Thư mục</label>
-                  <div className="condition-pill" style={{borderLeft:'2px solid var(--color-primary)'}}>① Anh_AVT → Sinh 4-6 ảnh (GPT)</div>
-                  <div className="condition-pill" style={{borderLeft:'2px solid #888'}}>② Anh_Hang/Tu_Chup → Random 4-8 ảnh</div>
-                  <div className="condition-pill" style={{borderLeft:'2px solid #555', opacity: 0.7}}>③ Video_Doc → 1 ảnh → Kịch bản</div>
+              <div className="condition-pill" style={{borderLeft: `2px solid ${activeBranch === 1 ? 'var(--color-primary)' : '#555'}`, opacity: activeBranch === 1 ? 1 : 0.5}}>① Anh_AVT → Sinh 4-6 ảnh (GPT)</div>
+                  <div className="condition-pill" style={{borderLeft: `2px solid ${activeBranch === 2 ? 'var(--color-primary)' : '#555'}`, opacity: activeBranch === 2 ? 1 : 0.5}}>② Anh_Hang/Tu_Chup → Random 4-8 ảnh</div>
+                  <div className="condition-pill" style={{borderLeft: `2px solid ${activeBranch === 3 ? 'var(--color-primary)' : '#555'}`, opacity: activeBranch === 3 ? 1 : 0.4}}>③ Video_Doc → 1 ảnh → Kịch bản</div>
                 </div>
               </div>
-              <div className="port" style={{top:'30%', right:'-5px', background:'var(--color-primary)'}} title="Nhánh 1 AVT"></div>
-              <div className="port" style={{top:'60%', right:'-5px'}} title="Nhánh 2 Ảnh Thật"></div>
-              <div className="port" style={{top:'90%', right:'-5px', opacity:0.5}} title="Nhánh 3 Video"></div>
+              <div className="port" style={{top:'30%', right:'-5px', background: activeBranch === 1 ? 'var(--color-primary)' : 'rgba(160,160,180,0.5)'}} title="Nhánh 1 AVT"></div>
+              <div className="port" style={{top:'60%', right:'-5px', background: activeBranch === 2 ? 'var(--color-primary)' : undefined}} title="Nhánh 2 Ảnh Thật"></div>
+              <div className="port" style={{top:'90%', right:'-5px', opacity: activeBranch === 3 ? 1 : 0.5, background: activeBranch === 3 ? 'var(--color-primary)' : undefined}} title="Nhánh 3 Video"></div>
             </div>{/* end node source */}
 
               {/* ───── NODE 2: GPT-4 VISION ───── */}
             <div
+              ref={el => nodeRefs.current.gpt = el}
               className={`node-card gpt-node ${isGPTActive ? 'active-glow' : ''}`}
               style={{ top: gpt.y, left: gpt.x, cursor: 'grab' }}
               onMouseDown={e => onMouseDown(e, 'gpt')}
@@ -846,6 +882,7 @@ const Workflow = () => {
 
             {/* ───── NODE 3: GEMINI 1.5 PRO ───── */}
             <div
+              ref={el => nodeRefs.current.gemini = el}
               className="node-card gemini-node"
               style={{ top: gemini.y, left: gemini.x, cursor: 'grab' }}
               onMouseDown={e => onMouseDown(e, 'gemini')}
@@ -889,6 +926,7 @@ const Workflow = () => {
 
             {/* ───── NODE 4: PUBLISH ───── */}
             <div
+              ref={el => nodeRefs.current.publish = el}
               className="node-card publish-node"
               style={{ top: publish.y, left: publish.x, cursor: 'grab', minHeight: NODE_HEIGHT_PUBLISH + 70 }}
               onMouseDown={e => onMouseDown(e, 'publish')}
