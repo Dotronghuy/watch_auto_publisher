@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { ChevronLeft, ChevronRight, Cloud, Settings, Share2, Search, Pause, Terminal, Image as ImageIcon, BrainCircuit, FileText, UploadCloud, RotateCcw, Trash2, FlaskConical, X, MessageSquare, Camera, Zap, CheckCircle, Palette, PenTool } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Cloud, Settings, Share2, Search, Pause, Terminal, Image as ImageIcon, BrainCircuit, FileText, UploadCloud, RotateCcw, Trash2, FlaskConical, X, MessageSquare, Camera, Zap, CheckCircle, Palette, PenTool, Maximize } from 'lucide-react';
 import Swal from 'sweetalert2';
 import './Workflow.css';
 
@@ -35,7 +35,11 @@ const Workflow = () => {
   const [logs, setLogs] = useState([]);
   const [imageGallery, setImageGallery] = useState([]);
   const [carouselIdx, setCarouselIdx] = useState(0);
-  const [previewText, setPreviewText] = useState(null);
+  const [previewFB, setPreviewFB] = useState(null);
+  const [previewIG, setPreviewIG] = useState(null);
+  const [previewTH, setPreviewTH] = useState(null);
+  const [liveMonitorTab, setLiveMonitorTab] = useState('outputs');
+  const [isMonitorOpen, setIsMonitorOpen] = useState(true);
   const [isGPTActive, setIsGPTActive] = useState(false);
   const [nodes, setNodes] = useState(getSavedNodes);
   const [nodeHeights, setNodeHeights] = useState({ source: NODE_HEIGHT_SOURCE, gpt: NODE_HEIGHT_GPT, gemini: NODE_HEIGHT_GEMINI, publish: NODE_HEIGHT_PUBLISH });
@@ -171,6 +175,48 @@ const Workflow = () => {
     }
   };
 
+  const handleAutoFit = useCallback(() => {
+    if (!canvasRef.current) return;
+    const canvasRect = canvasRef.current.getBoundingClientRect();
+    const padding = 60;
+    
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    Object.keys(nodes).forEach(key => {
+      const node = nodes[key];
+      const width = 280; // Estimated node width
+      const height = nodeHeights[key] || 250;
+      if (node.x < minX) minX = node.x;
+      if (node.y < minY) minY = node.y;
+      if (node.x + width > maxX) maxX = node.x + width;
+      if (node.y + height > maxY) maxY = node.y + height;
+    });
+
+    const contentWidth = maxX - minX;
+    const contentHeight = maxY - minY;
+
+    if (contentWidth <= 0 || contentHeight <= 0) return;
+
+    const scaleX = (canvasRect.width - padding * 2) / contentWidth;
+    const scaleY = (canvasRect.height - padding * 2) / contentHeight;
+    let newScale = Math.min(scaleX, scaleY, 1);
+    newScale = Math.max(0.2, newScale);
+    newScale = +(newScale.toFixed(2));
+
+    const centerX = (canvasRect.width - contentWidth * newScale) / 2;
+    const centerY = (canvasRect.height - contentHeight * newScale) / 2;
+
+    setTransform({
+      x: centerX - minX * newScale,
+      y: centerY - minY * newScale,
+      scale: newScale
+    });
+  }, [nodes, nodeHeights]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => handleAutoFit(), 100);
+    return () => clearTimeout(timer);
+  }, [handleAutoFit]);
+
   useEffect(() => {
     const eventSource = new EventSource('/api/logs/stream');
     eventSource.onmessage = (event) => {
@@ -188,8 +234,14 @@ const Workflow = () => {
            if (uniqueImages.length > 0) setCarouselIdx(uniqueImages.length - 1);
            
            // Khôi phục nội dung Gemini
-           const previews = data.logs.filter(l => l.textPreview).map(l => l.textPreview);
-           if (previews.length > 0) setPreviewText(previews[previews.length - 1]);
+           const previewsFB = data.logs.filter(l => l.fbContent).map(l => l.fbContent);
+           if (previewsFB.length > 0) setPreviewFB(previewsFB[previewsFB.length - 1]);
+           
+           const previewsIG = data.logs.filter(l => l.igContent).map(l => l.igContent);
+           if (previewsIG.length > 0) setPreviewIG(previewsIG[previewsIG.length - 1]);
+           
+           const previewsTH = data.logs.filter(l => l.thContent).map(l => l.thContent);
+           if (previewsTH.length > 0) setPreviewTH(previewsTH[previewsTH.length - 1]);
            
            setTimeout(() => terminalEndRef.current?.scrollIntoView({ behavior: 'auto' }), 100);
            return;
@@ -220,7 +272,9 @@ const Workflow = () => {
             return next;
           });
         }
-        if (data.textPreview) setPreviewText(data.textPreview);
+        if (data.fbContent) setPreviewFB(data.fbContent);
+        if (data.igContent) setPreviewIG(data.igContent);
+        if (data.thContent) setPreviewTH(data.thContent);
       } catch (e) { console.error('SSE Error:', e); }
     };
     return () => eventSource.close();
@@ -658,17 +712,6 @@ const Workflow = () => {
 
   return (
     <div className="workflow-page">
-      <div className="workflow-header-bar">
-        <div className="search-box">
-          <Search size={14} className="text-muted" />
-          <input type="text" placeholder="Tìm kiếm luồng, node..." />
-          <span className="shortcut">⌘K</span>
-        </div>
-        <span style={{ fontSize: '11px', color: 'var(--color-text-dim)', marginLeft: '12px' }}>
-          💡 Giữ <kbd style={{ background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.2)', borderRadius: '4px', padding: '1px 5px', fontSize: '10px' }}>Space</kbd> + kéo • Scroll để zoom
-        </span>
-      </div>
-
       <div className="workflow-content">
         <div className="canvas-area" ref={canvasRef}>
 
@@ -677,6 +720,7 @@ const Workflow = () => {
             <button onClick={() => setTransform(p => ({ ...p, scale: Math.min(3, +(p.scale * 1.2).toFixed(2)) }))} style={{ width: 32, height: 32, borderRadius: 8, background: 'rgba(30,30,30,0.9)', border: '1px solid rgba(255,255,255,0.15)', color: '#fff', cursor: 'pointer', fontSize: 18, display: 'flex', alignItems: 'center', justifyContent: 'center' }} title="Phóng to">+</button>
             <button onClick={() => setTransform(p => ({ ...p, scale: Math.max(0.2, +(p.scale * 0.8).toFixed(2)) }))} style={{ width: 32, height: 32, borderRadius: 8, background: 'rgba(30,30,30,0.9)', border: '1px solid rgba(255,255,255,0.15)', color: '#fff', cursor: 'pointer', fontSize: 22, display: 'flex', alignItems: 'center', justifyContent: 'center', lineHeight: 1 }} title="Thu nhỏ">−</button>
             <button onClick={() => setTransform({ x: 0, y: 0, scale: 1 })} style={{ width: 32, height: 32, borderRadius: 8, background: 'rgba(255,77,141,0.18)', border: '1px solid rgba(255,77,141,0.35)', color: 'var(--color-primary)', cursor: 'pointer', fontSize: 12, display: 'flex', alignItems: 'center', justifyContent: 'center' }} title="Đặt lại">1:1</button>
+            <button onClick={handleAutoFit} style={{ width: 32, height: 32, borderRadius: 8, background: 'rgba(52,211,153,0.18)', border: '1px solid rgba(52,211,153,0.35)', color: '#34d399', cursor: 'pointer', fontSize: 12, display: 'flex', alignItems: 'center', justifyContent: 'center' }} title="Tự động vừa màn hình"><Maximize size={14}/></button>
           </div>
 
           {/* ── ZOOM LEVEL INDICATOR ── */}
@@ -910,6 +954,11 @@ const Workflow = () => {
                       </div>
                     ))}
                   </div>
+            <div className="flex gap-1.5 mt-2">
+              <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-blue-500/20 text-blue-400">FB</span>
+              <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-pink-500/20 text-pink-400">IG</span>
+              {/* <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-white/20 text-white">TH</span> */}
+            </div>
                   <button
                     className="btn-upload-md"
                     onClick={() => handleUploadClick('gemini')}
@@ -939,6 +988,7 @@ const Workflow = () => {
                   <div className="tags">
                     <span className="tag fb">FB</span>
                     <span className="tag ig">IG</span>
+                    <span className="tag" style={{ backgroundColor: 'rgba(255, 255, 255, 0.1)', color: '#fff', border: '1px solid rgba(255, 255, 255, 0.2)', padding: '2px 8px', borderRadius: '4px', fontSize: '10px', fontWeight: 'bold' }}>TH</span>
                   </div>
                 </div>
                 <div className="field" style={{marginTop: '10px', display: 'flex', gap: '6px', flexWrap: 'wrap'}}>
@@ -992,12 +1042,32 @@ const Workflow = () => {
           </div>{/* end single canvas container */}
         </div>{/* end canvas-area */}
 
+        {!isMonitorOpen && (
+          <button 
+            className="monitor-open-btn"
+            onClick={() => setIsMonitorOpen(true)}
+            title="Mở Live Monitor"
+          >
+             <ChevronLeft size={16} /> Live Monitor
+          </button>
+        )}
+
         {/* ───── LIVE MONITOR SIDEBAR ───── */}
-        <div className="live-monitor-sidebar glass">
+        <div className={`live-monitor-sidebar glass ${!isMonitorOpen ? 'collapsed' : ''}`}>
           <div className="monitor-header">
-            <h3><Terminal size={16} style={{marginRight:'8px', color:'var(--color-primary)'}}/> Live Monitor</h3>
+            <h3 style={{ display: 'flex', alignItems: 'center', gap: '8px', margin: 0 }}>
+              <button 
+                className="btn-icon-square" 
+                title="Ẩn Live Monitor" 
+                onClick={() => setIsMonitorOpen(false)}
+                style={{ background: 'transparent', border: 'none', padding: 0 }}
+              >
+                <ChevronRight size={18} />
+              </button>
+              Live Monitor
+            </h3>
             <div className="monitor-actions">
-              <button className="btn-icon-square" title="Xoá log" onClick={() => { setLogs([]); setImageGallery([]); setCarouselIdx(0); setPreviewText(null); }}>
+              <button className="btn-icon-square" title="Xoá log" onClick={() => { setLogs([]); setImageGallery([]); setCarouselIdx(0); setPreviewFB(null); setPreviewIG(null); setPreviewTH(null); }}>
                 <Trash2 size={14} />
               </button>
               <button className="btn-icon-square" title="Kết nối lại SSE" onClick={() => {
@@ -1005,38 +1075,38 @@ const Workflow = () => {
               }}>
                 <RotateCcw size={14} />
               </button>
-              <button className="btn-icon-square" onClick={() => Swal.fire({ title: 'Tạm ngưng', text: 'Đã gửi tín hiệu Pause (Đang phát triển).', icon: 'warning', toast: true, position: 'top-end', showConfirmButton: false, timer: 2000, background: 'var(--color-surface)', color: 'var(--color-text)' })}><Pause size={14} /></button>
-              <button className="btn-icon-square" onClick={() => Swal.fire('Cấu hình', 'Trang cài đặt đang được xây dựng.', 'info')}><Settings size={14} /></button>
             </div>
           </div>
 
-          <div className="monitor-content">
-            <div className="terminal-box">
-              <div className="terminal-header"><Terminal size={12} /> Execution Logs</div>
-              <div className="terminal-body">
-                {logs.length === 0 && <p className="text-muted">Chưa có luồng dữ liệu nào chạy.</p>}
-                {logs.map((log, idx) => (
-                  <p key={idx} className={log.type}>
-                    <span>{log.time}</span>
-                    <strong>[{log.sender}]</strong> {log.message}
-                    {log.type === 'typing' && <span className="dot-anim">...</span>}
-                  </p>
-                ))}
-                <div ref={terminalEndRef} />
-              </div>
-            </div>
+          <div className="monitor-tabs">
+            <button className={`monitor-tab-btn ${liveMonitorTab === 'outputs' ? 'active' : ''}`} onClick={() => setLiveMonitorTab('outputs')}>
+              <ImageIcon size={14} /> Content Outputs
+              <span className="tab-badge">{previewFB || previewIG || previewTH ? '3' : '0'}</span>
+            </button>
+            <button className={`monitor-tab-btn ${liveMonitorTab === 'logs' ? 'active' : ''}`} onClick={() => setLiveMonitorTab('logs')}>
+              <Terminal size={14} /> Execution Logs
+            </button>
+          </div>
 
-            <div className="preview-box">
-              <div className="preview-header">
-                <ImageIcon size={12} className="pink" /> Kết quả Output (Real-time)
-                {imageGallery.length > 0 && (
-                  <span style={{ marginLeft: 'auto', fontSize: '11px', color: 'var(--color-text-dim)' }}>
-                    {carouselIdx + 1} / {imageGallery.length}
-                  </span>
-                )}
+          <div className="monitor-content">
+            {liveMonitorTab === 'logs' && (
+              <div className="terminal-box">
+                <div className="terminal-body">
+                  {logs.length === 0 && <p className="text-muted">Chưa có luồng dữ liệu nào chạy.</p>}
+                  {logs.map((log, idx) => (
+                    <p key={idx} className={log.type}>
+                      <span>{log.time}</span>
+                      <strong>[{log.sender}]</strong> {log.message}
+                      {log.type === 'typing' && <span className="dot-anim">...</span>}
+                    </p>
+                  ))}
+                  <div ref={terminalEndRef} />
+                </div>
               </div>
-              <div className="preview-body">
-                {/* CAROUSEL ẢNH */}
+            )}
+
+            {liveMonitorTab === 'outputs' && (
+              <>
                 <div className="img-carousel">
                   {imageGallery.length > 0 ? (
                     <>
@@ -1047,58 +1117,56 @@ const Workflow = () => {
                         style={{ objectFit: 'cover', border: 'none' }}
                         key={imageGallery[carouselIdx]}
                       />
-                      {/* Nút ← → */}
                       {imageGallery.length > 1 && (
                         <>
-                          <button
-                            className="carousel-btn carousel-prev"
-                            onClick={() => setCarouselIdx(i => Math.max(0, i - 1))}
-                            disabled={carouselIdx === 0}
-                            title="Ảnh trước"
-                          >
-                            <ChevronLeft size={18} />
-                          </button>
-                          <button
-                            className="carousel-btn carousel-next"
-                            onClick={() => setCarouselIdx(i => Math.min(imageGallery.length - 1, i + 1))}
-                            disabled={carouselIdx === imageGallery.length - 1}
-                            title="Ảnh tiếp theo"
-                          >
-                            <ChevronRight size={18} />
-                          </button>
-                          {/* Dot indicators */}
+                          <button className="carousel-btn carousel-prev" onClick={() => setCarouselIdx(i => Math.max(0, i - 1))} disabled={carouselIdx === 0} title="Ảnh trước"><ChevronLeft size={18} /></button>
+                          <button className="carousel-btn carousel-next" onClick={() => setCarouselIdx(i => Math.min(imageGallery.length - 1, i + 1))} disabled={carouselIdx === imageGallery.length - 1} title="Ảnh tiếp theo"><ChevronRight size={18} /></button>
                           <div className="carousel-dots">
                             {imageGallery.map((_, di) => (
-                              <button
-                                key={di}
-                                className={`carousel-dot ${di === carouselIdx ? 'active' : ''}`}
-                                onClick={() => setCarouselIdx(di)}
-                                title={`Ảnh ${di + 1}`}
-                              />
+                              <button key={di} className={`carousel-dot ${di === carouselIdx ? 'active' : ''}`} onClick={() => setCarouselIdx(di)} title={`Ảnh ${di + 1}`} />
                             ))}
                           </div>
                         </>
                       )}
                     </>
                   ) : (
-                    <div className="img-placeholder skeleton-loading"><span>Đang chờ Ảnh...</span></div>
+                    <div style={{ height: '160px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: 'rgba(255,255,255,0.02)', border: '1px dashed rgba(255,255,255,0.15)', borderRadius: '8px', gap: '12px' }}>
+                      <ImageIcon size={28} style={{ color: 'var(--color-text-dim)', opacity: 0.4 }} />
+                      <span style={{ fontSize: '12px', color: 'var(--color-text-dim)', fontWeight: '500', letterSpacing: '0.5px' }}>Đang chờ dữ liệu hình ảnh...</span>
+                    </div>
                   )}
                 </div>
 
-                <div className="text-preview">
-                  <div className="preview-label">Gemini Content: {!previewText && <span className="text-muted">(Đang đợi nội dung)</span>}</div>
-                  {previewText ? (
-                    <div style={{ fontSize: '11px', color: '#ccc', whiteSpace: 'pre-wrap' }}>{previewText}</div>
-                  ) : (
-                    <>
-                      <div className="skeleton-line" style={{width:'90%'}}></div>
-                      <div className="skeleton-line" style={{width:'70%'}}></div>
-                      <div className="skeleton-line" style={{width:'80%'}}></div>
-                    </>
-                  )}
+                <div className="social-card fb-card">
+                  <div className="social-card-header">
+                    <div style={{ display:'flex', alignItems:'center', gap:'6px' }}>
+                      <div style={{ background:'#1877F2', padding:'4px', borderRadius:'4px', display:'flex' }}>
+                        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="white" stroke="none"><path d="M18 2h-3a5 5 0 0 0-5 5v3H7v4h3v8h4v-8h3l1-4h-4V7a1 1 0 0 1 1-1h3z"></path></svg>
+                      </div> 
+                      Facebook Content
+                    </div>
+                  </div>
+                  <div className="social-card-body">
+                    {previewFB ? previewFB : <div style={{ color: 'var(--color-text-dim)', fontStyle: 'italic' }}>Đang đợi AI sinh nội dung Facebook...</div>}
+                  </div>
                 </div>
-              </div>
-            </div>
+
+                <div className="social-card ig-card">
+                  <div className="social-card-header">
+                    <div style={{ display:'flex', alignItems:'center', gap:'6px' }}>
+                      <div style={{ background:'linear-gradient(45deg, #f09433 0%, #e6683c 25%, #dc2743 50%, #cc2366 75%, #bc1888 100%)', padding:'4px', borderRadius:'4px', display:'flex' }}>
+                        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="2" width="20" height="20" rx="5" ry="5"></rect><path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z"></path><line x1="17.5" y1="6.5" x2="17.51" y2="6.5"></line></svg>
+                      </div> 
+                      Instagram Content
+                    </div>
+                  </div>
+                  <div className="social-card-body">
+                    {previewIG ? previewIG : <div style={{ color: 'var(--color-text-dim)', fontStyle: 'italic' }}>Đang đợi AI sinh caption Instagram...</div>}
+                  </div>
+                </div>
+
+              </>
+            )}
           </div>
         </div>
       </div>

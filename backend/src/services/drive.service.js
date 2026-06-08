@@ -2,6 +2,7 @@ import { google } from 'googleapis';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { liveLog } from '../utils/liveLog.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -90,6 +91,7 @@ export const downloadFileFromDrive = async (fileId, fileName) => {
 
   try {
     console.log(`Bắt đầu tải file: ${fileName} (ID: ${fileId})`);
+    liveLog(`Bắt đầu tải file: ${fileName}`, 'typing', 'Google Drive');
     const res = await drive.files.get(
       { fileId, alt: 'media', acknowledgeAbuse: true },
       { responseType: 'stream' }
@@ -100,6 +102,10 @@ export const downloadFileFromDrive = async (fileId, fileName) => {
       
       dest.on('finish', () => {
         console.log(`✅ Đã tải xong: ${destPath}`);
+        // Gửi image raw nếu là file ảnh để Frontend có thể update Carousel ngay lập tức
+        const isImage = fileName.toLowerCase().match(/\.(jpg|jpeg|png|webp|gif)$/i);
+        const extraPayload = isImage ? { image: `http://localhost:3000/images/${fileName}` } : {};
+        liveLog(`✅ Đã tải xong: ${fileName}`, 'success', 'Google Drive', extraPayload);
         resolve(destPath);
       });
       

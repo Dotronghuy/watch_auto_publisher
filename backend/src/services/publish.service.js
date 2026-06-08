@@ -221,6 +221,9 @@ export const dryRunRoutine = async () => {
     let selectedImages = [];
     let selectedSku = null;
     let postMode = 'SINGLE';
+    let fbContent = '';
+    let igContent = '';
+    let thContent = '';
 
     for (const skuFolder of shuffledSkus) {
       const shuffledFolderTypes = [...folderTypes].sort(() => 0.5 - Math.random());
@@ -299,8 +302,8 @@ export const dryRunRoutine = async () => {
 
     // 3. AI xử lý (ChatGPT + Gemini)
     checkAbort();
-    let fbContent = '';
-    let igContent = '';
+    fbContent = '';
+    igContent = '';
     let currentImgPromptsArray = [];
     let currentSceneTextsArray = [];
     try {
@@ -466,20 +469,24 @@ export const dryRunRoutine = async () => {
           const reelsContent = await generateContentOnChatGPT(reelsPrompt, 'reels', targetImgPathForGemini);
           fbContent = reelsContent;
           igContent = reelsContent;
+          thContent = reelsContent;
         } else {
           const fallbackPrompt = `Hãy viết 2 bài theo đúng format:\n## FACEBOOK:\n[Bài FB 80-150 từ, sang trọng, có hashtag #iwcarnivalvietnam #iwcarnival #donghoiwcarnival]\n## INSTAGRAM:\n[Caption IG 15-35 từ, góc nhìn KHÁC bài FB, có hashtag #iwcarnivalvietnam #iwcarnival #donghoiwcarnival]\nSản phẩm: đồng hồ SKU ${selectedSku.name}. Không kèm giải thích.`;
           const combinedPrompt = fbPromptFinal || fallbackPrompt;
-          const fbSpecificPrompt = combinedPrompt + "\n\n[LƯU Ý: HÃY CHỈ VIẾT NỘI DUNG CHO FACEBOOK DỰA THEO HƯỚNG DẪN TRÊN. BỎ QUA PHẦN INSTAGRAM. TRẢ VỀ TRỰC TIẾP NỘI DUNG MÀ KHÔNG CẦN TIÊU ĐỀ ## FACEBOOK]";
-          const igSpecificPrompt = combinedPrompt + "\n\n[LƯU Ý: HÃY CHỈ VIẾT NỘI DUNG CHO INSTAGRAM DỰA THEO HƯỚNG DẪN TRÊN. BỎ QUA PHẦN FACEBOOK. TRẢ VỀ TRỰC TIẾP NỘI DUNG MÀ KHÔNG CẦN TIÊU ĐỀ ## INSTAGRAM]";
+          const fbSpecificPrompt = combinedPrompt + "\n\n[LƯU Ý: HÃY CHỈ VIẾT NỘI DUNG CHO FACEBOOK DỰA THEO HƯỚNG DẪN TRÊN. BỎ QUA CÁC PHẦN KHÁC. TRẢ VỀ TRỰC TIẾP NỘI DUNG MÀ KHÔNG CẦN TIÊU ĐỀ ## FACEBOOK]";
+          const igSpecificPrompt = combinedPrompt + "\n\n[LƯU Ý: HÃY CHỈ VIẾT NỘI DUNG CHO INSTAGRAM DỰA THEO HƯỚNG DẪN TRÊN. BỎ QUA CÁC PHẦN KHÁC. TRẢ VỀ TRỰC TIẾP NỘI DUNG MÀ KHÔNG CẦN TIÊU ĐỀ ## INSTAGRAM]";
+          // const thSpecificPrompt = combinedPrompt + "\n\n[LƯU Ý: HÃY CHỈ VIẾT NỘI DUNG CHO THREADS DỰA THEO HƯỚNG DẪN TRÊN. BỎ QUA CÁC PHẦN KHÁC. TRẢ VỀ TRỰC TIẾP NỘI DUNG MÀ KHÔNG CẦN TIÊU ĐỀ ## THREADS]";
 
           fbContent = await generateContentOnChatGPT(fbSpecificPrompt, 'fb', targetImgPathForGemini);
           igContent = await generateContentOnChatGPT(igSpecificPrompt, 'ig', targetImgPathForGemini);
+          // thContent = await generateContentOnChatGPT(thSpecificPrompt, 'ig', targetImgPathForGemini);
 
-          if (fbContent && igContent) {
-            console.log(`✅ [ChatGPT] Sinh thành công: FB (${fbContent.length} ký tự) | IG (${igContent.length} ký tự)`);
+          if (fbContent && igContent /* && thContent */) {
+            console.log(`✅ [ChatGPT] Sinh thành công: FB (${fbContent.length} ký tự) | IG (${igContent.length} ký tự) /* | TH (${thContent.length} ký tự) */`);
           } else {
-            fbContent = "Failed to generate FB content";
-            igContent = "Failed to generate IG content";
+            fbContent = fbContent || "Failed to generate FB content";
+            igContent = igContent || "Failed to generate IG content";
+            // thContent = thContent || "Failed to generate TH content";
           }
         }
 
@@ -490,12 +497,14 @@ export const dryRunRoutine = async () => {
         liveLog(`⚠️ [DRY RUN] Lỗi Gemini: ${geminiError.message}`, 'error', 'Gemini');
         fbContent = `[DRY RUN FALLBACK] Đồng hồ ${selectedSku.name} — Nội dung mẫu. #iwcarnivalvietnam`;
         igContent = fbContent;
+        thContent = fbContent;
       }
     } catch (e) {
       if (globalStopController.signal.aborted) throw e;
       liveLog(`⚠️ [DRY RUN] Lỗi xử lý AI: ${e.message}`, 'error', 'System');
       fbContent = `[DRY RUN FALLBACK] Đồng hồ ${selectedSku.name}.`;
       igContent = fbContent;
+      thContent = fbContent;
     }
 
     // 4. Trả về URL ảnh qua /images/filename (nhẹ hơn base64 nhiều lần)
@@ -511,7 +520,7 @@ export const dryRunRoutine = async () => {
       }
     }
 
-    liveLog(`🎉 [DRY RUN] Hoàn thành! ${imageUrls.length} ảnh, FB: ${fbContent.length} ký tự, IG: ${igContent.length} ký tự`, 'success', 'System');
+    liveLog(`🎉 [DRY RUN] Hoàn thành! ${imageUrls.length} ảnh, FB: ${fbContent.length} ký tự, IG: ${igContent.length} ký tự, TH: ${thContent.length} ký tự`, 'success', 'System', { fbContent, igContent, thContent });
 
     // KHÔNG xóa temp_images để frontend load được ảnh — sẽ xóa ở lần chạy tiếp theo
     // (cleanTempDirectory sẽ được gọi khi autoPublishRoutine hoặc dry-run tiếp theo chạy)
@@ -522,6 +531,7 @@ export const dryRunRoutine = async () => {
       postMode,
       fbContent,
       igContent,
+      thContent,
       images: imageUrls,
       imageCount: imageUrls.length,
     };
@@ -860,18 +870,20 @@ export const trainContentOnly = async () => {
 
     const fallbackPrompt = `Hãy viết 2 bài theo đúng format:\n## FACEBOOK:\n[Bài FB 80-150 từ, sang trọng, có hashtag #iwcarnivalvietnam #iwcarnival #donghoiwcarnival]\n## INSTAGRAM:\n[Caption IG 15-35 từ, góc nhìn KHÁC bài FB, có hashtag #iwcarnivalvietnam #iwcarnival #donghoiwcarnival]\nSản phẩm: đồng hồ SKU ${selectedSku.name}. Không kèm giải thích.`;
     const combinedPrompt = fbPromptFinal || fallbackPrompt;
-    const fbSpecificPrompt = combinedPrompt + "\n\n[LƯU Ý: HÃY CHỈ VIẾT NỘI DUNG CHO FACEBOOK DỰA THEO HƯỚNG DẪN TRÊN. BỎ QUA PHẦN INSTAGRAM. TRẢ VỀ TRỰC TIẾP NỘI DUNG MÀ KHÔNG CẦN TIÊU ĐỀ ## FACEBOOK]";
-    const igSpecificPrompt = combinedPrompt + "\n\n[LƯU Ý: HÃY CHỈ VIẾT NỘI DUNG CHO INSTAGRAM DỰA THEO HƯỚNG DẪN TRÊN. BỎ QUA PHẦN FACEBOOK. TRẢ VỀ TRỰC TIẾP NỘI DUNG MÀ KHÔNG CẦN TIÊU ĐỀ ## INSTAGRAM]";
+    const fbSpecificPrompt = combinedPrompt + "\n\n[LƯU Ý: HÃY CHỈ VIẾT NỘI DUNG CHO FACEBOOK DỰA THEO HƯỚNG DẪN TRÊN. BỎ QUA CÁC PHẦN KHÁC. TRẢ VỀ TRỰC TIẾP NỘI DUNG MÀ KHÔNG CẦN TIÊU ĐỀ ## FACEBOOK]";
+    const igSpecificPrompt = combinedPrompt + "\n\n[LƯU Ý: HÃY CHỈ VIẾT NỘI DUNG CHO INSTAGRAM DỰA theo HƯỚNG DẪN TRÊN. BỎ QUA CÁC PHẦN KHÁC. TRẢ VỀ TRỰC TIẾP NỘI DUNG MÀ KHÔNG CẦN TIÊU ĐỀ ## INSTAGRAM]";
+    // const thSpecificPrompt = combinedPrompt + "\n\n[LƯU Ý: HÃY CHỈ VIẾT NỘI DUNG CHO THREADS DỰA THEO HƯỚNG DẪN TRÊN. BỎ QUA CÁC PHẦN KHÁC. TRẢ VỀ TRỰC TIẾP NỘI DUNG MÀ KHÔNG CẦN TIÊU ĐỀ ## THREADS]";
 
     const fbContent = await generateContentOnChatGPT(fbSpecificPrompt, 'fb', targetImgPathForContent);
     const igContent = await generateContentOnChatGPT(igSpecificPrompt, 'ig', targetImgPathForContent);
+    // const thContent = await generateContentOnChatGPT(thSpecificPrompt, 'ig', targetImgPathForContent);
 
     // Dọn ảnh tham chiếu tạm
     if (targetImgPathForContent && fs.existsSync(targetImgPathForContent)) fs.unlinkSync(targetImgPathForContent);
 
     if (!fbContent && !igContent) throw new Error('Không tạo được nội dung nào!');
 
-    liveLog(`🎉 [TRAIN CONTENT] Hoàn thành! FB: ${fbContent?.length || 0} ký tự, IG: ${igContent?.length || 0} ký tự`, 'success', 'System');
+    liveLog(`🎉 [TRAIN CONTENT] Hoàn thành! FB: ${fbContent?.length || 0} ký tự, IG: ${igContent?.length || 0} ký tự`, 'success', 'System', { fbContent, igContent });
 
     return {
       success: true,
@@ -879,6 +891,7 @@ export const trainContentOnly = async () => {
       postMode: 'CONTENT',
       fbContent: fbContent || '',
       igContent: igContent || '',
+      thContent: thContent || '',
       images: [],
       imageCount: 0,
       trainMode: 'content',
@@ -1110,6 +1123,7 @@ export const autoPublishRoutine = async () => {
     let postContent = '';
     let fbContent = '';
     let igContent = '';
+    let thContent = '';
     try {
       const productInfo = await getProductInfoBySku(selectedSku.name);
       const productInfoText = productInfo ? Object.entries(productInfo).map(([k, v]) => `${k}: ${v}`).join('\n') : '';
@@ -1304,36 +1318,27 @@ export const autoPublishRoutine = async () => {
           const reelsContent = await generateContentOnChatGPT(reelsPrompt, 'fb', targetImgPathForGemini);
           fbContent = reelsContent;
           igContent = reelsContent; // Reels dùng chung 1 caption
+          thContent = reelsContent;
 
         } else {
           // POST THƯỜNG: Dùng FB_AND_IG template — Gemini trả về 2 section
           const fallbackPrompt = `Hãy viết 2 bài theo đúng format:\n## FACEBOOK:\n[Bài FB 80-150 từ, sang trọng, có hashtag #iwcarnivalvietnam #iwcarnival #donghoiwcarnival]\n## INSTAGRAM:\n[Caption IG 15-35 từ, góc nhìn KHÁC bài FB, có hashtag #iwcarnivalvietnam #iwcarnival #donghoiwcarnival]\nSản phẩm: đồng hồ SKU ${selectedSku.name}. Không kèm giải thích.`;
           const combinedPrompt = fbPromptFinal || fallbackPrompt;
 
-          const fbSpecificPrompt = combinedPrompt + "\n\n[LƯU Ý: HÃY CHỈ VIẾT NỘI DUNG CHO FACEBOOK DỰA THEO HƯỚNG DẪN TRÊN. BỎ QUA PHẦN INSTAGRAM. TRẢ VỀ TRỰC TIẾP NỘI DUNG MÀ KHÔNG CẦN TIÊU ĐỀ ## FACEBOOK]";
-          const igSpecificPrompt = combinedPrompt + "\n\n[LƯU Ý: HÃY CHỈ VIẾT NỘI DUNG CHO INSTAGRAM DỰA THEO HƯỚNG DẪN TRÊN. BỎ QUA PHẦN FACEBOOK. TRẢ VỀ TRỰC TIẾP NỘI DUNG MÀ KHÔNG CẦN TIÊU ĐỀ ## INSTAGRAM]";
+          const fbSpecificPrompt = combinedPrompt + "\n\n[LƯU Ý: HÃY CHỈ VIẾT NỘI DUNG CHO FACEBOOK DỰA THEO HƯỚNG DẪN TRÊN. BỎ QUA CÁC PHẦN KHÁC. TRẢ VỀ TRỰC TIẾP NỘI DUNG MÀ KHÔNG CẦN TIÊU ĐỀ ## FACEBOOK]";
+          const igSpecificPrompt = combinedPrompt + "\n\n[LƯU Ý: HÃY CHỈ VIẾT NỘI DUNG CHO INSTAGRAM DỰA THEO HƯỚNG DẪN TRÊN. BỎ QUA CÁC PHẦN KHÁC. TRẢ VỀ TRỰC TIẾP NỘI DUNG MÀ KHÔNG CẦN TIÊU ĐỀ ## INSTAGRAM]";
+          // const thSpecificPrompt = combinedPrompt + "\n\n[LƯU Ý: HÃY CHỈ VIẾT NỘI DUNG CHO THREADS DỰA THEO HƯỚNG DẪN TRÊN. BỎ QUA CÁC PHẦN KHÁC. TRẢ VỀ TRỰC TIẾP NỘI DUNG MÀ KHÔNG CẦN TIÊU ĐỀ ## THREADS]";
 
           fbContent = await generateContentOnChatGPT(fbSpecificPrompt, 'fb', targetImgPathForGemini);
           igContent = await generateContentOnChatGPT(igSpecificPrompt, 'ig', targetImgPathForGemini);
+          // thContent = await generateContentOnChatGPT(thSpecificPrompt, 'ig', targetImgPathForGemini);
 
-          if (fbContent && igContent) {
-            console.log(`✅ [ChatGPT] Sinh thành công: FB (${fbContent.length} ký tự) | IG (${igContent.length} ký tự)`);
+          if (fbContent && igContent /* && thContent */) {
+            console.log(`✅ [ChatGPT] Sinh thành công: FB (${fbContent.length} ký tự) | IG (${igContent.length} ký tự) /* | TH (${thContent.length} ký tự) */`);
           } else {
-            // Fallback: nếu không parse được, tách thủ công theo từ khóa INSTAGRAM
-            console.log(`⚠️ [ChatGPT] Regex chính không match. Output gốc: ${combinedOutput.substring(0, 200)}...`);
-            const splitIdx = combinedOutput.search(/INSTAGRAM/i);
-            if (splitIdx !== -1) {
-              // Tìm dòng sau chữ INSTAGRAM:
-              const afterIG = combinedOutput.slice(splitIdx).replace(/^INSTAGRAM:?\s*/i, '');
-              const beforeIG = combinedOutput.slice(0, splitIdx).replace(/^.*?FACEBOOK:?\s*/is, '');
-              fbContent = beforeIG.trim() || combinedOutput;
-              igContent = afterIG.trim() || combinedOutput;
-              console.log(`⚠️ [ChatGPT] Dùng fallback split: FB (${fbContent.length} ký tự) | IG (${igContent.length} ký tự)`);
-            } else {
-              fbContent = combinedOutput;
-              igContent = combinedOutput;
-              console.log(`⚠️ [ChatGPT] Không tìm thấy INSTAGRAM — dùng chung 1 nội dung.`);
-            }
+            fbContent = fbContent || "Failed to generate FB content";
+            igContent = igContent || "Failed to generate IG content";
+            // thContent = thContent || "Failed to generate TH content";
           }
         }
 
@@ -1353,6 +1358,7 @@ export const autoPublishRoutine = async () => {
         console.log(`⚠️ Lỗi Playwright ChatGPT: ${geminiError.message}. Dùng nội dung dự phòng.`);
         fbContent = `[Đăng Tự Động] Khám phá ngay siêu phẩm đồng hồ ${selectedSku.name} tuyệt đẹp. #iwcarnivalvietnam #iwcarnival #donghoiwcarnival`;
         igContent = fbContent;
+        thContent = fbContent;
         postContent = fbContent;
       }
 
@@ -1365,6 +1371,8 @@ export const autoPublishRoutine = async () => {
       console.log(`⚠️ Lỗi trích xuất thông tin: ${e.message}. Dùng nội dung dự phòng.`);
       postContent = `[Đăng Tự Động] Siêu phẩm đồng hồ ${selectedSku.name}.`;
     }
+
+    liveLog(`✅ Đã chuẩn bị xong nội dung FB, IG & TH.`, 'success', 'System', { fbContent, igContent, thContent });
 
     // 5. Đăng Facebook
     checkAbort();
@@ -1583,8 +1591,8 @@ export const autoPublishRoutine = async () => {
             threadsImageUrl = imgMeta.data.full_picture;
           } catch (e) { }
         }
-        const threadsContent = igContent || postContent; // Ưu tiên IG content (ngắn gọn hơn)
-        await publishThreadChain(threadsContent, threadsImageUrl);
+        const finalThreadsContent = thContent || igContent || postContent; // Ưu tiên TH content
+        await publishThreadChain(finalThreadsContent, threadsImageUrl);
         liveLog('✅ Đã đăng lên Threads thành công!', 'success', 'System');
         addActivity(`Đăng thành công ${selectedSku.name} lên Threads!`, 'success');
       } catch (threadsErr) {
