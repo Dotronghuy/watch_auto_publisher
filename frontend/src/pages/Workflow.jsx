@@ -58,6 +58,9 @@ const Workflow = () => {
   const [dryRunImgIdx, setDryRunImgIdx] = useState(0);
   const [dryRunTab, setDryRunTab] = useState('fb'); // 'fb' | 'ig'
   const [trainMode, setTrainMode] = useState(null); // null | 'image' | 'content' | 'full'
+  const [showTestTonesModal, setShowTestTonesModal] = useState(false);
+  const [testTonesProgress, setTestTonesProgress] = useState(null);
+  const [testTonesResults, setTestTonesResults] = useState([]);
   const [activeBranch, setActiveBranch] = useState(null); // null | 1 | 2 | 3 — nhánh đang chạy
   // Sample images state
   const [sampleImages, setSampleImages] = useState([]);
@@ -215,7 +218,8 @@ const Workflow = () => {
   useEffect(() => {
     const timer = setTimeout(() => handleAutoFit(), 100);
     return () => clearTimeout(timer);
-  }, [handleAutoFit]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     const eventSource = new EventSource('/api/logs/stream');
@@ -442,6 +446,31 @@ const Workflow = () => {
   };
 
   // ─── DRY RUN ───
+  const handleTestTones = () => {
+    setShowTestTonesModal(true);
+    setTestTonesResults([]);
+    setTestTonesProgress({ message: 'Đang khởi tạo thử nghiệm...' });
+
+    const source = new EventSource('/api/publish/test-tones');
+    source.addEventListener('progress', (e) => {
+      const data = JSON.parse(e.data);
+      setTestTonesProgress(`Đang sinh phong cách: ${data.tone} (${data.index}/${data.total})...`);
+    });
+    source.addEventListener('result', (e) => {
+      const data = JSON.parse(e.data);
+      setTestTonesResults(prev => [...prev, data]);
+    });
+    source.addEventListener('done', () => {
+      setTestTonesProgress(null);
+      source.close();
+    });
+    source.addEventListener('error', (e) => {
+      console.error('SSE Error', e);
+      setTestTonesProgress(null);
+      source.close();
+    });
+  };
+
   const handleDryRun = async () => {
     if (dryRunLoading) return;
     setDryRunLoading(true);
@@ -792,7 +821,7 @@ const Workflow = () => {
               onMouseDown={e => onMouseDown(e, 'gpt')}
             >
               <div className="port" style={{top:'50%', left:'-5px'}} title="Input từ Nhánh 1"></div>
-              <div className="node-header"><BrainCircuit size={14} className="pink" /> GPT-4 Vision (Sinh Ảnh)</div>
+              <div className="node-header"><BrainCircuit size={14} className="pink" /> GPT-5.5 Version (Sinh Ảnh)</div>
               <div className="node-body">
                 <div className="field">
                   <label>Trạng thái Prompt</label>
@@ -934,7 +963,7 @@ const Workflow = () => {
               <div className="port" style={{top:'30%', left:'-5px', background:'var(--color-primary)'}} title="Input từ GPT"></div>
               <div className="port" style={{top:'70%', left:'-5px'}} title="Input từ Nhánh 2 (Ảnh gốc)"></div>
               <div className="port" style={{top:'90%', left:'-5px', opacity:0.5}} title="Input từ Nhánh 3 (Video)"></div>
-              <div className="node-header"><Settings size={14} className="blue" /> Gemini 1.5 Pro</div>
+              <div className="node-header"><Settings size={14} className="blue" /> GPT-5.5 Version (Sinh Content)</div>
               <div className="node-body">
                 <div className="field">
                   <label>Trạng thái Cấu hình AI</label>
@@ -958,6 +987,7 @@ const Workflow = () => {
               <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-blue-500/20 text-blue-400">FB</span>
               <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-pink-500/20 text-pink-400">IG</span>
               {/* <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-white/20 text-white">TH</span> */}
+              <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-[#E1306C]/20 text-[#E1306C]">IG</span>
             </div>
                   <button
                     className="btn-upload-md"
@@ -988,7 +1018,6 @@ const Workflow = () => {
                   <div className="tags">
                     <span className="tag fb">FB</span>
                     <span className="tag ig">IG</span>
-                    <span className="tag" style={{ backgroundColor: 'rgba(255, 255, 255, 0.1)', color: '#fff', border: '1px solid rgba(255, 255, 255, 0.2)', padding: '2px 8px', borderRadius: '4px', fontSize: '10px', fontWeight: 'bold' }}>TH</span>
                   </div>
                 </div>
                 <div className="field" style={{marginTop: '10px', display: 'flex', gap: '6px', flexWrap: 'wrap'}}>
@@ -1034,6 +1063,16 @@ const Workflow = () => {
                     ) : (
                       <><PenTool size={13} /> Train Content</>
                     )}
+                  </button>
+                  <button
+                    className="btn-dry-run btn-train-content"
+                    onClick={(e) => { e.stopPropagation(); handleTestTones(); }}
+                    onMouseDown={e => e.stopPropagation()}
+                    disabled={showTestTonesModal}
+                    title="Test 6 phong cách hành văn AI"
+                    style={{flex: '1 1 100%', marginTop: '6px', background: 'rgba(234, 179, 8, 0.1)', color: '#eab308', borderColor: 'rgba(234, 179, 8, 0.3)'}}
+                  >
+                    <><Zap size={13} /> Test Hành Văn AI</>
                   </button>
                 </div>
               </div>
@@ -1314,6 +1353,47 @@ const Workflow = () => {
           </div>
         </div>
       )}
+
+        {showTestTonesModal && (
+          <div className="dry-run-overlay" onClick={() => !testTonesProgress && setShowTestTonesModal(false)}>
+            <div className="dry-run-modal" style={{ width: '80%', maxWidth: '1000px', height: '85vh', display: 'flex', flexDirection: 'column' }} onClick={e => e.stopPropagation()}>
+              <div className="dry-run-modal-header" style={{ padding: '16px 20px', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <Zap size={20} color="#eab308" />
+                  <div>
+                    <h2 style={{ margin: 0, fontSize: '16px', color: 'white' }}>Thử Nghiệm Hành Văn AI</h2>
+                    {testTonesProgress && (
+                      <p style={{ margin: 0, fontSize: '12px', color: '#60a5fa', display: 'flex', alignItems: 'center', gap: '6px', marginTop: '4px' }}>
+                        <span className="spin-icon">⟳</span> {typeof testTonesProgress === 'string' ? testTonesProgress : testTonesProgress.message}
+                      </p>
+                    )}
+                  </div>
+                </div>
+                <button className="dry-run-close" onClick={() => !testTonesProgress && setShowTestTonesModal(false)} disabled={!!testTonesProgress}>
+                  <X size={18} />
+                </button>
+              </div>
+              <div className="dry-run-modal-body" style={{ flex: 1, overflowY: 'auto', padding: '20px', background: 'var(--color-bg)' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+                  {testTonesResults.map((res, i) => (
+                    <div key={i} style={{ background: 'var(--color-surface)', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.05)', padding: '16px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px', paddingBottom: '12px', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                        <h3 style={{ margin: 0, fontSize: '14px', color: 'var(--color-primary)' }}>{res.index}. {res.tone}</h3>
+                        <span style={{ fontSize: '11px', color: 'var(--color-text-dim)', background: 'rgba(255,255,255,0.05)', padding: '4px 8px', borderRadius: '4px' }}>CTA: {res.cta}</span>
+                      </div>
+                      <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordWrap: 'break-word', fontSize: '12px', color: 'var(--color-text)', lineHeight: 1.6, fontFamily: 'inherit' }}>
+                        {res.content}
+                      </pre>
+                    </div>
+                  ))}
+                </div>
+                {testTonesResults.length === 0 && !testTonesProgress && (
+                  <div style={{ textAlign: 'center', color: 'var(--color-text-dim)', padding: '40px' }}>Chưa có kết quả.</div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
     </div>
   );
 };

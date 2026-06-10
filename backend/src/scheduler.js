@@ -7,7 +7,7 @@ import { spawn } from 'child_process';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const settingsPath = path.join(__dirname, './config/settings.json');
+const settingsPath = path.join(__dirname, '../config/settings.json');
 
 let isSchedulerRunning = false; // Guard chống gọi scheduler 2 lần đồng thời
 
@@ -83,6 +83,48 @@ export const startScheduler = async () => {
     }
 
     console.log(`✅ Đã lên lịch thành công tổng cộng ${timeSlots.length} khung giờ đăng bài mỗi ngày.`);
+
+    // --- CƠ CHẾ CHẠY BÙ (CATCH-UP) ---
+    try {
+      const lastRunPath = path.join(__dirname, '../config/last_run.json');
+      const now = new Date();
+      let lastRunTime = 0;
+      if (fs.existsSync(lastRunPath)) {
+        const lastRunData = JSON.parse(fs.readFileSync(lastRunPath, 'utf8'));
+        lastRunTime = lastRunData.timestamp || 0;
+      }
+
+      const currentMinutes = now.getHours() * 60 + now.getMinutes();
+      let missedSlotTime = null;
+
+      for (const timeStr of timeSlots) {
+        if (!timeStr || !timeStr.includes(':')) continue;
+        const [hour, minute] = timeStr.split(':').map(Number);
+        const slotMinutes = hour * 60 + minute;
+
+        // Nếu khung giờ này đã qua trong NGÀY HÔM NAY
+        if (slotMinutes <= currentMinutes) {
+          const slotDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hour, minute, 0, 0);
+          const slotTimestamp = slotDate.getTime();
+          
+          // Kiểm tra xem thời điểm chạy gần nhất có TRƯỚC khung giờ này không
+          // Cho phép sai số 2 phút để không kích hoạt nếu đã chạy đúng lúc
+          if (lastRunTime < (slotTimestamp - 120000)) {
+            missedSlotTime = slotTimestamp;
+          }
+        }
+      }
+
+      if (missedSlotTime) {
+        console.log('⚡ Phát hiện bị lỡ lịch đăng bài do server tắt! Đang kích hoạt chạy bù ngay lập tức...');
+        await publishQueue.add('autoPublishJob', {}, { delay: 10000 });
+        
+        // Cập nhật tạm thời để không bị chạy bù nhiều lần nếu scheduler reload
+        fs.writeFileSync(lastRunPath, JSON.stringify({ timestamp: missedSlotTime }), 'utf8');
+      }
+    } catch (e) {
+      console.error('Lỗi khi kiểm tra catch-up chạy bù:', e);
+    }
   }
 
   // --- THÊM: Hẹn giờ quét Google Drive tự động lúc 2:00 sáng mỗi ngày ---

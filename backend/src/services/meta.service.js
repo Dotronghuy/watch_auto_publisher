@@ -12,9 +12,9 @@ const GRAPH_API_BASE = `https://graph.facebook.com/${GRAPH_API_VERSION}`;
 /**
  * Đăng bài lên Facebook Fanpage (text hoặc ảnh đơn)
  */
-export const publishToFacebook = async (content, imageUrl) => {
+export const publishToFacebook = async (content, imageUrl, options = {}) => {
   try {
-    const pageToken = process.env.FB_PAGE_ACCESS_TOKEN;
+    const pageToken = options.fbAccessToken || process.env.FB_PAGE_ACCESS_TOKEN;
     if (!pageToken) throw new Error('Thiếu FB_PAGE_ACCESS_TOKEN');
 
     if (!imageUrl) {
@@ -67,9 +67,9 @@ export const getInstagramImageDimensions = (ratio = '4:5') => {
  * @param {string} imageUrl     - URL công khai của ảnh (phải là HTTPS, không cần auth)
  * @param {string[]} [hashtags] - Mảng hashtag, VD: ['#dongho', '#luxury']
  */
-export const publishToInstagram = async (content, imageUrl, hashtags = []) => {
-  const igUserId = process.env.IG_USER_ID;
-  const igToken  = process.env.IG_ACCESS_TOKEN;
+export const publishToInstagram = async (content, imageUrl, hashtags = [], options = {}) => {
+  const igUserId = options.igUserId || process.env.IG_USER_ID;
+  const igToken  = options.igAccessToken || process.env.IG_ACCESS_TOKEN;
 
   if (!igUserId || !igToken) {
     throw new Error('Thiếu IG_USER_ID hoặc IG_ACCESS_TOKEN trong .env');
@@ -130,9 +130,9 @@ export const publishToInstagram = async (content, imageUrl, hashtags = []) => {
  * @param {string[]} imageUrls - Mảng các URL công khai (HTTPS)
  * @param {string[]} [hashtags]
  */
-export const publishCarouselToInstagram = async (content, imageUrls, hashtags = []) => {
-  const igUserId = process.env.IG_USER_ID;
-  const igToken  = process.env.IG_ACCESS_TOKEN;
+export const publishCarouselToInstagram = async (content, imageUrls, hashtags = [], options = {}) => {
+  const igUserId = options.igUserId || process.env.IG_USER_ID;
+  const igToken  = options.igAccessToken || process.env.IG_ACCESS_TOKEN;
 
   if (!igUserId || !igToken) throw new Error('Thiếu IG_USER_ID hoặc IG_ACCESS_TOKEN');
   if (!imageUrls || imageUrls.length < 2) throw new Error('Carousel cần ít nhất 2 ảnh');
@@ -302,8 +302,8 @@ export const publishThreadChain = async (fullContent, imageUrl = null) => {
 /**
  * Đăng Video Reels lên Facebook Page (Quy trình 3 bước)
  */
-export const publishFBReels = async (videoPath, content) => {
-  const pageToken = process.env.FB_PAGE_ACCESS_TOKEN;
+export const publishFBReels = async (videoPath, content, options = {}) => {
+  const pageToken = options.fbAccessToken || process.env.FB_PAGE_ACCESS_TOKEN;
   // Lấy Page ID từ Token (bằng API /me)
   const meRes = await axios.get(`${GRAPH_API_BASE}/me`, { params: { access_token: pageToken } });
   const pageId = meRes.data.id;
@@ -354,9 +354,9 @@ export const publishFBReels = async (videoPath, content) => {
 /**
  * Đăng Video Reels lên Instagram (Dùng Resumable Upload API - Bỏ qua URL công khai)
  */
-export const publishIGReels = async (videoPath, content, hashtags = []) => {
-  const igUserId = process.env.IG_USER_ID;
-  const igToken  = process.env.IG_ACCESS_TOKEN;
+export const publishIGReels = async (videoPath, content, hashtags = [], options = {}) => {
+  const igUserId = options.igUserId || process.env.IG_USER_ID;
+  const igToken  = options.igAccessToken || process.env.IG_ACCESS_TOKEN;
 
   if (!igUserId || !igToken) throw new Error('Thiếu IG_USER_ID hoặc IG_ACCESS_TOKEN');
 

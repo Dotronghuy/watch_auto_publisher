@@ -19,7 +19,7 @@ const sheets = google.sheets({ version: 'v4', auth });
 
 const getSheetId = () => {
   try {
-    const settingsPath = path.join(__dirname, '../config/settings.json');
+    const settingsPath = path.join(__dirname, '../../config/settings.json');
     if (fs.existsSync(settingsPath)) {
       const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
       return settings.googleSheetId;

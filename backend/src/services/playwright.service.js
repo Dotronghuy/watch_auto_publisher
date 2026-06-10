@@ -23,7 +23,7 @@ const getRandomSampleImageLocal = () => {
     }
 };
 
-const settingsPath = path.join(__dirname, '../config/settings.json');
+const settingsPath = path.join(__dirname, '../../config/settings.json');
 const getAiTaskUrl = (type) => {
     try {
         if (fs.existsSync(settingsPath)) {
@@ -242,6 +242,8 @@ CRITICAL RULES:
 2. KEEP the watch design 100% identical.
 3. Place it in this exact scene: ${currentPrompt}`;
             }
+
+            finalPrompt += `\n\n[ANTI-DUPLICATE INSTRUCTION]: This is image request #${i + 1}. You MUST generate a completely NEW, UNIQUE image. Do NOT output the exact same image as previous generations. Vary the precise camera angle, lighting, or background element placement slightly to ensure uniqueness. Unique Seed: ${Date.now()}_${Math.floor(Math.random() * 1000000)}`;
             
             await promptLocator.fill(finalPrompt);
             await page.waitForTimeout(1000);
@@ -467,7 +469,11 @@ export const generateContentOnChatGPT = async (prompt, type, imagePath = null) =
             const newMessages = await page.$$('div[data-message-author-role="assistant"]:not(.already-processed-msg)');
             if (newMessages.length > 0) {
                 const lastMsg = newMessages[newMessages.length - 1];
-                const text = await lastMsg.innerText();
+                const text = await page.evaluate((el) => {
+                    // ChatGPT để nội dung chính trong thẻ .markdown, các nút Edit/Copy nằm ngoài
+                    const markdownDiv = el.querySelector('.markdown');
+                    return markdownDiv ? markdownDiv.innerText : el.innerText;
+                }, lastMsg);
                 console.log('✅ Đã lấy xong nội dung!');
                 await context.close();
                 return text.trim();

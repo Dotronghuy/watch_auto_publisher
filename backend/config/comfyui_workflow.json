@@ -1,0 +1,154 @@
+{
+  "1": {
+    "inputs": {
+      "ckpt_name": "SD1.5\\v1-5-pruned-emaonly.ckpt"
+    },
+    "class_type": "CheckpointLoaderSimple"
+  },
+  "2": {
+    "inputs": {
+      "image": "foreground.png",
+      "upload": "image"
+    },
+    "class_type": "LoadImage"
+  },
+  "3": {
+    "inputs": {
+      "pixels": [
+        "2",
+        0
+      ],
+      "vae": [
+        "1",
+        2
+      ]
+    },
+    "class_type": "VAEEncode"
+  },
+  "4": {
+    "inputs": {
+      "image": "background.png",
+      "upload": "image"
+    },
+    "class_type": "LoadImage"
+  },
+  "5": {
+    "inputs": {
+      "pixels": [
+        "4",
+        0
+      ],
+      "vae": [
+        "1",
+        2
+      ]
+    },
+    "class_type": "VAEEncode"
+  },
+  "6": {
+    "inputs": {
+      "model_path": "IC-Light\\iclight_sd15_fbc.safetensors",
+      "model": [
+        "1",
+        0
+      ]
+    },
+    "class_type": "LoadAndApplyICLightUnet"
+  },
+  "7": {
+    "inputs": {
+      "text": "YOUR_PROMPT_HERE",
+      "clip": [
+        "1",
+        1
+      ]
+    },
+    "class_type": "CLIPTextEncode"
+  },
+  "8": {
+    "inputs": {
+      "text": "worst quality, low quality, bad hands, deformed",
+      "clip": [
+        "1",
+        1
+      ]
+    },
+    "class_type": "CLIPTextEncode"
+  },
+  "9": {
+    "inputs": {
+      "multiplier": 0.18215,
+      "positive": [
+        "7",
+        0
+      ],
+      "negative": [
+        "8",
+        0
+      ],
+      "vae": [
+        "1",
+        2
+      ],
+      "foreground": [
+        "3",
+        0
+      ],
+      "opt_background": [
+        "5",
+        0
+      ]
+    },
+    "class_type": "ICLightConditioning"
+  },
+  "10": {
+    "inputs": {
+      "seed": 0,
+      "steps": 25,
+      "cfg": 7,
+      "sampler_name": "euler",
+      "scheduler": "normal",
+      "denoise": 1,
+      "model": [
+        "6",
+        0
+      ],
+      "positive": [
+        "9",
+        0
+      ],
+      "negative": [
+        "9",
+        1
+      ],
+      "latent_image": [
+        "3",
+        0
+      ]
+    },
+    "class_type": "KSampler"
+  },
+  "11": {
+    "inputs": {
+      "samples": [
+        "10",
+        0
+      ],
+      "vae": [
+        "1",
+        2
+      ]
+    },
+    "class_type": "VAEDecode"
+  },
+  "12": {
+    "inputs": {
+      "filename_prefix": "ICLight_Auto",
+      "images": [
+        "11",
+        0
+      ]
+    },
+    "class_type": "SaveImage"
+  }
+}

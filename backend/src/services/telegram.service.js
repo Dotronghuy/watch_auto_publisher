@@ -5,11 +5,29 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { EventEmitter } from 'events';
 import { generateBackgroundOnChatGPT } from './playwright.service.js';
+import { generateBackgroundOnSD } from './sd.service.js';
 
 dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const settingsPath = path.join(__dirname, '../../config/settings.json');
+
+const generateImageWithEngine = async (imagePath, promptsArray, abortSignal, sampleImagePath, isNewSession, extraWatchImages) => {
+    let engine = 'chatgpt';
+    try {
+        if (fs.existsSync(settingsPath)) {
+            const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+            engine = settings.imageGenerationEngine || 'chatgpt';
+        }
+    } catch(e) {}
+    
+    if (engine === 'sd') {
+        return await generateBackgroundOnSD(imagePath, promptsArray, abortSignal, sampleImagePath, isNewSession, extraWatchImages);
+    } else {
+        return await generateBackgroundOnChatGPT(imagePath, promptsArray, abortSignal, sampleImagePath, isNewSession, extraWatchImages);
+    }
+};
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
 const chatId = process.env.TELEGRAM_CHAT_ID;
@@ -121,7 +139,7 @@ INSTRUCTIONS:
 
         // IMAGE 1: ảnh đồng hồ gốc (watchImagePath) → truyền qua imagePath
         // IMAGE 2: ảnh AI đã tạo cần sửa (imgData.path) → truyền qua sampleImage trong prompt object
-        const newPaths = await generateBackgroundOnChatGPT(
+        const newPaths = await generateImageWithEngine(
           reviewState.watchImagePath,
           [{ prompt: feedbackMsg, sampleImage: imgData.path }],
           null,

@@ -596,11 +596,6 @@
 
 ## [FEMALE] CẢNH DÀNH CHO ĐỒNG HỒ NỮ (SKU chứa L)
 
-### FEMALE-1 — Khay nhung đen + Tay nữ đỡ từ dưới + Nền vàng bokeh ấm
-**English instruction for GPT:**
-> Photorealistic lifestyle photo of a luxury women's watch resting on a small square black velvet display cushion, held gently from below by slender feminine fingers with a soft nude manicure. The fingertips grip the very edges of the cushion. Background is extremely blurred warm golden bokeh — deep amber and chocolate indoor tones. Warm moody side lighting. Portrait orientation. Ultra-sharp watch dial. No text, no watermark.
-
----
 
 ### FEMALE-2 — Hai tay nữ nghiêng đồng hồ 45° + Nhẫn bạc hoa mảnh + Nền trong nhà
 **English instruction for GPT:**

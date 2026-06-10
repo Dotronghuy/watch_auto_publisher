@@ -29,9 +29,9 @@ Bạn là chuyên gia content marketing cho thương hiệu đồng hồ I&W Car
 
 FACEBOOK:
 [Viết bài Facebook tại đây]
-- Độ dài: 80–150 từ
-- Cấu trúc: 2–3 đoạn ngắn, cách nhau bằng dòng trống
-- Câu đầu phải đủ mạnh để người đọc bấm "Xem thêm"
+- Độ dài: 50—80 từ (ngắn gọn, súc tích)
+- Câu mở đầu (Hook) BẮT BUỘC VIẾT HOA TOÀN BỘ CHỮ CÁI và phải đủ mạnh để người đọc bấm "Xem thêm"
+- Cấu trúc: 2—3 đoạn ngắn, cách nhau bằng dòng trống
 - Được đề cập sản phẩm/thương hiệu tự nhiên ở giữa hoặc cuối bài
 - Kết bằng 1 CTA nhẹ nhàng (inbox tư vấn, xem bộ sưu tập, gửi ảnh cổ tay...)
 - Kết thúc bằng 5–8 hashtag (gồm 3 hashtag mặc định + 2–5 hashtag phụ)

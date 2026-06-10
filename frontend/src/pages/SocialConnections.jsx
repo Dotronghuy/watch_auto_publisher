@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Key, Copy, Link2, Clock, Plus, X, Save, Check, Eye, EyeOff, BrainCircuit, RefreshCw, Sparkles, Trash2, AlertCircle, Play, CheckCircle2, XCircle, FileText, ChevronDown, ChevronRight, Settings, Users } from 'lucide-react';
+import { Key, Copy, Link2, Clock, Plus, X, Save, Check, Eye, EyeOff, BrainCircuit, RefreshCw, Sparkles, Trash2, AlertCircle, Play, CheckCircle2, XCircle, FileText, ChevronDown, ChevronRight, Settings, Users, Edit2 } from 'lucide-react';
 import Swal from 'sweetalert2';
 import { Facebook, Instagram, Threads, TikTok } from '../components/SocialIcons';
 import { useAuth } from '../context/AuthContext';
@@ -31,6 +31,12 @@ const SocialConnections = () => {
   const [showTokens, setShowTokens] = useState({ fb: false, ig: false, igId: false, tiktok: false });
   const [isResettingAI, setIsResettingAI] = useState(null);
 
+  const [accounts, setAccounts] = useState([]);
+  const [isAccountModalOpen, setIsAccountModalOpen] = useState(false);
+  const [editingAccount, setEditingAccount] = useState(null);
+  const [accountForm, setAccountForm] = useState({ id: '', name: '', fbAccessToken: '', fbPageId: '', igAccessToken: '', igUserId: '', isActive: true });
+
+
   useEffect(() => {
     fetch('/api/settings')
       .then(res => res.json())
@@ -46,17 +52,14 @@ const SocialConnections = () => {
       })
       .catch(err => console.error(err));
 
-    fetch('/api/env')
+    
+    fetch('/api/accounts')
       .then(res => res.json())
       .then(data => {
-        setEnvVars({
-          FB_PAGE_ACCESS_TOKEN: data.FB_PAGE_ACCESS_TOKEN || '',
-          IG_ACCESS_TOKEN: data.IG_ACCESS_TOKEN || '',
-          IG_USER_ID: data.IG_USER_ID || '',
-          TIKTOK_SESSION_ID: data.TIKTOK_SESSION_ID || ''
-        });
+        setAccounts(Array.isArray(data) ? data : []);
       })
-      .catch(err => console.error('Lỗi khi fetch env', err));
+      .catch(err => console.error('Lỗi khi fetch accounts', err));
+
   }, []);
 
   const handleSaveSettings = async () => {
@@ -81,27 +84,81 @@ const SocialConnections = () => {
     setIsSaving(false);
   };
 
-  const handleSaveEnv = async () => {
-    setIsSavingEnv(true);
+  
+  const handleSaveAccounts = async (newAccounts) => {
     try {
-      const res = await fetch('/api/env', {
+      await fetch('/api/accounts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(envVars)
+        body: JSON.stringify(newAccounts)
       });
-      if (!res.ok) throw new Error('Lỗi cập nhật từ Server');
-      Swal.fire({
-        title: 'Thành công',
-        text: 'Đã cập nhật khóa Access Token vào file .env!',
-        icon: 'success',
-        background: 'var(--color-surface)',
-        color: 'var(--color-text)',
-        confirmButtonColor: 'var(--color-primary)'
-      });
+      setAccounts(newAccounts);
+      Swal.fire({ title: 'Thành công', text: 'Đã cập nhật danh sách tài khoản!', icon: 'success', background: 'var(--color-surface)', color: 'white' });
     } catch (e) {
-      Swal.fire('Lỗi', 'Không thể lưu file .env. Vui lòng kiểm tra lại server.', 'error');
+      Swal.fire('Lỗi', 'Không thể lưu danh sách tài khoản', 'error');
     }
-    setIsSavingEnv(false);
+  };
+
+  const handleOpenAccountModal = (acc = null) => {
+    if (acc) {
+      setEditingAccount(acc);
+      setAccountForm(acc);
+    } else {
+      setEditingAccount(null);
+      setAccountForm({ id: 'acc_' + Date.now(), name: '', fbAccessToken: '', fbPageId: '', igAccessToken: '', igUserId: '', isActive: true });
+    }
+    setIsAccountModalOpen(true);
+  };
+
+  const handleCloseAccountModal = () => {
+    setIsAccountModalOpen(false);
+    setEditingAccount(null);
+  };
+
+  const handleSubmitAccount = () => {
+    if (!accountForm.name) return Swal.fire('Lỗi', 'Vui lòng nhập Tên tài khoản', 'error');
+    
+    let newAccounts;
+    if (editingAccount) {
+      newAccounts = accounts.map(a => a.id === editingAccount.id ? accountForm : a);
+    } else {
+      newAccounts = [...accounts, accountForm];
+    }
+    
+    handleSaveAccounts(newAccounts);
+    handleCloseAccountModal();
+  };
+
+  const handleDeleteAccount = (id) => {
+    Swal.fire({
+      title: 'Xóa tài khoản?',
+      text: 'Bạn có chắc chắn muốn xóa tài khoản này không?',
+      icon: 'warning',
+      showCancelButton: true,
+      confirmButtonColor: '#ff4d8d',
+      cancelButtonColor: 'var(--color-surface-light)',
+      confirmButtonText: 'Xóa ngay',
+      cancelButtonText: 'Hủy'
+    }).then((result) => {
+      if (result.isConfirmed) {
+        const newAccounts = accounts.filter(a => a.id !== id);
+        handleSaveAccounts(newAccounts);
+      }
+    });
+  };
+
+  const handleToggleAccountActive = (id) => {
+    const newAccounts = accounts.map(a => {
+      if (a.id === id) return { ...a, isActive: !a.isActive };
+      return a;
+    });
+    // Optimistic UI update
+    setAccounts(newAccounts);
+    fetch('/api/accounts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(newAccounts)
+    }).catch(() => setAccounts(accounts)); // Revert if failed
   };
 
   const handleResetAI = async (provider) => {
@@ -329,58 +386,92 @@ const SocialConnections = () => {
               </div>
             </div>
 
-            {/* ── Section 2: API Tokens ── */}
+            
+            {/* ── Section 2: Quản lý Tài Khoản Đăng Bài ── */}
             <div className="section-card">
-              <div className="section-header">
-                <div className="icon-circle pink"><Key size={16} /></div>
-                <h3>Khóa API (Access Token)</h3>
-              </div>
-              <p className="section-desc">Cập nhật trực tiếp các khóa Access Token vào file .env. Thông tin được mã hóa và chỉ lưu trên máy cục bộ.</p>
-
-              <div className="tokens-grid">
-                <div className="token-box">
-                  <label>Facebook Page Access Token</label>
-                  <div className="token-input-row">
-                    <input type={showTokens.fb ? "text" : "password"} autoComplete="off" value={envVars.FB_PAGE_ACCESS_TOKEN} onChange={e => setEnvVars({...envVars, FB_PAGE_ACCESS_TOKEN: e.target.value})} placeholder="EAALZ..." />
-                    <button onClick={() => setShowTokens({...showTokens, fb: !showTokens.fb})}>{showTokens.fb ? <EyeOff size={14} /> : <Eye size={14} />}</button>
-                  </div>
+              <div className="section-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <div className="icon-circle pink"><Users size={16} /></div>
+                  <h3>Danh sách Tài Khoản Đăng Bài</h3>
                 </div>
-
-                <div className="token-box">
-                  <label>Instagram Access Token</label>
-                  <div className="token-input-row">
-                    <input type={showTokens.ig ? "text" : "password"} autoComplete="off" value={envVars.IG_ACCESS_TOKEN} onChange={e => setEnvVars({...envVars, IG_ACCESS_TOKEN: e.target.value})} placeholder="EAALZ..." />
-                    <button onClick={() => setShowTokens({...showTokens, ig: !showTokens.ig})}>{showTokens.ig ? <EyeOff size={14} /> : <Eye size={14} />}</button>
-                  </div>
-                </div>
-
-                <div className="token-box">
-                  <label>Instagram User ID</label>
-                  <div className="token-input-row">
-                    <input type={showTokens.igId ? "text" : "password"} autoComplete="off" value={envVars.IG_USER_ID} onChange={e => setEnvVars({...envVars, IG_USER_ID: e.target.value})} placeholder="VD: 178414..." />
-                    <button onClick={() => setShowTokens({...showTokens, igId: !showTokens.igId})}>{showTokens.igId ? <EyeOff size={14} /> : <Eye size={14} />}</button>
-                  </div>
-                </div>
-
-                <div className="token-box">
-                  <label>TikTok Session Cookie (Tùy chọn)</label>
-                  <div className="token-input-row">
-                    <input type={showTokens.tiktok ? "text" : "password"} autoComplete="off" value={envVars.TIKTOK_SESSION_ID} onChange={e => setEnvVars({...envVars, TIKTOK_SESSION_ID: e.target.value})} placeholder="VD: 5543c8d..." />
-                    <button onClick={() => setShowTokens({...showTokens, tiktok: !showTokens.tiktok})}>{showTokens.tiktok ? <EyeOff size={14} /> : <Eye size={14} />}</button>
-                  </div>
-                </div>
-              </div>
-
-              <div className="section-footer">
-                <button className="btn-primary glow-primary" onClick={handleSaveEnv} disabled={isSavingEnv}>
-                  <Save size={14} style={{marginRight: '6px'}} /> {isSavingEnv ? 'Đang lưu...' : 'Cập nhật File .env'}
+                <button className="btn-primary glow-primary" onClick={() => handleOpenAccountModal()} style={{ padding: '6px 12px', fontSize: '12px' }}>
+                  <Plus size={14} style={{marginRight: '4px'}} /> Thêm tài khoản
                 </button>
               </div>
+              <p className="section-desc">Quản lý nhiều Fanpage / Instagram để AI viết bài khác nhau cho từng kênh.</p>
+
+              <div className="accounts-list" style={{ marginTop: '15px' }}>
+                {accounts.length === 0 ? (
+                   <div style={{ textAlign: 'center', padding: '20px', color: 'var(--color-text-muted)' }}>Chưa có tài khoản nào. Hãy thêm tài khoản đầu tiên.</div>
+                ) : (
+                   <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                     {accounts.map(acc => (
+                       <div key={acc.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px', background: 'var(--color-surface-light)', borderRadius: '8px', border: '1px solid var(--color-border)' }}>
+                         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                           <div onClick={() => handleToggleAccountActive(acc.id)} style={{ cursor: 'pointer', color: acc.isActive ? '#10a37f' : 'var(--color-text-muted)' }}>
+                             {acc.isActive ? <CheckCircle2 size={20} /> : <XCircle size={20} />}
+                           </div>
+                           <div>
+                             <h4 style={{ margin: 0, fontSize: '14px', color: 'var(--color-text)' }}>{acc.name}</h4>
+                             <div style={{ fontSize: '12px', color: 'var(--color-text-muted)', marginTop: '4px', display: 'flex', gap: '8px' }}>
+                               {acc.fbAccessToken ? <span style={{ color: '#1877f2' }}>FB: Đã liên kết</span> : <span>FB: Trống</span>}
+                               {acc.igAccessToken ? <span style={{ color: '#e1306c' }}>IG: Đã liên kết</span> : <span>IG: Trống</span>}
+                             </div>
+                           </div>
+                         </div>
+                         <div style={{ display: 'flex', gap: '8px' }}>
+                           <button onClick={() => handleOpenAccountModal(acc)} style={{ background: 'none', border: 'none', color: 'var(--color-text-muted)', cursor: 'pointer' }}><Edit2 size={16} /></button>
+                           <button onClick={() => handleDeleteAccount(acc.id)} style={{ background: 'none', border: 'none', color: '#ff4d8d', cursor: 'pointer' }}><Trash2 size={16} /></button>
+                         </div>
+                       </div>
+                     ))}
+                   </div>
+                )}
+              </div>
             </div>
+
+            {/* Modal Sửa Tài Khoản */}
+            {isAccountModalOpen && (
+              <div className="modal-overlay" style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.7)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <div className="modal-content" style={{ background: 'var(--color-surface)', width: '500px', borderRadius: '12px', padding: '24px', position: 'relative' }}>
+                  <button onClick={handleCloseAccountModal} style={{ position: 'absolute', top: '16px', right: '16px', background: 'none', border: 'none', color: 'var(--color-text)', cursor: 'pointer' }}><X size={20} /></button>
+                  <h3 style={{ marginTop: 0, marginBottom: '20px' }}>{editingAccount ? 'Sửa Tài Khoản' : 'Thêm Tài Khoản'}</h3>
+                  
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
+                    <div>
+                      <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', color: 'var(--color-text-muted)' }}>Tên Gợi Nhớ</label>
+                      <input type="text" value={accountForm.name} onChange={e => setAccountForm({...accountForm, name: e.target.value})} style={{ width: '100%', padding: '10px', background: 'var(--color-surface-light)', border: '1px solid var(--color-border)', color: 'white', borderRadius: '6px' }} placeholder="VD: Fanpage Chính" />
+                    </div>
+                    <div>
+                      <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', color: 'var(--color-text-muted)' }}>Facebook Page Access Token</label>
+                      <input type="text" value={accountForm.fbAccessToken} onChange={e => setAccountForm({...accountForm, fbAccessToken: e.target.value})} style={{ width: '100%', padding: '10px', background: 'var(--color-surface-light)', border: '1px solid var(--color-border)', color: 'white', borderRadius: '6px' }} placeholder="EAALZ..." />
+                    </div>
+                    <div>
+                      <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', color: 'var(--color-text-muted)' }}>Facebook Page ID (Tùy chọn)</label>
+                      <input type="text" value={accountForm.fbPageId} onChange={e => setAccountForm({...accountForm, fbPageId: e.target.value})} style={{ width: '100%', padding: '10px', background: 'var(--color-surface-light)', border: '1px solid var(--color-border)', color: 'white', borderRadius: '6px' }} />
+                    </div>
+                    <div>
+                      <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', color: 'var(--color-text-muted)' }}>Instagram Access Token</label>
+                      <input type="text" value={accountForm.igAccessToken} onChange={e => setAccountForm({...accountForm, igAccessToken: e.target.value})} style={{ width: '100%', padding: '10px', background: 'var(--color-surface-light)', border: '1px solid var(--color-border)', color: 'white', borderRadius: '6px' }} placeholder="EAALZ..." />
+                    </div>
+                    <div>
+                      <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', color: 'var(--color-text-muted)' }}>Instagram User ID</label>
+                      <input type="text" value={accountForm.igUserId} onChange={e => setAccountForm({...accountForm, igUserId: e.target.value})} style={{ width: '100%', padding: '10px', background: 'var(--color-surface-light)', border: '1px solid var(--color-border)', color: 'white', borderRadius: '6px' }} placeholder="178414..." />
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '24px' }}>
+                    <button onClick={handleCloseAccountModal} style={{ padding: '8px 16px', background: 'var(--color-surface-light)', border: 'none', color: 'white', borderRadius: '6px', cursor: 'pointer' }}>Hủy</button>
+                    <button onClick={handleSubmitAccount} className="btn-primary glow-primary" style={{ padding: '8px 16px', border: 'none', borderRadius: '6px', cursor: 'pointer' }}>Lưu Tài Khoản</button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* ── Section 3: AI Login ── */}
           </>
         )}
 
-        {/* ── Section 3: AI Login ── */}
         <div className="section-card">
           <div className="section-header">
             <div className="icon-circle green"><BrainCircuit size={16} /></div>

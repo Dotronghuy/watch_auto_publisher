@@ -9,13 +9,14 @@ import { google } from 'googleapis';
 import multer from 'multer';
 import { spawn } from 'child_process';
 import { startScheduler } from '../scheduler.js';
-import { autoPublishRoutine, dryRunRoutine, resetGlobalStop, triggerGlobalStop, getIsRunning, trainImageOnly, trainContentOnly } from '../services/publish.service.js';
+import { autoPublishRoutine, dryRunRoutine, resetGlobalStop, triggerGlobalStop, getIsRunning, trainImageOnly, trainContentOnly, getToneInstructionText } from '../services/publish.service.js';
 import { getProductInfoBySku } from '../services/sheet.service.js';
 import { openLoginHelper, generateContentOnChatGPT, generateBackgroundOnChatGPT, analyzeNewSampleImages } from '../services/playwright.service.js';
 import { publishQueue } from '../workers/queue.js';
 import { recentActivities, addActivity } from '../utils/activity.js';
 import { getAllPostedHistory } from '../utils/history.js';
 import logEmitter from '../utils/liveLog.js';
+import { getFoldersInFolder, getImagesInFolder, getFolderIdByName, downloadFileFromDrive } from '../services/drive.service.js';
 
 // Cache dung lượng Drive (cache 10 phút)
 let driveStorageCache = { usedGB: 0, limitGB: 0, updatedAt: 0 };
@@ -71,7 +72,7 @@ const getOAuth2DriveStorage = async () => {
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const settingsPath = path.join(__dirname, '../config/settings.json');
+const settingsPath = path.join(__dirname, '../../config/settings.json');
 
 const router = express.Router();
 
@@ -427,6 +428,160 @@ router.post('/trigger-scan', (req, res) => {
   res.json({ success: true, message: 'Tiến trình quét Drive đã được kích hoạt ngầm.' });
 });
 
+// Thử nghiệm Hành Văn AI (SSE Stream)
+router.get('/publish/test-tones', async (req, res) => {
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive'
+  });
+
+  const sendEvent = (event, data) => {
+    res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  };
+
+  try {
+    const tones = [
+      "Sang trọng, tinh tế", "Gần gũi, đời thường", "Kể chuyện (Storytelling)", 
+      "Trực diện, chốt sale", "Kiến thức chuyên gia", "Hài hước, thả thính"
+    ];
+    const ctas = [
+      "Inbox ngay để nhận ưu đãi", "Để lại bình luận để được tư vấn chi tiết",
+      "Đừng bỏ lỡ siêu phẩm này", "Nhắn tin cho shop ngay nhé"
+    ];
+
+    // Lấy template
+    const templatePath = path.join(__dirname, '../../config/gemini-prompt-template.md');
+    let promptTemplate = '';
+    if (fs.existsSync(templatePath)) promptTemplate = fs.readFileSync(templatePath, 'utf8');
+
+    // Lấy 1 ảnh ngẫu nhiên từ Google Drive của user
+    let sampleImgPath = null;
+    let skuName = 'SKU-DEMO';
+    try {
+      const ROOT_DRIVE_FOLDER_ID = process.env.ROOT_DRIVE_FOLDER_ID || '1MFAy8z4kghRCT4Z8tGsvVAqk_I02UCHl';
+      const brandFolders = await getFoldersInFolder(ROOT_DRIVE_FOLDER_ID);
+      const iwFolder = brandFolders.find(f => f.name.toLowerCase().includes('i&w carnival') || f.name.toLowerCase().includes('i&w'));
+      if (iwFolder) {
+        const skuFolders = await getFoldersInFolder(iwFolder.id);
+        if (skuFolders.length > 0) {
+          // Lấy ngẫu nhiên 1 SKU
+          const randomSkuFolder = skuFolders[Math.floor(Math.random() * skuFolders.length)];
+          skuName = randomSkuFolder.name;
+          
+          // Ưu tiên tìm trong 1_Anh_Hang hoặc 2_Anh_Tu_Chup vì có nhiều chi tiết hơn ảnh AVT
+          // Đảo ngẫu nhiên để lấy ngẫu nhiên 1 trong 2 thư mục này trước
+          const checkDirs = ['1_Anh_Hang', '2_Anh_Tu_Chup'].sort(() => Math.random() - 0.5);
+          for (const dir of checkDirs) {
+            const dirId = await getFolderIdByName(dir, randomSkuFolder.id);
+            if (dirId) {
+              const images = await getImagesInFolder(dirId);
+              if (images.length > 0) {
+                const randomImg = images[Math.floor(Math.random() * images.length)];
+                sampleImgPath = await downloadFileFromDrive(randomImg.id, randomImg.name);
+                break;
+              }
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.error('Lỗi khi lấy ảnh từ Drive cho Test Tones:', err.message);
+      // Fallback xuống ảnh ở config nếu lỗi
+      const sampleDir = path.join(__dirname, '../../config/sample_images');
+      if (fs.existsSync(sampleDir)) {
+        const files = fs.readdirSync(sampleDir).filter(f => f.endsWith('.jpg') || f.endsWith('.png'));
+        if (files.length > 0) sampleImgPath = path.join(sampleDir, files[Math.floor(Math.random() * files.length)]);
+      }
+    }
+
+    // Lấy context
+    let marketingContext = '';
+    try {
+      const markPath = path.join(__dirname, '../../config/watch-marketing-content.md');
+      if (fs.existsSync(markPath)) marketingContext = fs.readFileSync(markPath, 'utf8');
+    } catch (e) { }
+
+    let customerContext = '';
+    try {
+      const custPath = path.join(__dirname, '../../config/customer-persona.md');
+      if (fs.existsSync(custPath)) customerContext = fs.readFileSync(custPath, 'utf8');
+    } catch (e) { }
+
+    const extraContext = `
+${marketingContext ? `[KIẾN THỨC MARKETING NGÀNH ĐỒNG HỒ]\n${marketingContext}\n\n` : ''}
+${customerContext ? `[CHÂN DUNG KHÁCH HÀNG]\n${customerContext}\n\n` : ''}`;
+
+    // Lấy template FB
+    const fbTemplatePath = path.join(__dirname, '../../config/gemini-prompt-template.md');
+    let fbPromptTemplate = '';
+    if (fs.existsSync(fbTemplatePath)) fbPromptTemplate = fs.readFileSync(fbTemplatePath, 'utf8');
+
+    // Lấy template IG
+    const igTemplatePath = path.join(__dirname, '../../config/ig-prompt-template.md');
+    let igPromptTemplate = '';
+    if (fs.existsSync(igTemplatePath)) igPromptTemplate = fs.readFileSync(igTemplatePath, 'utf8');
+    else igPromptTemplate = fbPromptTemplate;
+
+    // Lấy thông tin sản phẩm
+    let productInfoText = '';
+    let gender = 'Nam/Nữ';
+    try {
+      const productInfo = await getProductInfoBySku(skuName);
+      if (productInfo) {
+        productInfoText = Object.entries(productInfo).map(([k, v]) => `${k}: ${v}`).join('\n');
+        
+        const skuUpper = skuName.toUpperCase();
+        if (/G\d*$|G[^A-Z]|\d+G/.test(skuUpper)) gender = 'Nam (Lịch lãm, nam tính)';
+        else if (/L\d*$|L[^A-Z]|\d+L/.test(skuUpper)) gender = 'Nữ (Thanh lịch, quý phái)';
+      }
+    } catch (e) {
+      console.error('Lỗi khi lấy thông tin sản phẩm:', e);
+    }
+
+    const prepareTemplate = (template) => {
+      if (!template) return '';
+      return extraContext + '\n' + template
+        .replace(/\{\{SKU\}\}/g, skuName)
+        .replace(/\{\{SKU_NAME\}\}/g, skuName)
+        .replace(/\{\{GENDER\}\}/g, gender)
+        .replace(/\{\{PRODUCT_INFO\}\}/g, productInfoText || 'Không có thông tin chi tiết');
+    };
+
+    const baseFbPrompt = fbPromptTemplate ? prepareTemplate(fbPromptTemplate) : `Sản phẩm: Đồng hồ ${skuName}. Hãy viết bài.`;
+    const baseIgPrompt = igPromptTemplate ? prepareTemplate(igPromptTemplate) : `Sản phẩm: Đồng hồ ${skuName}. Hãy viết bài.`;
+
+    for (let i = 0; i < tones.length; i++) {
+      const tone = tones[i];
+      const cta = ctas[Math.floor(Math.random() * ctas.length)];
+      const perspective = "Góc nhìn của chuyên gia tư vấn";
+      
+      const instruction = getToneInstructionText(tone, perspective, cta);
+
+      const fbFinalPrompt = baseFbPrompt + instruction + "\n\n[LƯU Ý QUAN TRỌNG: BẠN PHẢI CHỈ VIẾT NỘI DUNG CHO FACEBOOK DỰA THEO HƯỚNG DẪN TRÊN. BỎ QUA CÁC YÊU CẦU CHO NỀN TẢNG KHÁC. TRẢ VỀ TRỰC TIẾP NỘI DUNG MÀ KHÔNG CẦN TIÊU ĐỀ ## FACEBOOK]";
+      const igFinalPrompt = baseIgPrompt + instruction + "\n\n[LƯU Ý QUAN TRỌNG: BẠN PHẢI CHỈ VIẾT NỘI DUNG CHO INSTAGRAM DỰA THEO HƯỚNG DẪN TRÊN. BỎ QUA CÁC YÊU CẦU CHO NỀN TẢNG KHÁC. TRẢ VỀ TRỰC TIẾP NỘI DUNG MÀ KHÔNG CẦN TIÊU ĐỀ ## INSTAGRAM]";
+
+      sendEvent('progress', { index: i + 1, total: tones.length, tone });
+
+      try {
+        const fbContent = await generateContentOnChatGPT(fbFinalPrompt, 'fb', sampleImgPath);
+        const igContent = await generateContentOnChatGPT(igFinalPrompt, 'ig', sampleImgPath);
+        
+        const combinedContent = `========== DÀNH CHO FACEBOOK ==========\n${fbContent}\n\n========== DÀNH CHO INSTAGRAM ==========\n${igContent}`;
+        sendEvent('result', { index: i + 1, tone, cta, content: combinedContent });
+      } catch (e) {
+        sendEvent('result', { index: i + 1, tone, cta, content: `Lỗi: ${e.message}` });
+      }
+    }
+
+    sendEvent('done', { message: 'Hoàn tất' });
+  } catch (error) {
+    sendEvent('error', { message: error.message });
+  } finally {
+    res.end();
+  }
+});
+
 // 5. Server-Sent Events (SSE) Endpoint cho Live Monitor
 router.get('/logs/stream', (req, res) => {
   // Header cho SSE
@@ -454,7 +609,31 @@ router.get('/logs/stream', (req, res) => {
   });
 });
 
-// API Đọc / Ghi file .env
+// API Đọc/Ghi Accounts
+router.get('/accounts', (req, res) => {
+  try {
+    const accountsPath = path.join(__dirname, '../../config/accounts.json');
+    if (fs.existsSync(accountsPath)) {
+      const data = fs.readFileSync(accountsPath, 'utf8');
+      res.json(JSON.parse(data));
+    } else {
+      res.json([]);
+    }
+  } catch (error) {
+    res.status(500).json({ error: 'Cannot read accounts.json' });
+  }
+});
+
+router.post('/accounts', (req, res) => {
+  try {
+    const accountsPath = path.join(__dirname, '../../config/accounts.json');
+    const accounts = req.body;
+    fs.writeFileSync(accountsPath, JSON.stringify(accounts, null, 2), 'utf8');
+    res.json({ success: true, message: 'Accounts updated' });
+  } catch (error) {
+    res.status(500).json({ error: 'Cannot update accounts.json' });
+  }
+});
 router.get('/env', (req, res) => {
   try {
     const envPath = path.join(__dirname, '../../.env');
