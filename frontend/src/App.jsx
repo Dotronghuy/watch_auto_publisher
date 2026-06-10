@@ -11,6 +11,7 @@ import Workflow from './pages/Workflow';
 import CalendarPage from './pages/Calendar';
 import SocialConnections from './pages/SocialConnections';
 import UserManagement from './pages/UserManagement';
+import InboxCRM from './pages/InboxCRM';
 
 function App() {
   return (
@@ -38,6 +39,10 @@ function App() {
 
             <Route element={<ProtectedRoute permission="database" />}>
               <Route path="database" element={<DriveManager />} />
+            </Route>
+
+            <Route element={<ProtectedRoute permission="inbox" />}>
+              <Route path="inbox" element={<InboxCRM />} />
             </Route>
 
             <Route element={<ProtectedRoute permission="settings" />}>

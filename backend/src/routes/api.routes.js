@@ -17,6 +17,11 @@ import { recentActivities, addActivity } from '../utils/activity.js';
 import { getAllPostedHistory } from '../utils/history.js';
 import logEmitter from '../utils/liveLog.js';
 import { getFoldersInFolder, getImagesInFolder, getFolderIdByName, downloadFileFromDrive } from '../services/drive.service.js';
+import { initCRMDB, getConversations, getMessagesByConversation, saveMessage } from '../utils/crm.db.js';
+import { syncAllCRM, replyCRM } from '../services/crm.service.js';
+
+// Khởi tạo bảng CRM DB nếu chưa có
+initCRMDB().then(() => console.log('✅ Đã khởi tạo CRM SQLite DB')).catch(e => console.error('Lỗi CRM DB:', e));
 
 // Cache dung lượng Drive (cache 10 phút)
 let driveStorageCache = { usedGB: 0, limitGB: 0, updatedAt: 0 };
@@ -798,6 +803,60 @@ router.post('/upload-prompt-md/:nodeId', mdUpload.array('mdFiles', 10), async (r
   for (const file of req.files) {
     if (!file.originalname.endsWith('.md')) {
       errors.push(`${file.originalname}: chỉ chấp nhận .md`);
+
+// ============================================================
+// CRM ENDPOINTS (INBOX & COMMENTS)
+// ============================================================
+
+router.get('/crm/conversations', async (req, res) => {
+  try {
+    const data = await getConversations();
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/crm/conversations/:id/messages', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const data = await getMessagesByConversation(id);
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/crm/sync', async (req, res) => {
+  try {
+    sendLogToClients({ time: new Date().toLocaleTimeString(), sender: 'CRM', message: 'Đang đồng bộ dữ liệu từ FB/IG...', type: 'info' });
+    await syncAllCRM();
+    sendLogToClients({ time: new Date().toLocaleTimeString(), sender: 'CRM', message: '✅ Đồng bộ CRM hoàn tất', type: 'success' });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/crm/reply', async (req, res) => {
+  try {
+    const { conversationId, targetId, message, type } = req.body;
+    const result = await replyCRM(targetId, message, type);
+    
+    // Lưu vào DB ở local ngay lập tức
+    await saveMessage(
+      'msg_' + Date.now(), 
+      conversationId, 
+      message, 
+      true, 
+      new Date().toISOString()
+    );
+
+    res.json({ success: true, data: result });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
       continue;
     }
     try {

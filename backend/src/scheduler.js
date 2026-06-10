@@ -4,6 +4,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import cron from 'node-cron';
 import { spawn } from 'child_process';
+import { syncAllCRM } from './services/crm.service.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -148,6 +149,19 @@ export const startScheduler = async () => {
     }
   });
   console.log('✅ Đã lên lịch Auto-Scan Google Drive lúc 02:00 sáng mỗi ngày.');
+
+  // --- THÊM: Hẹn giờ đồng bộ CRM định kỳ 5 phút ---
+  if (!global.crmInterval) {
+    global.crmInterval = setInterval(async () => {
+      try {
+        console.log('🔄 Đang đồng bộ CRM ngầm...');
+        await syncAllCRM();
+      } catch (e) {
+        console.error('Lỗi khi đồng bộ CRM ngầm:', e.message);
+      }
+    }, 5 * 60 * 1000);
+    console.log('✅ Đã khởi động luồng đồng bộ CRM ngầm mỗi 5 phút.');
+  }
 
   isSchedulerRunning = false; // Reset để cho phép gọi lại khi user thay đổi settings
 };

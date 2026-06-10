@@ -8,7 +8,8 @@ import {
   Settings, 
   Upload, 
   HelpCircle, 
-  LogOut 
+  LogOut,
+  MessageCircle
 } from 'lucide-react';
 import Swal from 'sweetalert2';
 import { motion } from 'framer-motion';
@@ -23,6 +24,7 @@ const Sidebar = () => {
     { name: 'Lưu trữ', path: '/drive', icon: Cloud, permission: 'drive' },
     { name: 'Luồng công việc', path: '/workflow', icon: Workflow, permission: 'workflow' },
     { name: 'Lịch đăng', path: '/calendar', icon: Calendar, permission: 'calendar' },
+    { name: 'Hộp thư (CRM)', path: '/inbox', icon: MessageCircle, permission: 'inbox' },
     { name: 'Dữ liệu SP', path: '/database', icon: Database, permission: 'database' },
     { name: 'Cài đặt', path: '/settings', icon: Settings, permission: 'settings' }
   ];
