@@ -4,7 +4,7 @@
     "11:30",
     "14:00",
     "16:00",
-    "17:30"
+    "17:00"
   ],
   "igDelay": 10,
   "delayUnit": "minutes",
@@ -17,7 +17,7 @@
   "sdApiUrl": "http://127.0.0.1:8188",
   "googleSheetId": "1tWg6zzAw6F9_2vlvOFfPy_2tV88xFGPB-4f5NvbwS_M",
   "aiTasks": {
-    "fbChatUrl": "6a29287b-c92c-83ec-9b3f-76f4eecaca60",
-    "igChatUrl": "6a292384-a788-83ec-8c7a-3f987d5c702e"
+    "fbChatUrl": "6a2a916f-3c04-83ec-8e65-436bc9ab4a7c",
+    "igChatUrl": "6a2a918b-d218-83ec-8dc5-3c310b228651"
   }
 }

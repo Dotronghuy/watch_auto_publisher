@@ -17,8 +17,9 @@ import { recentActivities, addActivity } from '../utils/activity.js';
 import { getAllPostedHistory } from '../utils/history.js';
 import logEmitter from '../utils/liveLog.js';
 import { getFoldersInFolder, getImagesInFolder, getFolderIdByName, downloadFileFromDrive } from '../services/drive.service.js';
-import { initCRMDB, getConversations, getMessagesByConversation, saveMessage } from '../utils/crm.db.js';
+import { initCRMDB, getConversations, getMessagesByConversation, saveMessage, markConversationAsRead, getConversationById, getCustomerProfile, updateCustomerProfile } from '../utils/crm.db.js';
 import { syncAllCRM, replyCRM } from '../services/crm.service.js';
+import { autoTagAllConversations } from '../services/autotag.service.js';
 
 // Khởi tạo bảng CRM DB nếu chưa có
 initCRMDB().then(() => console.log('✅ Đã khởi tạo CRM SQLite DB')).catch(e => console.error('Lỗi CRM DB:', e));
@@ -85,6 +86,16 @@ const router = express.Router();
 let clients = [];
 let logHistory = [];
 let isScanningDrive = false;
+
+// CRM SSE: Realtime push cho CRM Inbox
+let crmClients = [];
+
+export const broadcastCRM = (eventType, data) => {
+  const payload = JSON.stringify({ type: eventType, data, time: Date.now() });
+  crmClients.forEach(client => {
+    client.res.write(`data: ${payload}\n\n`);
+  });
+};
 
 // ------- STOP SIGNAL -------
 // Khi stopSignal.aborted === true, autoPublishRoutine sẽ dừng ở bước an toàn tiếp theo
@@ -803,60 +814,6 @@ router.post('/upload-prompt-md/:nodeId', mdUpload.array('mdFiles', 10), async (r
   for (const file of req.files) {
     if (!file.originalname.endsWith('.md')) {
       errors.push(`${file.originalname}: chỉ chấp nhận .md`);
-
-// ============================================================
-// CRM ENDPOINTS (INBOX & COMMENTS)
-// ============================================================
-
-router.get('/crm/conversations', async (req, res) => {
-  try {
-    const data = await getConversations();
-    res.json(data);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-router.get('/crm/conversations/:id/messages', async (req, res) => {
-  try {
-    const { id } = req.params;
-    const data = await getMessagesByConversation(id);
-    res.json(data);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-router.post('/crm/sync', async (req, res) => {
-  try {
-    sendLogToClients({ time: new Date().toLocaleTimeString(), sender: 'CRM', message: 'Đang đồng bộ dữ liệu từ FB/IG...', type: 'info' });
-    await syncAllCRM();
-    sendLogToClients({ time: new Date().toLocaleTimeString(), sender: 'CRM', message: '✅ Đồng bộ CRM hoàn tất', type: 'success' });
-    res.json({ success: true });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-router.post('/crm/reply', async (req, res) => {
-  try {
-    const { conversationId, targetId, message, type } = req.body;
-    const result = await replyCRM(targetId, message, type);
-    
-    // Lưu vào DB ở local ngay lập tức
-    await saveMessage(
-      'msg_' + Date.now(), 
-      conversationId, 
-      message, 
-      true, 
-      new Date().toISOString()
-    );
-
-    res.json({ success: true, data: result });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
       continue;
     }
     try {
@@ -1153,6 +1110,212 @@ YÊU CẦU:
   } catch (err) {
     console.error('❌ Lỗi feedback-prompt:', err.message);
     res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// ============================================================
+// CRM ENDPOINTS (INBOX & COMMENTS)
+// ============================================================
+
+router.get('/crm/avatar/:accountId/:senderId', async (req, res) => {
+  const { accountId, senderId } = req.params;
+  try {
+    const accountsFile = path.join(__dirname, '../../config/accounts.json');
+    if (fs.existsSync(accountsFile)) {
+      const accounts = JSON.parse(fs.readFileSync(accountsFile, 'utf8'));
+      const acc = accounts.find(a => a.id === accountId && a.status === 'active');
+      if (acc && acc.fbAccessToken) {
+        const fbRes = await axios.default.get(`https://graph.facebook.com/v21.0/${senderId}?fields=profile_pic&access_token=${acc.fbAccessToken}`);
+        if (fbRes.data && fbRes.data.profile_pic) {
+          return res.redirect(fbRes.data.profile_pic);
+        }
+      }
+    }
+  } catch (e) {
+    console.error(`Không thể lấy avatar cho ${senderId}`);
+  }
+  // Fallback avatar
+  const fallbackName = req.query.name || senderId;
+  res.redirect(`https://ui-avatars.com/api/?name=${encodeURIComponent(fallbackName)}&background=random`);
+});
+
+router.get('/crm/conversations', async (req, res) => {
+  try {
+    const data = await getConversations();
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/crm/conversations/:id/messages', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const data = await getMessagesByConversation(id);
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// CRM SSE Endpoint — Realtime push
+router.get('/crm/stream', (req, res) => {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders();
+
+  const clientId = Date.now();
+  const newClient = { id: clientId, res };
+  crmClients.push(newClient);
+
+  res.write(`data: ${JSON.stringify({ type: 'connected', time: Date.now() })}\n\n`);
+
+  req.on('close', () => {
+    crmClients = crmClients.filter(c => c.id !== clientId);
+  });
+});
+
+router.post('/crm/sync', async (req, res) => {
+  try {
+    sendLogToClients({ time: new Date().toLocaleTimeString(), sender: 'CRM', message: 'Đang đồng bộ dữ liệu từ FB/IG...', type: 'info' });
+    await syncAllCRM();
+    sendLogToClients({ time: new Date().toLocaleTimeString(), sender: 'CRM', message: '✅ Đồng bộ CRM hoàn tất', type: 'success' });
+    
+    // Push realtime update to all CRM clients
+    const conversations = await getConversations();
+    
+    // Auto-tag: phân tích tin nhắn và tự động gắn tags
+    try {
+      await autoTagAllConversations(conversations);
+      sendLogToClients({ time: new Date().toLocaleTimeString(), sender: 'CRM', message: '🏷️ Auto-Tag hoàn tất', type: 'info' });
+    } catch(e) {
+      console.error('Lỗi Auto-Tag:', e.message);
+    }
+    
+    broadcastCRM('conversations_updated', conversations);
+    
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// TEMPORARY ENDPOINT TO FIX EXISTING BAD TAGS
+router.post('/crm/fix-tags', async (req, res) => {
+  try {
+    const sqlite3 = (await import('sqlite3')).default;
+    const path = await import('path');
+    const dbPath = path.resolve(__dirname, '../../data/crm.sqlite');
+    
+    await new Promise((resolve, reject) => {
+      const db = new sqlite3.Database(dbPath);
+      db.run('UPDATE customers SET tags = "[]"', [], (err) => {
+        db.close();
+        if (err) reject(err);
+        else resolve();
+      });
+    });
+    const conversations = await getConversations();
+    await autoTagAllConversations(conversations);
+    broadcastCRM('conversations_updated', await getConversations());
+    res.json({ success: true, message: 'Tags cleared and rebuilt!' });
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.post('/crm/reply', async (req, res) => {
+  try {
+    const { conversationId, targetId, message, type } = req.body;
+    const result = await replyCRM(targetId, message, type, conversationId);
+    
+    // Lưu vào DB ở local ngay lập tức
+    // Push message to CRM SSE clients instantly
+    broadcastCRM('new_message', { conversationId, message: { id: 'msg_' + Date.now(), conversation_id: conversationId, message, is_from_page: 1, created_time: new Date().toISOString() } });
+
+    await saveMessage(
+      'msg_' + Date.now(), 
+      conversationId, 
+      message, 
+      true, 
+      new Date().toISOString()
+    );
+
+    res.json({ success: true, data: result });
+  } catch (err) {
+    require('fs').appendFileSync('error_log.txt', new Date().toISOString() + ' - Reply Error: ' + err.message + '\n');
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Đánh dấu đã đọc + gửi mark_seen cho FB/IG
+router.post('/crm/conversations/:id/read', async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    // 1. Đánh dấu đã đọc trong DB
+    await markConversationAsRead(id);
+    
+    // 2. Gửi mark_seen chỉ khi tin nhắn trong vòng 24h (chính sách Facebook)
+    const conv = await getConversationById(id);
+    if (conv && conv.type === 'inbox' && conv.sender_id) {
+      const updatedAt = new Date(conv.updated_at);
+      const hoursSinceUpdate = (Date.now() - updatedAt.getTime()) / (1000 * 60 * 60);
+      
+      // Chỉ gửi mark_seen nếu tin nhắn cuối trong vòng 24h
+      if (hoursSinceUpdate <= 24) {
+        const accountsPath = path.join(path.dirname(fileURLToPath(import.meta.url)), '../../config/accounts.json');
+        let accounts = [];
+        try { accounts = JSON.parse(fs.readFileSync(accountsPath, 'utf8')); } catch(e) {}
+        const acc = accounts.find(a => a.id === conv.account_id);
+        
+        if (acc) {
+          const token = conv.platform === 'instagram' 
+            ? (acc.igAccessToken || acc.fbAccessToken) 
+            : acc.fbAccessToken;
+          
+          if (token) {
+            try {
+              await axios.post(`https://graph.facebook.com/v21.0/me/messages`, {
+                recipient: { id: conv.sender_id },
+                sender_action: 'mark_seen'
+              }, {
+                params: { access_token: token }
+              });
+              console.log(`✅ Đã gửi mark_seen cho ${conv.sender_name} (${conv.platform})`);
+            } catch (apiErr) {
+              // Bỏ qua — không ảnh hưởng chức năng
+            }
+          }
+        }
+      }
+    }
+    
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- CRM Profile Endpoints ---
+
+router.get('/crm/customers/:id', async (req, res) => {
+  try {
+    const profile = await getCustomerProfile(req.params.id);
+    res.json(profile);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/crm/customers/:id', async (req, res) => {
+  try {
+    await updateCustomerProfile(req.params.id, req.body);
+    const updatedProfile = await getCustomerProfile(req.params.id);
+    res.json(updatedProfile);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 

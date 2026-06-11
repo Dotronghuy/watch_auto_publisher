@@ -2,34 +2,79 @@ import axios from 'axios';
 import { getPostsToTrack, updatePostMetrics } from '../utils/history.js';
 import { generateContentOnChatGPT } from './playwright.service.js';
 
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
 export const trackPostMetrics = async () => {
     try {
         const posts = await getPostsToTrack();
         if (!posts || posts.length === 0) return;
 
-        const pageToken = process.env.FB_PAGE_ACCESS_TOKEN;
-        const igUserId = process.env.IG_USER_ID;
+        // Đọc danh sách tài khoản active từ accounts.json
+        const accountsPath = path.resolve(__dirname, '../../config/accounts.json');
+        let accounts = [];
+        try {
+            if (fs.existsSync(accountsPath)) {
+                accounts = JSON.parse(fs.readFileSync(accountsPath, 'utf8')).filter(a => a.isActive);
+            }
+        } catch (e) {
+            console.error('Không thể đọc accounts.json:', e);
+            return;
+        }
+
+        if (accounts.length === 0) {
+            console.warn('⚠️ Không có tài khoản nào active để lấy metrics!');
+            return;
+        }
 
         for (const post of posts) {
             let likes = 0;
             let comments = 0;
+            let success = false;
 
             if (post.platform === 'facebook' || post.platform === 'facebook_reels') {
-                try {
-                    const res = await axios.get(`https://graph.facebook.com/v19.0/${post.post_id}?fields=reactions.summary(total_count),comments.summary(total_count)&access_token=${pageToken}`);
-                    if (res.data.reactions) likes = res.data.reactions.summary.total_count;
-                    if (res.data.comments) comments = res.data.comments.summary.total_count;
-                } catch (e) {
-                    console.log(`⚠️ Không lấy được metrics FB cho post ${post.post_id}: ${e.message}`);
+                // Thử tìm account phù hợp dựa trên pageId (post_id format: pageId_postId)
+                let accountToUse = null;
+                const parts = post.post_id.split('_');
+                if (parts.length > 1) {
+                    const pageId = parts[0];
+                    accountToUse = accounts.find(a => a.fbPageId && a.fbPageId.trim() === pageId);
                 }
+                
+                const accountsToTry = accountToUse ? [accountToUse] : accounts;
+
+                for (const account of accountsToTry) {
+                    if (!account.fbAccessToken) continue;
+                    try {
+                        const res = await axios.get(`https://graph.facebook.com/v19.0/${post.post_id}?fields=reactions.summary(total_count),comments.summary(total_count)&access_token=${account.fbAccessToken}`);
+                        if (res.data.reactions) likes = res.data.reactions.summary.total_count;
+                        if (res.data.comments) comments = res.data.comments.summary.total_count;
+                        success = true;
+                        break; // Nếu lấy được thì thoát vòng lặp account
+                    } catch (e) {
+                        // Bỏ qua lỗi 400 nếu đang thử nhiều account, chỉ log khi thử account cuối cùng
+                    }
+                }
+                if (!success) console.log(`⚠️ Không lấy được metrics FB cho post ${post.post_id}`);
             } else if (post.platform === 'instagram') {
-                try {
-                    const res = await axios.get(`https://graph.facebook.com/v19.0/${post.post_id}?fields=like_count,comments_count&access_token=${pageToken}`);
-                    if (res.data.like_count) likes = res.data.like_count;
-                    if (res.data.comments_count) comments = res.data.comments_count;
-                } catch (e) {
-                    console.log(`⚠️ Không lấy được metrics IG cho post ${post.post_id}: ${e.message}`);
+                // Với IG, ID không chứa userId, nên thử với tất cả các tài khoản IG active
+                for (const account of accounts) {
+                    if (!account.igAccessToken) continue;
+                    try {
+                        const res = await axios.get(`https://graph.facebook.com/v19.0/${post.post_id}?fields=like_count,comments_count&access_token=${account.igAccessToken}`);
+                        if (res.data.like_count) likes = res.data.like_count;
+                        if (res.data.comments_count) comments = res.data.comments_count;
+                        success = true;
+                        break;
+                    } catch (e) {
+                        // Thử account tiếp theo
+                    }
                 }
+                if (!success) console.log(`⚠️ Không lấy được metrics IG cho post ${post.post_id}`);
             }
 
             // Update in DB

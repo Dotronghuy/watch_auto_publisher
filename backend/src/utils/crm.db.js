@@ -9,6 +9,8 @@ const dbPath = path.join(__dirname, '../../../backend/crm.db'); // Lưu vào th�
 const db = new sqlite3.Database(dbPath, (err) => {
   if (err) {
     console.error('Lỗi khi mở CRM database', err.message);
+  } else {
+    db.run('PRAGMA journal_mode = WAL');
   }
 });
 
@@ -26,10 +28,14 @@ export const initCRMDB = () => {
           sender_id TEXT,
           snippet TEXT,
           unread_count INTEGER DEFAULT 0,
+          is_read INTEGER DEFAULT 0,
           updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
           account_id TEXT -- Để biết đoạn chat này thuộc Page/Account nào
         )
       `);
+
+      // Thêm cột is_read cho DB cũ (nếu chưa có)
+      db.run('ALTER TABLE conversations ADD COLUMN is_read INTEGER DEFAULT 0', () => {});
 
       // Bảng messages (tin nhắn chi tiết hoặc comment cụ thể)
       db.run(`
@@ -41,9 +47,26 @@ export const initCRMDB = () => {
           created_time DATETIME,
           FOREIGN KEY(conversation_id) REFERENCES conversations(id)
         )
+      `);
+
+      // Bảng customers (Lưu CRM Profile)
+      db.run(`
+        CREATE TABLE IF NOT EXISTS customers (
+          id TEXT PRIMARY KEY, -- sender_id
+          email TEXT DEFAULT '',
+          phone TEXT DEFAULT '',
+          address TEXT DEFAULT '',
+          lead_score REAL DEFAULT 0,
+          tags TEXT DEFAULT '[]', -- JSON array
+          notes TEXT DEFAULT '[]', -- JSON array of objects
+          active_automation TEXT DEFAULT ''
+        )
       `, (err) => {
-        if (err) reject(err);
-        else resolve();
+        // Cố gắng thêm cột address nếu bảng đã tồn tại
+        db.run('ALTER TABLE customers ADD COLUMN address TEXT DEFAULT ""', () => {
+          if (err) reject(err);
+          else resolve();
+        });
       });
     });
   });
@@ -51,16 +74,24 @@ export const initCRMDB = () => {
 
 export const saveConversation = (id, platform, type, sender_name, sender_id, snippet, updated_at, account_id) => {
   return new Promise((resolve, reject) => {
-    // Note: Dùng try-catch ẩn cho việc alter table để support DB cũ (chưa có cột account_id)
-    db.run('ALTER TABLE conversations ADD COLUMN account_id TEXT', (err) => { /* Ignore err nếu cột đã tồn tại */ });
+    // Support DB cũ (chưa có cột)
+    db.run('ALTER TABLE conversations ADD COLUMN account_id TEXT', () => {});
 
+    // Kiểm tra xem conversation có tin mới không (updated_at thay đổi)
+    // Nếu có tin mới từ khách → reset is_read = 0
     const stmt = db.prepare(`
-      INSERT INTO conversations (id, platform, type, sender_name, sender_id, snippet, updated_at, account_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO conversations (id, platform, type, sender_name, sender_id, snippet, updated_at, account_id, is_read)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)
       ON CONFLICT(id) DO UPDATE SET
         snippet=excluded.snippet,
-        updated_at=excluded.updated_at,
-        account_id=excluded.account_id
+        account_id=excluded.account_id,
+        sender_name=excluded.sender_name,
+        sender_id=excluded.sender_id,
+        is_read = CASE
+          WHEN conversations.updated_at != excluded.updated_at THEN 0
+          ELSE conversations.is_read
+        END,
+        updated_at=excluded.updated_at
     `);
     stmt.run([id, platform, type, sender_name, sender_id, snippet, updated_at, account_id], function(err) {
       if (err) reject(err);
@@ -73,8 +104,11 @@ export const saveConversation = (id, platform, type, sender_name, sender_id, sni
 export const saveMessage = (id, conversation_id, message, is_from_page, created_time) => {
   return new Promise((resolve, reject) => {
     const stmt = db.prepare(`
-      INSERT OR IGNORE INTO messages (id, conversation_id, message, is_from_page, created_time)
+      INSERT INTO messages (id, conversation_id, message, is_from_page, created_time)
       VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+      message = excluded.message,
+      is_from_page = excluded.is_from_page
     `);
     stmt.run([id, conversation_id, message, is_from_page ? 1 : 0, created_time], function(err) {
       if (err) reject(err);
@@ -86,9 +120,35 @@ export const saveMessage = (id, conversation_id, message, is_from_page, created_
 
 export const getConversations = () => {
   return new Promise((resolve, reject) => {
-    db.all(`SELECT * FROM conversations ORDER BY updated_at DESC`, [], (err, rows) => {
+    db.all(`
+      SELECT c.*,
+        CASE 
+          WHEN c.is_read = 0 AND (
+            SELECT m.is_from_page 
+            FROM messages m 
+            WHERE m.conversation_id = c.id 
+            ORDER BY m.created_time DESC 
+            LIMIT 1
+          ) = 0 THEN 1
+          ELSE 0
+        END as needs_reply
+      FROM conversations c
+      ORDER BY c.updated_at DESC
+    `, [], (err, rows) => {
       if (err) reject(err);
       else resolve(rows);
+    });
+  });
+};
+
+/**
+ * Đánh dấu đã đọc một cuộc hội thoại
+ */
+export const markConversationAsRead = (id) => {
+  return new Promise((resolve, reject) => {
+    db.run(`UPDATE conversations SET is_read = 1 WHERE id = ?`, [id], function(err) {
+      if (err) reject(err);
+      else resolve(this.changes);
     });
   });
 };
@@ -107,6 +167,63 @@ export const getMessagesByConversation = (conversationId) => {
     db.all(`SELECT * FROM messages WHERE conversation_id = ? ORDER BY created_time ASC`, [conversationId], (err, rows) => {
       if (err) reject(err);
       else resolve(rows);
+    });
+  });
+};
+
+// --- Customer Profile Methods ---
+
+export const getCustomerProfile = (id) => {
+  return new Promise((resolve, reject) => {
+    db.get(`SELECT * FROM customers WHERE id = ?`, [id], (err, row) => {
+      if (err) {
+        reject(err);
+      } else if (!row) {
+        // Return default profile if not exists
+        resolve({
+          id,
+          email: '',
+          phone: '',
+          address: '',
+          lead_score: 0,
+          tags: '[]',
+          notes: '[]',
+          active_automation: ''
+        });
+      } else {
+        resolve(row);
+      }
+    });
+  });
+};
+
+export const updateCustomerProfile = (id, data) => {
+  return new Promise((resolve, reject) => {
+    // Create if not exists
+    db.run(`INSERT OR IGNORE INTO customers (id) VALUES (?)`, [id], (err) => {
+      if (err) return reject(err);
+      
+      // Build update query dynamically
+      const fields = [];
+      const values = [];
+      const allowedFields = ['email', 'phone', 'address', 'lead_score', 'tags', 'notes', 'active_automation'];
+      
+      for (const [key, val] of Object.entries(data)) {
+        if (allowedFields.includes(key)) {
+          fields.push(`${key} = ?`);
+          values.push(val);
+        }
+      }
+      
+      if (fields.length === 0) return resolve(); // nothing to update
+      
+      values.push(id);
+      const query = `UPDATE customers SET ${fields.join(', ')} WHERE id = ?`;
+      
+      db.run(query, values, function(err2) {
+        if (err2) reject(err2);
+        else resolve();
+      });
     });
   });
 };

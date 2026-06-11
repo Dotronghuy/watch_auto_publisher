@@ -1,3 +1,4 @@
+import { useState, useEffect } from 'react';
 import { NavLink } from 'react-router-dom';
 import { 
   LayoutDashboard, 
@@ -18,6 +19,21 @@ import './Sidebar.css';
 
 const Sidebar = () => {
   const { hasPermission, logout } = useAuth();
+
+  // Fetch unreplied count for CRM badge
+  const [unrepliedCount, setUnrepliedCount] = useState(0);
+  useEffect(() => {
+    const fetchCount = async () => {
+      try {
+        const res = await fetch('/api/crm/conversations');
+        const data = await res.json();
+        setUnrepliedCount(data.filter(c => c.needs_reply).length);
+      } catch (e) { /* ignore */ }
+    };
+    fetchCount();
+    const interval = setInterval(fetchCount, 10000);
+    return () => clearInterval(interval);
+  }, []);
 
   const allNavItems = [
     { name: 'Tổng quan', path: '/', icon: LayoutDashboard, permission: 'dashboard' },
@@ -68,6 +84,9 @@ const Sidebar = () => {
                       )}
                       <Icon size={20} className="nav-icon" />
                       <span className="nav-text">{item.name}</span>
+                      {item.path === '/inbox' && unrepliedCount > 0 && (
+                        <span className="sidebar-badge">{unrepliedCount}</span>
+                      )}
                     </>
                   )}
                 </NavLink>

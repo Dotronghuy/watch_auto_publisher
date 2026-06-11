@@ -7,6 +7,7 @@ import { trackPostMetrics } from './services/tracking.service.js';
 import { startTelegramBot } from './services/telegram.service.js';
 import authRoutes from './routes/auth.routes.js';
 import userRoutes from './routes/user.routes.js';
+import webhookRoutes from './routes/webhook.routes.js';
 // Worker sẽ được khởi động SAU khi scheduler dọn sạch queue
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -46,6 +47,7 @@ app.use('/temp_images', express.static(path.join(__dirname, '../temp_images')));
 app.use('/api', apiRoutes);
 app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
+app.use('/webhook', webhookRoutes);
 // app.use('/api/drive', driveRoutes);
 // app.use('/api/publish', publishRoutes);
 
@@ -58,6 +60,7 @@ app.use((req, res, next) => {
   if (req.path.startsWith('/api')) return next();
   if (req.path.startsWith('/images')) return next();
   if (req.path.startsWith('/temp_images')) return next();
+  if (req.path.startsWith('/webhook')) return next();
   res.sendFile(path.join(frontendDistPath, 'index.html'));
 });
 

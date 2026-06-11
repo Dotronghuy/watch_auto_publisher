@@ -32,12 +32,12 @@ const getActiveAccounts = () => {
 /**
  * Lấy Facebook Inbox
  */
-export const fetchFacebookInbox = async (pageToken, accountId) => {
+export const fetchFacebookInbox = async (pageToken, accountId, fbPageId) => {
   if (!pageToken) return;
   try {
     const res = await axios.get(`${GRAPH_API_BASE}/me/conversations`, {
       params: {
-        fields: 'id,updated_time,snippet,participants,messages.limit(20){id,created_time,message,from}',
+        fields: 'id,updated_time,snippet,participants,messages.limit(20){id,created_time,message,from,attachments{image_data,video_data,file_url}}',
         access_token: pageToken
       }
     });
@@ -45,14 +45,27 @@ export const fetchFacebookInbox = async (pageToken, accountId) => {
     const conversations = res.data.data || [];
     for (const conv of conversations) {
       const participants = conv.participants?.data || [];
-      const sender = participants.find(p => p.id) || { name: 'Unknown', id: '0' };
+      // Lọc bỏ chính Page ra khỏi danh sách để tìm đúng khách hàng
+      const pageIdTrimmed = fbPageId ? fbPageId.trim() : null;
+      let sender = participants.find(p => pageIdTrimmed ? p.id !== pageIdTrimmed : false);
+      if (!sender && participants.length > 0) sender = participants[0];
+      if (!sender) sender = { name: 'Unknown', id: '0' };
       
       await saveConversation(conv.id, 'facebook', 'inbox', sender.name, sender.id, conv.snippet, conv.updated_time, accountId);
       
       const messages = conv.messages?.data || [];
       for (const msg of messages) {
-        const isFromPage = msg.from?.id !== sender.id;
-        await saveMessage(msg.id, conv.id, msg.message, isFromPage, msg.created_time);
+        // So sánh trực tiếp với Page ID để xác định tin nhắn từ Page
+        const isFromPage = pageIdTrimmed ? msg.from?.id === pageIdTrimmed : msg.from?.id !== sender.id;
+        let text = msg.message || '';
+        if (msg.attachments && msg.attachments.data) {
+          for (const att of msg.attachments.data) {
+            if (att.image_data && att.image_data.url) text += `\n[IMAGE: ${att.image_data.url}]`;
+            else if (att.video_data && att.video_data.url) text += `\n[VIDEO: ${att.video_data.url}]`;
+            else if (att.file_url) text += `\n[FILE: ${att.file_url}]`;
+          }
+        }
+        await saveMessage(msg.id, conv.id, text.trim() || '📸 Tệp đính kèm', isFromPage, msg.created_time);
       }
     }
   } catch (error) {
@@ -94,28 +107,49 @@ export const fetchFacebookComments = async (pageToken, accountId) => {
 /**
  * Lấy Instagram Inbox
  */
-export const fetchInstagramInbox = async (pageToken, accountId) => {
+export const fetchInstagramInbox = async (pageToken, accountId, igUserId) => {
   if (!pageToken) return;
   try {
-    const res = await axios.get(`${GRAPH_API_BASE}/me/conversations`, {
-      params: {
-        platform: 'instagram',
-        fields: 'id,updated_time,snippet,participants,messages.limit(20){id,created_time,message,from}',
-        access_token: pageToken
-      }
-    });
+    const fetchFolder = async (folderName) => {
+      const res = await axios.get(`${GRAPH_API_BASE}/me/conversations`, {
+        params: {
+          platform: 'instagram',
+          folder: folderName,
+          fields: 'id,updated_time,snippet,participants,messages.limit(20){id,created_time,message,from,attachments{image_data,video_data,file_url}}',
+          access_token: pageToken
+        }
+      });
+      return res.data.data || [];
+    };
 
-    const conversations = res.data.data || [];
+    const [inboxConvs, pendingConvs] = await Promise.all([
+      fetchFolder('inbox'),
+      fetchFolder('pending')
+    ]);
+
+    const conversations = [...inboxConvs, ...pendingConvs];
     for (const conv of conversations) {
       const participants = conv.participants?.data || [];
-      const sender = participants.find(p => p.id) || { name: 'Instagram User', id: '0' };
+      let sender = participants.find(p => igUserId ? p.id !== igUserId : p.id);
+      if (!sender && participants.length > 0) sender = participants[0];
+      if (!sender) sender = { username: 'Instagram User', id: '0' };
       
-      await saveConversation(conv.id, 'instagram', 'inbox', sender.name, sender.id, conv.snippet, conv.updated_time, accountId);
+      const senderName = sender.username || sender.name || 'Instagram User';
+      
+      await saveConversation(conv.id, 'instagram', 'inbox', senderName, sender.id, conv.snippet, conv.updated_time, accountId);
       
       const messages = conv.messages?.data || [];
       for (const msg of messages) {
-        const isFromPage = msg.from?.id !== sender.id;
-        await saveMessage(msg.id, conv.id, msg.message, isFromPage, msg.created_time);
+        const isFromPage = igUserId ? msg.from?.id === igUserId : msg.from?.id !== sender.id;
+        let text = msg.message || '';
+        if (msg.attachments && msg.attachments.data) {
+          for (const att of msg.attachments.data) {
+            if (att.image_data && att.image_data.url) text += `\n[IMAGE: ${att.image_data.url}]`;
+            else if (att.video_data && att.video_data.url) text += `\n[VIDEO: ${att.video_data.url}]`;
+            else if (att.file_url) text += `\n[FILE: ${att.file_url}]`;
+          }
+        }
+        await saveMessage(msg.id, conv.id, text.trim() || '📸 Tệp đính kèm', isFromPage, msg.created_time);
       }
     }
   } catch (error) {
@@ -131,8 +165,9 @@ export const fetchInstagramComments = async (igUserId, pageToken, accountId) => 
   try {
     const res = await axios.get(`${GRAPH_API_BASE}/${igUserId}/media`, {
       params: {
-        fields: 'id,caption,comments.limit(20){id,text,timestamp,from}',
-        access_token: pageToken
+        fields: 'id,caption,comments_count,comments.limit(20){id,text,timestamp,from,username}',
+        access_token: pageToken,
+        limit: 25
       }
     });
 
@@ -142,11 +177,15 @@ export const fetchInstagramComments = async (igUserId, pageToken, accountId) => 
       if (comments.length > 0) {
         const snippet = media.caption ? media.caption.substring(0, 50) + '...' : 'Bài viết IG';
         const latestCmtTime = comments[0]?.timestamp || new Date().toISOString();
-        await saveConversation(media.id, 'instagram', 'comment', 'Bài Viết IG', media.id, snippet, latestCmtTime, accountId);
+        // Dùng caption làm tên hiển thị, kèm emoji để phân biệt
+        const displayName = '💬 ' + (media.caption ? media.caption.substring(0, 30) : 'Bài viết IG');
+        await saveConversation(media.id, 'instagram', 'comment', displayName, media.id, snippet, latestCmtTime, accountId);
         
         for (const cmt of comments) {
           const isFromPage = cmt.from?.id === igUserId;
-          await saveMessage(cmt.id, media.id, cmt.text, isFromPage, cmt.timestamp);
+          const commenterName = cmt.username || cmt.from?.username || '';
+          const msgText = commenterName ? `@${commenterName}: ${cmt.text}` : cmt.text;
+          await saveMessage(cmt.id, media.id, msgText, isFromPage, cmt.timestamp);
         }
       }
     }
@@ -166,19 +205,19 @@ export const syncAllCRM = async () => {
   }
 
   for (const acc of activeAccounts) {
-    const { id, fbAccessToken, igAccessToken, igUserId } = acc;
+    const { id, fbAccessToken, igAccessToken, igUserId, fbPageId } = acc;
     
     // Ưu tiên dùng fbAccessToken nếu có, nếu không thì dùng chung (có thể dùng pageToken cho IG)
     const tokenToUseForFB = fbAccessToken;
     const tokenToUseForIG = igAccessToken || fbAccessToken;
 
     if (tokenToUseForFB) {
-      await fetchFacebookInbox(tokenToUseForFB, id);
+      await fetchFacebookInbox(tokenToUseForFB, id, fbPageId);
       await fetchFacebookComments(tokenToUseForFB, id);
     }
     
     if (tokenToUseForIG) {
-      await fetchInstagramInbox(tokenToUseForIG, id);
+      await fetchInstagramInbox(tokenToUseForIG, id, igUserId);
       if (igUserId) {
         await fetchInstagramComments(igUserId, tokenToUseForIG, id);
       }
@@ -213,7 +252,8 @@ export const replyCRM = async (targetId, message, type, conversationId) => {
 
   try {
     if (type === 'inbox') {
-      const res = await axios.post(`${GRAPH_API_BASE}/${targetId}/messages`, {
+      const res = await axios.post(`${GRAPH_API_BASE}/me/messages`, {
+        recipient: { id: targetId },
         message: { text: message }
       }, {
         params: { access_token: token }

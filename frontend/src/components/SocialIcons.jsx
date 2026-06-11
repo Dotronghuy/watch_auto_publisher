@@ -1,16 +1,32 @@
 import React from 'react';
 
 export const Facebook = ({ size = 24, className = '' }) => (
-  <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
-    <path d="M18 2h-3a5 5 0 0 0-5 5v3H7v4h3v8h4v-8h3l1-4h-4V7a1 1 0 0 1 1-1h3z"></path>
+  <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 36 36" className={className}>
+    <defs>
+      <linearGradient id="fb_grad" x1="0" y1="36" x2="36" y2="0" gradientUnits="userSpaceOnUse">
+        <stop stopColor="#0062E0"/>
+        <stop offset="1" stopColor="#19AFFF"/>
+      </linearGradient>
+    </defs>
+    <path d="M15 35.8C6.5 34.3 0 26.9 0 18 0 8.1 8.1 0 18 0s18 8.1 18 18c0 8.9-6.5 16.3-15 17.8l-1-.8h-4l-1 .8z" fill="url(#fb_grad)"/>
+    <path d="M25 12h-3c-1.3 0-2 .6-2 1.8V16h5l-.8 5h-4.2v15h-5.9V21h-3.1v-5h3.1v-2.8C14 8.7 16.6 6 21.6 6H25v6z" fill="#FFF"/>
   </svg>
 );
 
 export const Instagram = ({ size = 24, className = '' }) => (
-  <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
-    <rect x="2" y="2" width="20" height="20" rx="5" ry="5"></rect>
-    <path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z"></path>
-    <line x1="17.5" y1="6.5" x2="17.51" y2="6.5"></line>
+  <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 128 128" className={className}>
+    <defs>
+      <radialGradient id="ig_grad" cx="0.3" cy="1" r="1.2">
+        <stop offset="0.1" stopColor="#fd5"/>
+        <stop offset="0.3" stopColor="#f56040"/>
+        <stop offset="0.6" stopColor="#e1306c"/>
+        <stop offset="0.8" stopColor="#c13584"/>
+        <stop offset="1" stopColor="#833ab4"/>
+      </radialGradient>
+    </defs>
+    <rect rx="30" width="128" height="128" fill="url(#ig_grad)"/>
+    <path fill="none" stroke="#fff" strokeWidth="10" strokeLinecap="round" strokeLinejoin="round" d="M38 30h52c16 0 24 8 24 24v20c0 16-8 24-24 24H38C22 98 14 90 14 74V54c0-16 8-24 24-24zm26 18a16 16 0 1 0 0 32 16 16 0 1 0 0-32z"/>
+    <circle cx="94" cy="40" r="6" fill="#fff"/>
   </svg>
 );
 

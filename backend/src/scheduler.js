@@ -9,8 +9,35 @@ import { syncAllCRM } from './services/crm.service.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const settingsPath = path.join(__dirname, '../config/settings.json');
+const heartbeatPath = path.join(__dirname, '../config/.heartbeat');
 
 let isSchedulerRunning = false; // Guard chống gọi scheduler 2 lần đồng thời
+let heartbeatInterval = null;
+
+/**
+ * Kiểm tra xem đây là "Hot Reload" (sửa code, save file) hay "Cold Start" (server tắt lâu).
+ * Nếu file heartbeat được cập nhật trong vòng 30 giây qua → Hot Reload → KHÔNG xóa lịch.
+ */
+const isHotReload = () => {
+  try {
+    if (fs.existsSync(heartbeatPath)) {
+      const lastBeat = parseInt(fs.readFileSync(heartbeatPath, 'utf8').trim(), 10);
+      const elapsed = Date.now() - lastBeat;
+      return elapsed < 30000; // Dưới 30 giây = hot reload
+    }
+  } catch (e) { /* ignore */ }
+  return false;
+};
+
+/** Ghi nhịp tim mỗi 10 giây để đánh dấu server đang sống */
+const startHeartbeat = () => {
+  const beat = () => {
+    try { fs.writeFileSync(heartbeatPath, String(Date.now()), 'utf8'); } catch (e) { /* ignore */ }
+  };
+  beat(); // Ghi ngay lập tức
+  if (heartbeatInterval) clearInterval(heartbeatInterval);
+  heartbeatInterval = setInterval(beat, 10000);
+};
 
 export const startScheduler = async () => {
   if (isSchedulerRunning) {
@@ -18,6 +45,9 @@ export const startScheduler = async () => {
     return;
   }
   isSchedulerRunning = true;
+
+  // Bắt đầu ghi nhịp tim
+  startHeartbeat();
 
   console.log('⏰ Khởi động Scheduler hẹn giờ đăng bài theo Khung Giờ Vàng (BullMQ)...');
 
@@ -31,100 +61,112 @@ export const startScheduler = async () => {
     console.error('Không thể đọc settings.json.', e);
   }
 
-  // === XÓA SẠCH TOÀN BỘ REDIS — NUCLEAR OPTION ===
-  try {
-    // BƯỚC 0: Obliterate — xóa tất cả mọi thứ trong queue (kể cả active jobs từ phiên trước)
-    // Đây là cách duy nhất đảm bảo các job repeat: cũ không sống sót qua server restart
-    await publishQueue.obliterate({ force: true });
-    console.log('🧹 Đã obliterate toàn bộ queue (xóa kể cả active jobs cũ).');
-  } catch (e) {
-    // Nếu obliterate thất bại (ví dụ lỗi Redis), thử các bước thủ công
-    try {
-      const repeatableJobs = await publishQueue.getRepeatableJobs();
-      for (const job of repeatableJobs) {
-        await publishQueue.removeRepeatableByKey(job.key);
-      }
-      await publishQueue.drain(true);
-      await publishQueue.clean(0, 1000, 'delayed');
-      await publishQueue.clean(0, 1000, 'wait');
-      await publishQueue.clean(0, 1000, 'failed');
-      await publishQueue.clean(0, 1000, 'completed');
-      console.log('🧹 Đã dọn sạch toàn bộ job cũ trong hàng đợi (fallback).');
-    } catch (e2) {
-      console.log('⚠️ Lỗi khi dọn dẹp queue:', e2.message);
-    }
-  }
+  // === PHÂN BIỆT HOT RELOAD vs COLD START ===
+  const hotReload = isHotReload();
 
-  if (settings.mode === 'test') {
-    const intervalMinutes = parseInt(settings.testInterval) || 5;
-    const cronPattern = `*/${intervalMinutes} * * * *`;
-    await publishQueue.add('autoPublishJob', {}, {
-      repeat: { pattern: cronPattern }
-    });
-    console.log(`✅ [Chế Độ TEST] Đã lên lịch tự động đăng bài mỗi ${intervalMinutes} phút (Cron: ${cronPattern})`);
+  if (hotReload) {
+    // HOT RELOAD: Server vừa restart do sửa code → KHÔNG XÓA LỊCH
+    // Các repeatable jobs vẫn còn nguyên trong Redis, Worker mới sẽ tự pick up
+    console.log('🔥 [Hot Reload] Phát hiện server vừa restart nhanh (do sửa code). GIỮ NGUYÊN toàn bộ lịch đăng bài trong Redis!');
   } else {
-    // Chế độ Đăng Thật
-    const timeSlots = settings.timeSlots || [];
-
-    if (timeSlots.length === 0) {
-      console.log('⚠️ Không có khung giờ nào được cài đặt! Hệ thống Auto sẽ TẠM NGƯNG cho đến khi bạn thêm khung giờ.');
-      isSchedulerRunning = false; // Reset để lần sau vào Settings save vẫn gọi được
-      return;
+    // COLD START: Server tắt lâu → Xóa sạch và tạo lịch mới
+    console.log('❄️ [Cold Start] Phát hiện server khởi động lạnh. Đang dọn sạch lịch cũ và tạo mới...');
+    try {
+      await publishQueue.obliterate({ force: true });
+      console.log('🧹 Đã obliterate toàn bộ queue (xóa kể cả active jobs cũ).');
+    } catch (e) {
+      try {
+        const repeatableJobs = await publishQueue.getRepeatableJobs();
+        for (const job of repeatableJobs) {
+          await publishQueue.removeRepeatableByKey(job.key);
+        }
+        await publishQueue.drain(true);
+        await publishQueue.clean(0, 1000, 'delayed');
+        await publishQueue.clean(0, 1000, 'wait');
+        await publishQueue.clean(0, 1000, 'failed');
+        await publishQueue.clean(0, 1000, 'completed');
+        console.log('🧹 Đã dọn sạch toàn bộ job cũ trong hàng đợi (fallback).');
+      } catch (e2) {
+        console.log('⚠️ Lỗi khi dọn dẹp queue:', e2.message);
+      }
     }
 
-    for (const timeStr of timeSlots) {
-      if (!timeStr || !timeStr.includes(':')) continue;
-      const [hour, minute] = timeStr.split(':');
-      const cronPattern = `${parseInt(minute)} ${parseInt(hour)} * * *`;
-
+    // Chỉ tạo lịch mới khi Cold Start
+    if (settings.mode === 'test') {
+      const intervalMinutes = parseInt(settings.testInterval) || 5;
+      const cronPattern = `*/${intervalMinutes} * * * *`;
       await publishQueue.add('autoPublishJob', {}, {
         repeat: { pattern: cronPattern }
       });
-      console.log(`✅ Đã lên lịch đăng bài cho Khung giờ: ${timeStr} (Cron: ${cronPattern})`);
-    }
+      console.log(`✅ [Chế Độ TEST] Đã lên lịch tự động đăng bài mỗi ${intervalMinutes} phút (Cron: ${cronPattern})`);
+    } else {
+      // Chế độ Đăng Thật
+      const timeSlots = settings.timeSlots || [];
 
-    console.log(`✅ Đã lên lịch thành công tổng cộng ${timeSlots.length} khung giờ đăng bài mỗi ngày.`);
-
-    // --- CƠ CHẾ CHẠY BÙ (CATCH-UP) ---
-    try {
-      const lastRunPath = path.join(__dirname, '../config/last_run.json');
-      const now = new Date();
-      let lastRunTime = 0;
-      if (fs.existsSync(lastRunPath)) {
-        const lastRunData = JSON.parse(fs.readFileSync(lastRunPath, 'utf8'));
-        lastRunTime = lastRunData.timestamp || 0;
+      if (timeSlots.length === 0) {
+        console.log('⚠️ Không có khung giờ nào được cài đặt! Hệ thống Auto sẽ TẠM NGƯNG cho đến khi bạn thêm khung giờ.');
+        isSchedulerRunning = false;
+        return;
       }
-
-      const currentMinutes = now.getHours() * 60 + now.getMinutes();
-      let missedSlotTime = null;
 
       for (const timeStr of timeSlots) {
         if (!timeStr || !timeStr.includes(':')) continue;
-        const [hour, minute] = timeStr.split(':').map(Number);
-        const slotMinutes = hour * 60 + minute;
+        const [hour, minute] = timeStr.split(':');
+        const cronPattern = `${parseInt(minute)} ${parseInt(hour)} * * *`;
 
-        // Nếu khung giờ này đã qua trong NGÀY HÔM NAY
-        if (slotMinutes <= currentMinutes) {
-          const slotDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hour, minute, 0, 0);
-          const slotTimestamp = slotDate.getTime();
-          
-          // Kiểm tra xem thời điểm chạy gần nhất có TRƯỚC khung giờ này không
-          // Cho phép sai số 2 phút để không kích hoạt nếu đã chạy đúng lúc
-          if (lastRunTime < (slotTimestamp - 120000)) {
-            missedSlotTime = slotTimestamp;
+        await publishQueue.add('autoPublishJob', {}, {
+          repeat: { pattern: cronPattern }
+        });
+        console.log(`✅ Đã lên lịch đăng bài cho Khung giờ: ${timeStr} (Cron: ${cronPattern})`);
+      }
+
+      console.log(`✅ Đã lên lịch thành công tổng cộng ${timeSlots.length} khung giờ đăng bài mỗi ngày.`);
+
+      // --- CƠ CHẾ CHẠY BÙ (CATCH-UP) ---
+      try {
+        const lastRunPath = path.join(__dirname, '../config/last_run.json');
+        const now = new Date();
+        let lastRunTime = 0;
+        if (fs.existsSync(lastRunPath)) {
+          const lastRunData = JSON.parse(fs.readFileSync(lastRunPath, 'utf8'));
+          lastRunTime = lastRunData.timestamp || 0;
+        }
+
+        const currentMinutes = now.getHours() * 60 + now.getMinutes();
+        let missedSlots = [];
+
+        for (const timeStr of timeSlots) {
+          if (!timeStr || !timeStr.includes(':')) continue;
+          const [hour, minute] = timeStr.split(':').map(Number);
+          const slotMinutes = hour * 60 + minute;
+
+          // Nếu khung giờ này đã qua trong NGÀY HÔM NAY
+          if (slotMinutes <= currentMinutes) {
+            const slotDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hour, minute, 0, 0);
+            const slotTimestamp = slotDate.getTime();
+            
+            // Kiểm tra xem thời điểm chạy gần nhất có TRƯỚC khung giờ này không
+            if (lastRunTime < (slotTimestamp - 120000)) {
+              missedSlots.push({ time: timeStr, timestamp: slotTimestamp });
+            }
           }
         }
-      }
 
-      if (missedSlotTime) {
-        console.log('⚡ Phát hiện bị lỡ lịch đăng bài do server tắt! Đang kích hoạt chạy bù ngay lập tức...');
-        await publishQueue.add('autoPublishJob', {}, { delay: 10000 });
-        
-        // Cập nhật tạm thời để không bị chạy bù nhiều lần nếu scheduler reload
-        fs.writeFileSync(lastRunPath, JSON.stringify({ timestamp: missedSlotTime }), 'utf8');
+        if (missedSlots.length > 0) {
+          console.log(`⚡ Phát hiện bị lỡ ${missedSlots.length} khung giờ: ${missedSlots.map(s => s.time).join(', ')}. Đang kích hoạt chạy bù...`);
+          // Chạy bù cho TỪNG khung giờ bị lỡ, cách nhau 30 giây
+          for (let i = 0; i < missedSlots.length; i++) {
+            await publishQueue.add('autoPublishJob', { catchUp: true, missedTime: missedSlots[i].time }, { delay: 10000 + (i * 30000) });
+            console.log(`  📌 Đã lên lịch chạy bù cho khung ${missedSlots[i].time} (delay ${10 + i * 30}s)`);
+          }
+          
+          // Cập nhật last_run để không bị chạy bù lặp lại
+          const latestMissed = missedSlots[missedSlots.length - 1].timestamp;
+          fs.writeFileSync(lastRunPath, JSON.stringify({ timestamp: latestMissed }), 'utf8');
+        }
+      } catch (e) {
+        console.error('Lỗi khi kiểm tra catch-up chạy bù:', e);
       }
-    } catch (e) {
-      console.error('Lỗi khi kiểm tra catch-up chạy bù:', e);
     }
   }
 
