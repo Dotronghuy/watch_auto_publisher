@@ -459,7 +459,8 @@ router.get('/publish/test-tones', async (req, res) => {
   try {
     const tones = [
       "Sang trọng, tinh tế", "Gần gũi, đời thường", "Kể chuyện (Storytelling)", 
-      "Trực diện, chốt sale", "Kiến thức chuyên gia", "Hài hước, thả thính"
+      "Trực diện, chốt sale", "Kiến thức chuyên gia", "Hài hước, thả thính",
+      "Kể chuyện hài, phối đồ", "Phối đồ"
     ];
     const ctas = [
       "Inbox ngay để nhận ưu đãi", "Để lại bình luận để được tư vấn chi tiết",

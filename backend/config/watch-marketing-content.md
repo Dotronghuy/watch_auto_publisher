@@ -180,6 +180,7 @@ Ví dụ phong cách (KHÔNG SAO CHÉP):
 
 > AI chọn 5–8 hashtag phù hợp với nội dung từ các pool dưới đây.
 > KHÔNG dùng cùng một nhóm hashtag cho hai bài liên tiếp.
+> ⚠️ **TẤT CẢ hashtag PHẢI viết KHÔNG DẤU tiếng Việt** (VD: #donghonam thay vì #đồnghồnam). Hashtag có dấu sẽ bị lỗi tìm kiếm trên mạng xã hội.
 
 ### ⚠️ Hashtag Mặc Định — BẮT BUỘC trong MỌI bài đăng
 
@@ -198,21 +199,21 @@ Tổng cộng mỗi bài: 5–8 hashtag (đã tính 3 tag mặc định).
 ### Pool A — Thương Hiệu / Chung
 
 ```
-#đồnghồchínhhãng #đồnghồvietnam #chínhhãng #authenticity
+#donghochinhhang #donghovietnam #chinhhang #authenticity
 #luxurywatches #watchvietnam #timepiece #watchlover
 ```
 
 ### Pool B — Nam Giới
 
 ```
-#đồnghồnam #menswatches #mensfashion #luxurywatchmen
+#donghonam #menswatches #mensfashion #luxurywatchmen
 #phongcachdanong #watchoftheday #watchcollector #everydaycarry
 ```
 
 ### Pool C — Nữ Giới
 
 ```
-#đồnghồnữ #womenwatches #luxuryfeminine #phụnữhiệnđại
+#donghonu #womenwatches #luxuryfeminine #phunuhiendai
 #wristwear #ladieswatch #watchlove #femininewatch
 ```
 
@@ -226,14 +227,14 @@ Tổng cộng mỗi bài: 5–8 hashtag (đã tính 3 tag mặc định).
 ### Pool E — Kỹ Thuật / Đam Mê
 
 ```
-#mechanicalwatch #đồnghồcơ #watchmaking #horlogerie
+#mechanicalwatch #donghoco #watchmaking #horlogerie
 #sapphireglass #watchdetails #movementwatch #watchgeek
 ```
 
 ### Pool F — Dịp Đặc Biệt / Quà
 
 ```
-#quàtặng #giftwatches #luxurygift #meaningfulgifts
+#quatang #giftwatches #luxurygift #meaningfulgifts
 #giftforhim #giftforher #fathersday #mothersday
 ```
 

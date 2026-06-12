@@ -46,23 +46,14 @@ export const startScheduler = async () => {
   }
   isSchedulerRunning = true;
 
-  // Bắt đầu ghi nhịp tim
+  // === PHÂN BIỆT HOT RELOAD vs COLD START ===
+  // QUAN TRỌNG: Phải check TRƯỚC khi ghi heartbeat mới
+  const hotReload = isHotReload();
+
+  // Bắt đầu ghi nhịp tim (sau khi đã check)
   startHeartbeat();
 
   console.log('⏰ Khởi động Scheduler hẹn giờ đăng bài theo Khung Giờ Vàng (BullMQ)...');
-
-  // Đọc cấu hình settings.json — KHÔNG dùng giá trị mặc định
-  let settings = {};
-  try {
-    if (fs.existsSync(settingsPath)) {
-      settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
-    }
-  } catch (e) {
-    console.error('Không thể đọc settings.json.', e);
-  }
-
-  // === PHÂN BIỆT HOT RELOAD vs COLD START ===
-  const hotReload = isHotReload();
 
   if (hotReload) {
     // HOT RELOAD: Server vừa restart do sửa code → KHÔNG XÓA LỊCH
@@ -89,6 +80,16 @@ export const startScheduler = async () => {
       } catch (e2) {
         console.log('⚠️ Lỗi khi dọn dẹp queue:', e2.message);
       }
+    }
+
+    // Đọc cấu hình settings.json
+    let settings = {};
+    try {
+      if (fs.existsSync(settingsPath)) {
+        settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+      }
+    } catch (e) {
+      console.error('Không thể đọc settings.json.', e);
     }
 
     // Chỉ tạo lịch mới khi Cold Start

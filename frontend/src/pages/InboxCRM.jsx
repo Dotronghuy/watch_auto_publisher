@@ -30,6 +30,8 @@ const InboxCRM = () => {
   const [editValue, setEditValue] = useState('');
   const [filterTag, setFilterTag] = useState(null); // null = tất cả, string = filter theo tag
   const [showTagFilter, setShowTagFilter] = useState(false);
+  const [filterAccount, setFilterAccount] = useState(null); // null = tất cả, string = account_id
+  const [showAccountFilter, setShowAccountFilter] = useState(false);
   const [customerTagsMap, setCustomerTagsMap] = useState({}); // { senderId: [tags] }
 
   const predefinedTags = ['Khách mới', 'Đã đặt', 'Bảo hành', 'Quan tâm', 'Khách buôn', 'Khách VIP'];
@@ -511,10 +513,104 @@ const InboxCRM = () => {
           </button>
         </div>
 
+        {/* Account Filter Dropdown */}
+        {accounts.length > 1 && (
+          <div style={{ position: 'relative', padding: '0 12px', marginBottom: '8px' }}>
+            <button 
+              onClick={() => { setShowAccountFilter(!showAccountFilter); setShowTagFilter(false); }}
+              style={{ 
+                width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                background: filterAccount ? '#6366f122' : '#2b2d31', 
+                border: filterAccount ? '1px solid #818cf8' : '1px solid #3f4147', 
+                color: filterAccount ? '#a5b4fc' : '#8a8b91', 
+                padding: '6px 10px', borderRadius: '8px', cursor: 'pointer', fontSize: '12px'
+              }}
+            >
+              <span style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                {filterAccount ? (() => {
+                  const acc = accounts.find(a => a.id === filterAccount);
+                  return acc ? (
+                    <>
+                      {acc.fbPageId?.trim() ? (
+                        <img
+                          src={`https://graph.facebook.com/v21.0/${acc.fbPageId.trim()}/picture?type=small`}
+                          alt=""
+                          style={{ width: '18px', height: '18px', borderRadius: '50%', objectFit: 'cover' }}
+                        />
+                      ) : (
+                        <span style={{ width: '18px', height: '18px', borderRadius: '50%', background: '#6366f1', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '10px', fontWeight: 700, color: '#fff' }}>
+                          {acc.name.charAt(0)}
+                        </span>
+                      )}
+                      {acc.name}
+                    </>
+                  ) : 'Tất cả tài khoản';
+                })() : (
+                  <>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                    Tất cả tài khoản
+                  </>
+                )}
+              </span>
+              {filterAccount ? (
+                <span onClick={(e) => { e.stopPropagation(); setFilterAccount(null); setShowAccountFilter(false); }} style={{ cursor: 'pointer', color: '#ff4d8d' }}>✕</span>
+              ) : (
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="6 9 12 15 18 9"/></svg>
+              )}
+            </button>
+            {showAccountFilter && (
+              <div style={{ 
+                position: 'absolute', top: '100%', left: '12px', right: '12px', zIndex: 50, 
+                background: '#1e1f23', border: '1px solid #3f4147', borderRadius: '8px', 
+                padding: '6px 0', marginTop: '4px', boxShadow: '0 8px 24px rgba(0,0,0,0.5)'
+              }}>
+                <div 
+                  onClick={() => { setFilterAccount(null); setShowAccountFilter(false); }}
+                  style={{ padding: '8px 14px', cursor: 'pointer', fontSize: '12px', color: !filterAccount ? '#a5b4fc' : '#fff', fontWeight: !filterAccount ? 600 : 400, display: 'flex', alignItems: 'center', gap: '10px' }}
+                  onMouseEnter={e => e.currentTarget.style.background = '#2b2d31'}
+                  onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+                >
+                  <span style={{ width: '22px', height: '22px', borderRadius: '50%', background: '#3f4147', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#8a8b91" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+                  </span>
+                  Tất cả tài khoản
+                </div>
+                {accounts.filter(a => a.isActive).map(acc => (
+                  <div 
+                    key={acc.id}
+                    onClick={() => { setFilterAccount(acc.id); setShowAccountFilter(false); }}
+                    style={{ 
+                      padding: '8px 14px', cursor: 'pointer', fontSize: '12px', 
+                      color: filterAccount === acc.id ? '#a5b4fc' : '#ccc',
+                      fontWeight: filterAccount === acc.id ? 600 : 400,
+                      display: 'flex', alignItems: 'center', gap: '10px'
+                    }}
+                    onMouseEnter={e => e.currentTarget.style.background = '#2b2d31'}
+                    onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+                  >
+                    {acc.fbPageId?.trim() ? (
+                      <img
+                        src={`https://graph.facebook.com/v21.0/${acc.fbPageId.trim()}/picture?type=small`}
+                        alt=""
+                        style={{ width: '22px', height: '22px', borderRadius: '50%', objectFit: 'cover' }}
+                      />
+                    ) : (
+                      <span style={{ width: '22px', height: '22px', borderRadius: '50%', background: '#6366f1', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '10px', fontWeight: 700, color: '#fff' }}>
+                        {acc.name.charAt(0)}
+                      </span>
+                    )}
+                    {acc.name}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Tag Filter Dropdown */}
         <div style={{ position: 'relative', padding: '0 12px', marginBottom: '8px' }}>
           <button 
-            onClick={() => setShowTagFilter(!showTagFilter)}
+            onClick={() => { setShowTagFilter(!showTagFilter); setShowAccountFilter(false); }}
             style={{ 
               width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
               background: filterTag ? getTagColor(filterTag) + '22' : '#2b2d31', 
@@ -571,6 +667,10 @@ const InboxCRM = () => {
           {conversations
             .filter(conv => conv.type === filterType)
             .filter(conv => {
+              if (!filterAccount) return true;
+              return conv.account_id === filterAccount;
+            })
+            .filter(conv => {
               if (!filterTag) return true;
               const tags = customerTagsMap[conv.sender_id] || [];
               return tags.includes(filterTag);
@@ -585,6 +685,10 @@ const InboxCRM = () => {
           ) : (
             conversations
             .filter(conv => conv.type === filterType)
+            .filter(conv => {
+              if (!filterAccount) return true;
+              return conv.account_id === filterAccount;
+            })
             .filter(conv => {
               if (!filterTag) return true;
               const tags = customerTagsMap[conv.sender_id] || [];

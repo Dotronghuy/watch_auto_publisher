@@ -93,6 +93,27 @@ export const getToneInstructionText = (tone, perspective, cta) => {
   + Emoji: Dùng các emoji vui nhộn, thả thính thả ga như 😌, 😎, 🔥, ✨, 🥂, 😘. CẤM dùng 🕰️.
   + ĐỐI VỚI BÀI FACEBOOK: Ngắn gọn, có duyên (50-80 từ). Chốt bằng CTA nhẹ nhàng: "${cta}"
   + ĐỐI VỚI BÀI INSTAGRAM: Cực kỳ bắt trend, dễ viral, mang tính thả thính cao.`;
+  } else if (tone === 'Kể chuyện hài, phối đồ') {
+    instruction += `- QUY TẮC BẮT BUỘC CHO PHONG CÁCH KỂ CHUYỆN HÀI + PHỐI ĐỒ:
+  + Hook (Câu mở đầu FB): BẮT BUỘC VIẾT HOA TOÀN BỘ, mở bằng tình huống hài hước đời thường (VD: "BẠN GÁI HỎI: 'SAO ANH CÓ MỖI MỘT CHIẾC ĐỒNG HỒ MÀ ĐEO HOÀI KHÔNG CHÁN?' — TÔI: 'VÌ NÓ HỢP VỚI MỌI THỨ ANH MẶC.' 😎", "ĐI ĂN CƯỚI BẠN, LOAY HOAY CẢ TỦ ĐỒ — CUỐI CÙNG CHỌN XONG OUTFIT NHỜ MỘT CHI TIẾT TRÊN CỔ TAY. 😌").
+  + Mạch văn: Kể chuyện ngắn vui vẻ (đi làm, hẹn hò, event...) → nhắc đến đồng hồ tự nhiên → gợi ý phối đồ cụ thể.
+  + PHẢI có gợi ý phối đồ cụ thể (VD: "Sơ mi trắng + quần tây + mẫu này = combo đi họp không ai chê", "Polo + kaki + cổ tay sáng = weekend có gu").
+  + Giọng hài kiểu Gen Z/Millennial — nhẹ nhàng, duyên dáng, KHÔNG ép hài, KHÔNG "boomer".
+  + Từ vựng: TRÁNH "dây thép", dùng "dây kim loại bạc", "dây da nâu". TRÁNH quảng cáo lộ liễu.
+  + Emoji: 😎, 😌, 🔥, ✨, 👔, 👗. Khoảng 4-5 emoji rải đều.
+  + ĐỐI VỚI BÀI FACEBOOK: 50-80 từ. Chuyện hài → phối đồ → CTA nhẹ: "${cta}"
+  + ĐỐI VỚI BÀI INSTAGRAM: 1-2 câu duyên dáng kèm gợi ý phối đồ tinh tế (VD: "Sơ mi trắng, quần tây, cổ tay sáng một chút — đủ để cả phòng họp liếc nhìn. 😌✨"). BỎ QUA CTA chèo kéo.`;
+  } else if (tone === 'Phối đồ') {
+    instruction += `- QUY TẮC BẮT BUỘC CHO PHONG CÁCH PHỐI ĐỒ:
+  + Hook (Câu mở đầu FB): BẮT BUỘC VIẾT HOA TOÀN BỘ, gợi ý outfit ngay từ đầu (VD: "SƠ MI TRẮNG + QUẦN ÂU + MỘT CHIẾC ĐỒNG HỒ MẶT TRẮNG DÂY BẠC — BỘ 3 KHÔNG BAO GIỜ SAI. ✨", "ÁO THUN ĐEN + QUẦN JOGGER + ĐỒNG HỒ DÂY DA — CASUAL NHƯNG KHÔNG HỀ TẦM THƯỜNG. 🔥").
+  + Mạch văn: Gợi ý 1-2 cách phối đồ cụ thể → giải thích tại sao đồng hồ này hợp → CTA.
+  + PHẢI đề cập outfit cụ thể: tên loại áo, quần, giày, phụ kiện. KHÔNG viết chung chung "phù hợp mọi phong cách".
+  + PHẢI phân biệt theo giới tính sản phẩm: NAM dùng từ (sơ mi, polo, vest, quần tây, quần kaki, giày tây, boots, sneakers trắng). NỮ dùng từ (đầm dự tiệc, áo blouse, chân váy midi, blazer, giày cao gót, túi xách).
+  + Giọng điệu: Tự tin, có gu, như stylist tư vấn cho bạn. KHÔNG quảng cáo lộ liễu.
+  + Từ vựng: TRÁNH "dây thép", dùng "dây kim loại bạc", "dây da nâu". Dùng từ thời trang: "outfit", "mix & match", "phong cách tối giản".
+  + Emoji: 👔, 👗, ✨, 🔥, 💎, 🎯. Khoảng 4-5 emoji.
+  + ĐỐI VỚI BÀI FACEBOOK: 50-80 từ. Gợi ý phối → tại sao hợp → CTA: "${cta}"
+  + ĐỐI VỚI BÀI INSTAGRAM: Cực ngắn, 1-2 câu combo phối đồ + đồng hồ (VD: "Blazer đen, áo trắng, cổ tay thêm một chút ánh kim — outfit đi event không cần nghĩ nhiều. ✨"). BỎ QUA CTA chèo kéo.`;
   } else {
     instruction += `- Lời kêu gọi (CTA): ${cta}`;
   }
@@ -113,10 +134,18 @@ export const getToneInstructionText = (tone, perspective, cta) => {
 };
 
 const getRandomToneAndPerspective = () => {
-  const tones = [
-    "Sang trọng, tinh tế", "Gần gũi, đời thường", "Kể chuyện (Storytelling)", 
-    "Trực diện, chốt sale", "Kiến thức chuyên gia", "Hài hước, thả thính"
+  // Weighted random: 90% ưu tiên (5 tone x 18%) / 10% còn lại (3 tone)
+  const weightedTones = [
+    { tone: "Sang trọng, tinh tế", weight: 18 },
+    { tone: "Trực diện, chốt sale", weight: 18 },
+    { tone: "Hài hước, thả thính", weight: 18 },
+    { tone: "Kể chuyện hài, phối đồ", weight: 18 },
+    { tone: "Phối đồ", weight: 18 },
+    { tone: "Gần gũi, đời thường", weight: 4 },
+    { tone: "Kể chuyện (Storytelling)", weight: 3 },
+    { tone: "Kiến thức chuyên gia", weight: 3 },
   ];
+
   const perspectives = [
     "Góc nhìn của một người đam mê đồng hồ",
     "Góc nhìn của chuyên gia tư vấn thời trang",
@@ -144,7 +173,15 @@ const getRandomToneAndPerspective = () => {
     }
   } catch(e) {}
 
-  const randomTone = tones[Math.floor(Math.random() * tones.length)];
+  // Weighted random selection
+  const totalWeight = weightedTones.reduce((sum, t) => sum + t.weight, 0);
+  let roll = Math.random() * totalWeight;
+  let randomTone = weightedTones[0].tone;
+  for (const t of weightedTones) {
+    roll -= t.weight;
+    if (roll <= 0) { randomTone = t.tone; break; }
+  }
+
   const randomPersp = perspectives[Math.floor(Math.random() * perspectives.length)];
   const randomCta = ctas[Math.floor(Math.random() * ctas.length)];
 
