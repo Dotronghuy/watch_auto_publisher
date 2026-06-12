@@ -34,6 +34,7 @@ export const trackPostMetrics = async () => {
         for (const post of posts) {
             let likes = 0;
             let comments = 0;
+            let shares = 0;
             let success = false;
 
             if (post.platform === 'facebook' || post.platform === 'facebook_reels') {
@@ -50,9 +51,10 @@ export const trackPostMetrics = async () => {
                 for (const account of accountsToTry) {
                     if (!account.fbAccessToken) continue;
                     try {
-                        const res = await axios.get(`https://graph.facebook.com/v19.0/${post.post_id}?fields=reactions.summary(total_count),comments.summary(total_count)&access_token=${account.fbAccessToken}`);
+                        const res = await axios.get(`https://graph.facebook.com/v19.0/${post.post_id}?fields=reactions.summary(total_count),comments.summary(total_count),shares&access_token=${account.fbAccessToken}`);
                         if (res.data.reactions) likes = res.data.reactions.summary.total_count;
                         if (res.data.comments) comments = res.data.comments.summary.total_count;
+                        if (res.data.shares) shares = res.data.shares.count || 0;
                         success = true;
                         break; // Nếu lấy được thì thoát vòng lặp account
                     } catch (e) {
@@ -78,7 +80,7 @@ export const trackPostMetrics = async () => {
             }
 
             // Update in DB
-            await updatePostMetrics(post.post_id, likes, comments);
+            await updatePostMetrics(post.post_id, likes, comments, shares);
             
             // Phân tích nếu bài viết tốt (Feedback loop)
             // Ngưỡng ví dụ: 5 likes hoặc 2 comments -> Báo cáo lại cho ChatGPT

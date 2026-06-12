@@ -1,57 +1,83 @@
-import { Activity, BarChart2, Send, HardDrive, Share2, Database, CheckCircle, Clock, TrendingUp, Zap, Calendar, ArrowRight, Play, RefreshCw, ScanSearch } from 'lucide-react';
+import { Activity, BarChart2, Send, HardDrive, Share2, Database, CheckCircle, Clock, TrendingUp, Zap, Calendar, ArrowRight, Play, RefreshCw, ScanSearch, Heart, MessageCircle, Repeat2 } from 'lucide-react';
 import { Facebook, Instagram, TikTok, Threads } from '../components/SocialIcons';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import {
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell
-} from 'recharts';
 import './Dashboard.css';
 
-const CustomTooltip = ({ active, payload, label }) => {
-  if (active && payload?.length) {
-    return (
-      <div style={{
-        background: 'rgba(18,18,24,.95)', border: '1px solid rgba(255,255,255,.1)',
-        borderRadius: '8px', padding: '8px 12px', backdropFilter: 'blur(8px)'
-      }}>
-        <p style={{ margin: 0, fontSize: '12px', fontWeight: 600, color: '#fff' }}>{label}</p>
-        <p style={{ margin: '4px 0 0', fontSize: '11px', color: 'var(--color-primary)' }}>
-          {payload[0].value} bài đăng
-        </p>
-      </div>
-    );
-  }
-  return null;
+// Animated counter component
+const AnimatedNumber = ({ value }) => {
+  const [display, setDisplay] = useState(0);
+  const prevRef = useRef(0);
+
+  useEffect(() => {
+    const start = prevRef.current;
+    const end = value;
+    if (start === end) return;
+    
+    const duration = 600;
+    const startTime = performance.now();
+    
+    const animate = (now) => {
+      const elapsed = now - startTime;
+      const progress = Math.min(elapsed / duration, 1);
+      const eased = 1 - Math.pow(1 - progress, 3); // easeOutCubic
+      setDisplay(Math.round(start + (end - start) * eased));
+      if (progress < 1) requestAnimationFrame(animate);
+      else prevRef.current = end;
+    };
+    
+    requestAnimationFrame(animate);
+  }, [value]);
+
+  return <>{display.toLocaleString()}</>;
 };
 
 const Dashboard = () => {
-  const [timeRange, setTimeRange] = useState('7days');
   const [settings, setSettings] = useState({ timeSlots: [] });
+  const [engagement, setEngagement] = useState({
+    totalLikes: 0, totalComments: 0, totalShares: 0, postCount: 0,
+    byPlatform: {
+      facebook: { likes: 0, comments: 0, shares: 0, posts: 0 },
+      instagram: { likes: 0, comments: 0, shares: 0, posts: 0 }
+    }
+  });
   const [stats, setStats] = useState({
     activeWorkflows: 0, totalPosts: 0, successRate: 100,
-    storageUsed: 0, storageLimit: 2048, chartData: [],
+    storageUsed: 0, storageLimit: 2048,
     socialHealth: { connected: 0, total: 4, platforms: {} },
     dbHealth: 100, recentActivities: []
   });
+  const [isTracking, setIsTracking] = useState(false);
+  const [accounts, setAccounts] = useState([]);
+  const [selectedAccount, setSelectedAccount] = useState('');
   const navigate = useNavigate();
+
+  useEffect(() => {
+    // Lấy danh sách tài khoản 1 lần
+    fetch('/api/accounts').then(r => r.json()).then(data => setAccounts(data || [])).catch(() => {});
+  }, []);
 
   useEffect(() => {
     const fetchAll = async () => {
       try {
-        const [statsRes, settingsRes] = await Promise.all([
-          fetch(`/api/dashboard?timeRange=${timeRange}`),
-          fetch('/api/settings')
+        const accParam = selectedAccount ? `&accountId=${selectedAccount}` : '';
+        const [statsRes, settingsRes, engagementRes] = await Promise.all([
+          fetch(`/api/dashboard?timeRange=7days`),
+          fetch('/api/settings'),
+          fetch(`/api/dashboard/engagement?${accParam}`)
         ]);
         const statsData = await statsRes.json();
         const settingsData = await settingsRes.json();
-        setStats({ ...statsData, chartData: Array.isArray(statsData.chartData) ? statsData.chartData : [] });
+        const engagementData = await engagementRes.json();
+        setStats(statsData);
         setSettings(settingsData);
+        if (engagementData.today) setEngagement(engagementData.today);
       } catch (err) { console.error(err); }
     };
     fetchAll();
     const interval = setInterval(fetchAll, 10000);
     return () => clearInterval(interval);
-  }, [timeRange]);
+  }, [selectedAccount]);
 
   const storagePercent = stats.storageUsed > 0 ? Math.min(100, (stats.storageUsed / (stats.storageLimit || 2048)) * 100) : 0;
   const platforms = stats.socialHealth?.platforms || {};
@@ -59,6 +85,24 @@ const Dashboard = () => {
   const currentTime = `${now.getHours().toString().padStart(2,'0')}:${now.getMinutes().toString().padStart(2,'0')}`;
   const upcomingSlots = (settings.timeSlots || []).filter(slot => slot > currentTime);
   const passedSlots = (settings.timeSlots || []).filter(slot => slot <= currentTime);
+
+  // Tính % cho thanh ngang FB/IG
+  const totalEng = engagement.totalLikes + engagement.totalComments + engagement.totalShares;
+  const fbTotal = engagement.byPlatform.facebook.likes + engagement.byPlatform.facebook.comments + engagement.byPlatform.facebook.shares;
+  const igTotal = engagement.byPlatform.instagram.likes + engagement.byPlatform.instagram.comments + engagement.byPlatform.instagram.shares;
+  const fbPercent = totalEng > 0 ? (fbTotal / totalEng * 100) : 50;
+  const igPercent = totalEng > 0 ? (igTotal / totalEng * 100) : 50;
+
+  const trackNow = async () => {
+    setIsTracking(true);
+    try {
+      const accParam = selectedAccount ? `?accountId=${selectedAccount}` : '';
+      const res = await fetch(`/api/dashboard/track-now${accParam}`, { method: 'POST' });
+      const data = await res.json();
+      if (data.today) setEngagement(data.today);
+    } catch (err) { console.error(err); }
+    setIsTracking(false);
+  };
 
   return (
     <div className="dashboard">
@@ -81,17 +125,6 @@ const Dashboard = () => {
           <div className="stat-value"><h2>{stats.totalPosts}</h2></div>
         </div>
 
-        <div className="stat-card" onClick={() => navigate('/calendar')}>
-          <div className="stat-header">
-            <h3>Tỷ lệ duyệt</h3>
-            <div className="stat-icon-wrapper green"><CheckCircle size={14} /></div>
-          </div>
-          <div className="stat-value"><h2>{stats.successRate}<span className="unit">%</span></h2></div>
-          <div className="progress-bar-container">
-            <div className="progress-bar-fill green" style={{width: `${stats.successRate}%`}}></div>
-          </div>
-        </div>
-
         <div className="stat-card" onClick={() => navigate('/drive')}>
           <div className="stat-header">
             <h3>Dung lượng Drive</h3>
@@ -103,10 +136,18 @@ const Dashboard = () => {
           </div>
         </div>
 
+        <div className="stat-card">
+          <div className="stat-header">
+            <h3>Nền tảng kết nối</h3>
+            <div className="stat-icon-wrapper pink"><Share2 size={14} /></div>
+          </div>
+          <div className="stat-value"><h2>{stats.socialHealth?.connected || 0}<span className="unit">/ {stats.socialHealth?.total || 4}</span></h2></div>
+        </div>
+
         <div className="stat-card" onClick={() => navigate('/workflow')}>
           <div className="stat-header">
             <h3>Luồng đang chạy</h3>
-            <div className="stat-icon-wrapper pink"><Activity size={14} /></div>
+            <div className="stat-icon-wrapper green"><Activity size={14} /></div>
           </div>
           <div className="stat-value"><h2>{stats.activeWorkflows}<span className="unit">Active</span></h2></div>
         </div>
@@ -132,41 +173,85 @@ const Dashboard = () => {
 
       {/* ═══ Main Content ═══ */}
       <div className="dashboard-main">
-        {/* ─── Chart ─── */}
-        <div className="chart-section">
-          <div className="chart-header">
+        {/* ─── Engagement Widget (thay thế biểu đồ cũ) ─── */}
+        <div className="engagement-section">
+          <div className="engagement-header">
             <h3>
-              <span className="chart-icon"><BarChart2 size={14} /></span>
-              Số bài đã đăng
+              <span className="engagement-icon"><TrendingUp size={14} /></span>
+              Tương tác hôm nay
             </h3>
-            <select className="time-range-select" value={timeRange} onChange={(e) => setTimeRange(e.target.value)}>
-              <option value="7days">7 ngày qua</option>
-              <option value="today">Hôm nay</option>
-              <option value="yesterday">Hôm qua</option>
-              <option value="this_month">Tháng này</option>
-              <option value="last_month">Tháng trước</option>
-            </select>
+            <div className="engagement-meta">
+              <select className="eng-account-select" value={selectedAccount} onChange={e => setSelectedAccount(e.target.value)}>
+                <option value="">Tất cả tài khoản</option>
+                {accounts.filter(a => a.isActive).map(acc => (
+                  <option key={acc.id} value={acc.id}>{acc.name}</option>
+                ))}
+              </select>
+              <span className="engagement-post-count">{engagement.postCount} bài</span>
+              <button className={`eng-refresh-btn ${isTracking ? 'spinning' : ''}`} onClick={trackNow} disabled={isTracking} title="Quét tương tác ngay">
+                <RefreshCw size={12} />
+              </button>
+              <span className="engagement-live-dot"></span>
+              <span className="engagement-live-label">LIVE</span>
+            </div>
           </div>
-          <div className="chart-container">
-            <ResponsiveContainer width="100%" height={200}>
-              <BarChart data={stats.chartData} barCategoryGap="20%">
-                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="rgba(255,255,255,0.04)" />
-                <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: 'rgba(255,255,255,.35)', fontSize: 10 }} dy={6} />
-                <YAxis axisLine={false} tickLine={false} tick={{ fill: 'rgba(255,255,255,.25)', fontSize: 10 }} width={24} allowDecimals={false} />
-                <Tooltip content={<CustomTooltip />} cursor={{ fill: 'rgba(255,255,255,0.03)' }} />
-                <Bar dataKey="value" radius={[6, 6, 0, 0]} maxBarSize={36}>
-                  {stats.chartData.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={entry.value > 0 ? 'url(#barGrad)' : 'rgba(255,255,255,.04)'} />
-                  ))}
-                </Bar>
-                <defs>
-                  <linearGradient id="barGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="var(--color-primary)" stopOpacity={0.9} />
-                    <stop offset="100%" stopColor="var(--color-primary)" stopOpacity={0.3} />
-                  </linearGradient>
-                </defs>
-              </BarChart>
-            </ResponsiveContainer>
+
+          {/* 3 Metric Cards */}
+          <div className="engagement-metrics">
+            <div className="eng-card eng-likes">
+              <div className="eng-card-icon"><Heart size={16} /></div>
+              <div className="eng-card-body">
+                <div className="eng-card-value"><AnimatedNumber value={engagement.totalLikes} /></div>
+                <div className="eng-card-label">Lượt thích</div>
+              </div>
+            </div>
+            <div className="eng-card eng-comments">
+              <div className="eng-card-icon"><MessageCircle size={16} /></div>
+              <div className="eng-card-body">
+                <div className="eng-card-value"><AnimatedNumber value={engagement.totalComments} /></div>
+                <div className="eng-card-label">Bình luận</div>
+              </div>
+            </div>
+            <div className="eng-card eng-shares">
+              <div className="eng-card-icon"><Repeat2 size={16} /></div>
+              <div className="eng-card-body">
+                <div className="eng-card-value"><AnimatedNumber value={engagement.totalShares} /></div>
+                <div className="eng-card-label">Chia sẻ</div>
+              </div>
+            </div>
+          </div>
+
+          {/* Platform Breakdown */}
+          <div className="engagement-breakdown">
+            <div className="breakdown-header">
+              <span className="breakdown-title">Phân bổ theo nền tảng</span>
+            </div>
+            
+            <div className="breakdown-bar-container">
+              <div className="breakdown-stacked-bar">
+                <div className="breakdown-bar-fb" style={{width: `${fbPercent}%`}}></div>
+                <div className="breakdown-bar-ig" style={{width: `${igPercent}%`}}></div>
+              </div>
+            </div>
+
+            <div className="breakdown-legend">
+              <div className="breakdown-item">
+                <span className="breakdown-dot fb"></span>
+                <Facebook size={12} />
+                <span className="breakdown-platform-name">Facebook</span>
+                <span className="breakdown-detail">
+                  {engagement.byPlatform.facebook.likes}❤️ {engagement.byPlatform.facebook.comments}💬 {engagement.byPlatform.facebook.shares}🔄
+                </span>
+              </div>
+              <div className="breakdown-item">
+                <span className="breakdown-dot ig"></span>
+                <Instagram size={12} />
+                <span className="breakdown-platform-name">Instagram</span>
+                <span className="breakdown-detail">
+                  {engagement.byPlatform.instagram.likes}❤️ {engagement.byPlatform.instagram.comments}💬
+                </span>
+              </div>
+            </div>
           </div>
         </div>
 

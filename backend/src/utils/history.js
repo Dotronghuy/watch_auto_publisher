@@ -1,4 +1,5 @@
 import sqlite3 from 'sqlite3';
+import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -27,9 +28,15 @@ const db = new sqlite3.Database(DB_FILE, (err) => {
       content TEXT,
       likes INTEGER DEFAULT 0,
       comments INTEGER DEFAULT 0,
+      shares INTEGER DEFAULT 0,
       timestamp INTEGER NOT NULL,
       last_tracked INTEGER DEFAULT 0
     )`);
+
+    // Thêm cột shares nếu DB đã tồn tại từ trước (migration)
+    db.run(`ALTER TABLE post_metrics ADD COLUMN shares INTEGER DEFAULT 0`, (err) => {
+      // Bỏ qua lỗi nếu cột đã tồn tại
+    });
   }
 });
 
@@ -112,15 +119,106 @@ export const addPostMetric = async (platform, postId, sku, content) => {
   });
 };
 
-export const updatePostMetrics = async (postId, likes, comments) => {
+export const updatePostMetrics = async (postId, likes, comments, shares = 0) => {
   return new Promise((resolve, reject) => {
     const now = Date.now();
     db.run(
-      'UPDATE post_metrics SET likes = ?, comments = ?, last_tracked = ? WHERE post_id = ?',
-      [likes, comments, now, postId],
+      'UPDATE post_metrics SET likes = ?, comments = ?, shares = ?, last_tracked = ? WHERE post_id = ?',
+      [likes, comments, shares, now, postId],
       (err) => resolve()
     );
   });
+};
+
+// Lấy tổng hợp tương tác trong ngày hôm nay (real-time engagement)
+// accountId: (optional) lọc theo tài khoản, dựa trên fbPageId/igUserId từ accounts.json
+export const getTodayEngagement = async (accountFilter = null) => {
+  try {
+    const now = new Date();
+    const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    
+    // Lấy tất cả bài đăng trong ngày (không GROUP BY để có thể phân loại theo account)
+    const rows = await runQuery(
+      `SELECT post_id, platform, likes, comments, shares
+       FROM post_metrics
+       WHERE timestamp >= ?`,
+      [startOfDay]
+    );
+
+    // Đọc danh sách accounts để mapping post_id -> account
+    let accounts = [];
+    try {
+      const accountsPath = path.join(__dirname, '../../config/accounts.json');
+      if (fs.existsSync(accountsPath)) {
+        accounts = JSON.parse(fs.readFileSync(accountsPath, 'utf8'));
+      }
+    } catch (e) { /* ignore */ }
+
+    // Hàm xác định account từ post_id
+    const getAccountForPost = (postId, platform) => {
+      if (platform === 'facebook' || platform === 'facebook_reels') {
+        // FB post_id format: pageId_postId
+        const parts = postId.split('_');
+        if (parts.length > 1) {
+          const pageId = parts[0];
+          return accounts.find(a => a.fbPageId && a.fbPageId.trim() === pageId) || null;
+        }
+      } else if (platform === 'instagram') {
+        // IG: không thể xác định từ post_id, trả về account IG đầu tiên active
+        // (Tương lai khi có thêm cột account_id sẽ chính xác hơn)
+        return accounts.find(a => a.igUserId && a.isActive) || null;
+      }
+      return null;
+    };
+
+    const result = {
+      totalLikes: 0, totalComments: 0, totalShares: 0, postCount: 0,
+      byPlatform: {
+        facebook: { likes: 0, comments: 0, shares: 0, posts: 0 },
+        instagram: { likes: 0, comments: 0, shares: 0, posts: 0 }
+      },
+      byAccount: {} // { accountId: { name, likes, comments, shares, posts } }
+    };
+
+    for (const row of rows) {
+      const account = getAccountForPost(row.post_id, row.platform);
+
+      // Nếu có filter accountId và post không thuộc account đó → bỏ qua
+      if (accountFilter && (!account || account.id !== accountFilter)) continue;
+
+      const likes = row.likes || 0;
+      const comments = row.comments || 0;
+      const shares = row.shares || 0;
+
+      result.totalLikes += likes;
+      result.totalComments += comments;
+      result.totalShares += shares;
+      result.postCount++;
+
+      // Gộp facebook_reels vào facebook
+      const platformKey = (row.platform === 'facebook' || row.platform === 'facebook_reels') ? 'facebook' : 'instagram';
+      result.byPlatform[platformKey].likes += likes;
+      result.byPlatform[platformKey].comments += comments;
+      result.byPlatform[platformKey].shares += shares;
+      result.byPlatform[platformKey].posts++;
+
+      // Gộp theo account
+      if (account) {
+        if (!result.byAccount[account.id]) {
+          result.byAccount[account.id] = { name: account.name, likes: 0, comments: 0, shares: 0, posts: 0 };
+        }
+        result.byAccount[account.id].likes += likes;
+        result.byAccount[account.id].comments += comments;
+        result.byAccount[account.id].shares += shares;
+        result.byAccount[account.id].posts++;
+      }
+    }
+
+    return result;
+  } catch (err) {
+    console.error('Lỗi getTodayEngagement:', err);
+    return { totalLikes: 0, totalComments: 0, totalShares: 0, postCount: 0, byPlatform: { facebook: { likes: 0, comments: 0, shares: 0, posts: 0 }, instagram: { likes: 0, comments: 0, shares: 0, posts: 0 } }, byAccount: {} };
+  }
 };
 
 export const getPostsToTrack = async () => {

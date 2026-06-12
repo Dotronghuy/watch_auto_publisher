@@ -1,3 +1,5 @@
+sau này tôi muốn real time trực tiếp ấy thì phải làm như thế nào và kết nối lại database giữa máy cty và máy nhà, tại sau này còn cho nhân viên tôi làm
+
 # Hỗ Trợ Đăng Nhiều Tài Khoản Fanpage & Instagram Cùng Lúc
 
 Yêu cầu của bạn là: Khi hệ thống bốc được 1 mã sản phẩm (SKU), nó sẽ tự động **đăng lên nhiều Fanpage và tài khoản IG khác nhau**. Đối với mỗi Fanpage/IG, nội dung bài viết (Caption) do AI sinh ra phải **hoàn toàn khác nhau (Unique)** để tránh bị Facebook đánh dấu Spam và phù hợp với từng tệp khách hàng.

@@ -14,7 +14,8 @@ import { getProductInfoBySku } from '../services/sheet.service.js';
 import { openLoginHelper, generateContentOnChatGPT, generateBackgroundOnChatGPT, analyzeNewSampleImages } from '../services/playwright.service.js';
 import { publishQueue } from '../workers/queue.js';
 import { recentActivities, addActivity } from '../utils/activity.js';
-import { getAllPostedHistory } from '../utils/history.js';
+import { getAllPostedHistory, getTodayEngagement } from '../utils/history.js';
+import { trackPostMetrics } from '../services/tracking.service.js';
 import logEmitter from '../utils/liveLog.js';
 import { getFoldersInFolder, getImagesInFolder, getFolderIdByName, downloadFileFromDrive } from '../services/drive.service.js';
 import { initCRMDB, getConversations, getMessagesByConversation, saveMessage, markConversationAsRead, getConversationById, getCustomerProfile, updateCustomerProfile } from '../utils/crm.db.js';
@@ -234,6 +235,32 @@ router.get('/dashboard', async (req, res) => {
   }
 });
 
+// 1b. Dashboard Engagement - Tổng hợp tương tác real-time trong ngày
+router.get('/dashboard/engagement', async (req, res) => {
+  try {
+    const accountId = req.query.accountId || null;
+    const engagement = await getTodayEngagement(accountId);
+    res.json({ today: engagement });
+  } catch (err) {
+    console.error('Lỗi lấy engagement:', err);
+    res.status(500).json({ error: 'Cannot fetch engagement data' });
+  }
+});
+
+// 1c. Quét tương tác ngay lập tức (trigger thủ công)
+router.post('/dashboard/track-now', async (req, res) => {
+  try {
+    const accountId = req.query.accountId || null;
+    console.log('📊 [Thủ công] Đang quét tương tác bài viết...');
+    await trackPostMetrics();
+    const engagement = await getTodayEngagement(accountId);
+    console.log('✅ [Thủ công] Quét tương tác hoàn tất!');
+    res.json({ success: true, today: engagement });
+  } catch (err) {
+    console.error('Lỗi quét tương tác:', err);
+    res.status(500).json({ error: 'Tracking failed' });
+  }
+});
 // 2. Lấy danh sách sản phẩm (Kéo trực tiếp từ Google Sheet THẬT)
 router.get('/products', async (req, res) => {
   try {

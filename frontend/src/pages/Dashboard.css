@@ -180,24 +180,24 @@
   gap: 14px;
 }
 
-/* ─── Chart Section ─── */
-.chart-section {
+/* ─── Engagement Widget ─── */
+.engagement-section {
   background: linear-gradient(180deg, rgba(255,255,255,.03) 0%, rgba(0,0,0,.12) 100%);
   border: 1px solid rgba(255,255,255,.06);
   border-radius: 12px;
   padding: 18px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 16px;
 }
 
-.chart-header {
+.engagement-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
 }
 
-.chart-header h3 {
+.engagement-header h3 {
   font-size: 13px;
   font-weight: 700;
   display: flex;
@@ -205,31 +205,266 @@
   gap: 8px;
 }
 
-.chart-header .chart-icon {
+.engagement-icon {
   width: 26px;
   height: 26px;
   border-radius: 6px;
-  background: rgba(255,77,141,.1);
-  color: var(--color-primary);
+  background: rgba(52,211,153,.1);
+  color: #34d399;
   display: flex;
   align-items: center;
   justify-content: center;
 }
 
-.time-range-select {
+.engagement-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.engagement-post-count {
+  font-size: 11px;
+  color: var(--color-text-muted);
+  font-weight: 500;
+  background: rgba(255,255,255,.04);
+  padding: 3px 10px;
+  border-radius: 12px;
+}
+
+.eng-account-select {
   background: rgba(0,0,0,.3);
   color: var(--color-text-muted);
   border: 1px solid rgba(255,255,255,.08);
-  padding: 5px 10px;
+  padding: 4px 10px;
   border-radius: 6px;
   outline: none;
   font-size: 11px;
+  font-weight: 600;
   cursor: pointer;
+  transition: border-color .2s;
+  max-width: 160px;
 }
 
-.time-range-select option {
+.eng-account-select:hover,
+.eng-account-select:focus {
+  border-color: rgba(52,211,153,.4);
+  color: #fff;
+}
+
+.eng-account-select option {
   background: var(--color-surface);
   color: var(--color-text);
+}
+
+.engagement-live-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #ef4444;
+  box-shadow: 0 0 8px rgba(239,68,68,.6);
+  animation: livePulse 1.5s infinite;
+}
+
+@keyframes livePulse {
+  0%, 100% { box-shadow: 0 0 6px rgba(239,68,68,.5); }
+  50% { box-shadow: 0 0 14px rgba(239,68,68,.8); }
+}
+
+.engagement-live-label {
+  font-size: 9px;
+  font-weight: 800;
+  color: #ef4444;
+  letter-spacing: .08em;
+}
+
+.eng-refresh-btn {
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  border: 1px solid rgba(255,255,255,.08);
+  background: rgba(255,255,255,.04);
+  color: var(--color-text-muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all .2s;
+}
+
+.eng-refresh-btn:hover {
+  background: rgba(52,211,153,.1);
+  border-color: rgba(52,211,153,.3);
+  color: #34d399;
+}
+
+.eng-refresh-btn.spinning svg {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* ─── Metric Cards ─── */
+.engagement-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+
+.eng-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px;
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,.04);
+  transition: transform .2s, border-color .2s;
+}
+
+.eng-card:hover {
+  transform: translateY(-2px);
+  border-color: rgba(255,255,255,.1);
+}
+
+.eng-likes {
+  background: linear-gradient(135deg, rgba(239,68,68,.08) 0%, rgba(239,68,68,.02) 100%);
+}
+.eng-comments {
+  background: linear-gradient(135deg, rgba(96,165,250,.08) 0%, rgba(96,165,250,.02) 100%);
+}
+.eng-shares {
+  background: linear-gradient(135deg, rgba(168,85,247,.08) 0%, rgba(168,85,247,.02) 100%);
+}
+
+.eng-card-icon {
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.eng-likes .eng-card-icon {
+  background: rgba(239,68,68,.12);
+  color: #f87171;
+}
+.eng-comments .eng-card-icon {
+  background: rgba(96,165,250,.12);
+  color: #60a5fa;
+}
+.eng-shares .eng-card-icon {
+  background: rgba(168,85,247,.12);
+  color: #a855f7;
+}
+
+.eng-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.eng-card-value {
+  font-size: 24px;
+  font-weight: 800;
+  letter-spacing: -.02em;
+  line-height: 1;
+}
+
+.eng-likes .eng-card-value { color: #f87171; }
+.eng-comments .eng-card-value { color: #60a5fa; }
+.eng-shares .eng-card-value { color: #a855f7; }
+
+.eng-card-label {
+  font-size: 10px;
+  color: var(--color-text-muted);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+
+/* ─── Platform Breakdown ─── */
+.engagement-breakdown {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 4px;
+  border-top: 1px solid rgba(255,255,255,.04);
+}
+
+.breakdown-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.breakdown-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-text-muted);
+}
+
+.breakdown-bar-container {
+  width: 100%;
+}
+
+.breakdown-stacked-bar {
+  display: flex;
+  height: 8px;
+  border-radius: 4px;
+  overflow: hidden;
+  background: rgba(255,255,255,.04);
+}
+
+.breakdown-bar-fb {
+  background: linear-gradient(90deg, #3b82f6, #60a5fa);
+  transition: width .6s ease;
+  border-radius: 4px 0 0 4px;
+}
+
+.breakdown-bar-ig {
+  background: linear-gradient(90deg, #e879a8, #ec4899);
+  transition: width .6s ease;
+  border-radius: 0 4px 4px 0;
+}
+
+.breakdown-legend {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.breakdown-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: rgba(255,255,255,.7);
+}
+
+.breakdown-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.breakdown-dot.fb { background: #60a5fa; }
+.breakdown-dot.ig { background: #ec4899; }
+
+.breakdown-platform-name {
+  font-weight: 600;
+  min-width: 70px;
+}
+
+.breakdown-detail {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--color-text-dim);
+  font-weight: 500;
 }
 
 /* ─── Sidebar ─── */

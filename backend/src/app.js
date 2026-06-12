@@ -79,7 +79,7 @@ app.listen(PORT, async () => {
 
   // 3. Khởi động Background Job để tracking Metrics
   setInterval(async () => {
-    console.log('📊 Đang chạy tiến trình quét tương tác bài viết (30 phút/lần)...');
+    console.log('📊 Đang chạy tiến trình quét tương tác bài viết (5 phút/lần)...');
     await trackPostMetrics();
-  }, 30 * 60 * 1000); // Mỗi 30 phút
+  }, 5 * 60 * 1000); // Mỗi 5 phút
 });

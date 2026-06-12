@@ -3,10 +3,14 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "dev": "concurrently \"npm --prefix backend run dev\" \"npm --prefix frontend run dev\" \"ngrok http 5173\"",
-    "dev:no-ngrok": "concurrently \"npm --prefix backend run dev\" \"npm --prefix frontend run dev\""
+    "dev": "concurrently \"npm --prefix backend run dev\" \"npx wait-on http://localhost:3000/api/settings && npm --prefix frontend run dev\" \"ngrok http 5173\"",
+    "dev:no-ngrok": "concurrently \"npm --prefix backend run dev\" \"npx wait-on http://localhost:3000/api/settings && npm --prefix frontend run dev\""
   },
   "devDependencies": {
-    "concurrently": "^8.2.2"
+    "concurrently": "^8.2.2",
+    "wait-on": "^9.0.10"
+  },
+  "dependencies": {
+    "@napi-rs/canvas": "^1.0.0"
   }
 }
