@@ -1,4 +1,4 @@
-sau này tôi muốn real time trực tiếp ấy thì phải làm như thế nào và kết nối lại database giữa máy cty và máy nhà, tại sau này còn cho nhân viên tôi làm
+
 
 # Hỗ Trợ Đăng Nhiều Tài Khoản Fanpage & Instagram Cùng Lúc
 

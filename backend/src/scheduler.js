@@ -1,4 +1,4 @@
-import { publishQueue } from './workers/queue.js';
+import { publishQueue, connection as redisConnection } from './workers/queue.js';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -123,14 +123,22 @@ export const startScheduler = async () => {
 
       console.log(`✅ Đã lên lịch thành công tổng cộng ${timeSlots.length} khung giờ đăng bài mỗi ngày.`);
 
-      // --- CƠ CHẾ CHẠY BÙ (CATCH-UP) ---
+      // --- CƠ CHẾ CHẠY BÙ (CATCH-UP) --- Dùng Redis Cloud để đồng bộ giữa các máy
       try {
-        const lastRunPath = path.join(__dirname, '../config/last_run.json');
         const now = new Date();
         let lastRunTime = 0;
-        if (fs.existsSync(lastRunPath)) {
-          const lastRunData = JSON.parse(fs.readFileSync(lastRunPath, 'utf8'));
-          lastRunTime = lastRunData.timestamp || 0;
+        
+        // Đọc last_run từ Redis Cloud (đồng bộ giữa máy công ty & máy nhà)
+        try {
+          const redisLastRun = await redisConnection.get('last_run_timestamp');
+          if (redisLastRun) lastRunTime = parseInt(redisLastRun, 10);
+        } catch (redisErr) {
+          // Fallback: đọc từ file local nếu Redis lỗi
+          const lastRunPath = path.join(__dirname, '../config/last_run.json');
+          if (fs.existsSync(lastRunPath)) {
+            const lastRunData = JSON.parse(fs.readFileSync(lastRunPath, 'utf8'));
+            lastRunTime = lastRunData.timestamp || 0;
+          }
         }
 
         const currentMinutes = now.getHours() * 60 + now.getMinutes();
@@ -161,8 +169,12 @@ export const startScheduler = async () => {
             console.log(`  📌 Đã lên lịch chạy bù cho khung ${missedSlots[i].time} (delay ${10 + i * 30}s)`);
           }
           
-          // Cập nhật last_run để không bị chạy bù lặp lại
+          // Cập nhật last_run lên Redis Cloud + file local (backup)
           const latestMissed = missedSlots[missedSlots.length - 1].timestamp;
+          try {
+            await redisConnection.set('last_run_timestamp', String(latestMissed));
+          } catch (e) { /* ignore */ }
+          const lastRunPath = path.join(__dirname, '../config/last_run.json');
           fs.writeFileSync(lastRunPath, JSON.stringify({ timestamp: latestMissed }), 'utf8');
         }
       } catch (e) {
