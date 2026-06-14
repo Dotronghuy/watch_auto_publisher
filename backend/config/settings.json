@@ -1,11 +1,5 @@
 {
-  "timeSlots": [
-    "09:30",
-    "11:30",
-    "14:00",
-    "16:00",
-    "17:00"
-  ],
+  "timeSlots": [],
   "igDelay": 10,
   "delayUnit": "minutes",
   "mode": "real",
