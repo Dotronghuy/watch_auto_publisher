@@ -2,7 +2,7 @@ import axios from 'axios';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { saveConversation, saveMessage, getConversationById } from '../utils/crm.db.js';
+import { saveConversation, saveMessage, getConversationById, getMessageById } from '../utils/crm.db.js';
 import dotenv from 'dotenv';
 dotenv.config();
 
@@ -58,14 +58,28 @@ export const fetchFacebookInbox = async (pageToken, accountId, fbPageId) => {
         // So sánh trực tiếp với Page ID để xác định tin nhắn từ Page
         const isFromPage = pageIdTrimmed ? msg.from?.id === pageIdTrimmed : msg.from?.id !== sender.id;
         let text = msg.message || '';
+        let imageUrl = null;
         if (msg.attachments && msg.attachments.data) {
           for (const att of msg.attachments.data) {
-            if (att.image_data && att.image_data.url) text += `\n[IMAGE: ${att.image_data.url}]`;
+            if (att.image_data && att.image_data.url) {
+              text += `\n[IMAGE: ${att.image_data.url}]`;
+              if (!imageUrl) imageUrl = att.image_data.url;
+            }
             else if (att.video_data && att.video_data.url) text += `\n[VIDEO: ${att.video_data.url}]`;
             else if (att.file_url) text += `\n[FILE: ${att.file_url}]`;
           }
         }
+        
+        const existingMsg = await getMessageById(msg.id);
         await saveMessage(msg.id, conv.id, text.trim() || '📸 Tệp đính kèm', isFromPage, msg.created_time);
+        
+        // Cú trigger thủ công khi bấm Sync (dành cho test không có webhook)
+        if (!existingMsg && !isFromPage) {
+          try {
+            const { handleIncomingMessage } = await import('./chatbot.service.js');
+            handleIncomingMessage(conv.id, text.trim(), imageUrl).catch(e => console.error('Chatbot Sync error:', e.message));
+          } catch(err) {}
+        }
       }
     }
   } catch (error) {
@@ -142,14 +156,27 @@ export const fetchInstagramInbox = async (pageToken, accountId, igUserId) => {
       for (const msg of messages) {
         const isFromPage = igUserId ? msg.from?.id === igUserId : msg.from?.id !== sender.id;
         let text = msg.message || '';
+        let imageUrl = null;
         if (msg.attachments && msg.attachments.data) {
           for (const att of msg.attachments.data) {
-            if (att.image_data && att.image_data.url) text += `\n[IMAGE: ${att.image_data.url}]`;
+            if (att.image_data && att.image_data.url) {
+              text += `\n[IMAGE: ${att.image_data.url}]`;
+              if (!imageUrl) imageUrl = att.image_data.url;
+            }
             else if (att.video_data && att.video_data.url) text += `\n[VIDEO: ${att.video_data.url}]`;
             else if (att.file_url) text += `\n[FILE: ${att.file_url}]`;
           }
         }
+
+        const existingMsg = await getMessageById(msg.id);
         await saveMessage(msg.id, conv.id, text.trim() || '📸 Tệp đính kèm', isFromPage, msg.created_time);
+
+        if (!existingMsg && !isFromPage) {
+          try {
+            const { handleIncomingMessage } = await import('./chatbot.service.js');
+            handleIncomingMessage(conv.id, text.trim(), imageUrl).catch(e => console.error('Chatbot Sync IG error:', e.message));
+          } catch(err) {}
+        }
       }
     }
   } catch (error) {

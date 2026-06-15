@@ -15,6 +15,8 @@ import { publishToInstagram, publishCarouselToInstagram, publishFBReels, publish
 import { addMusicToVideo } from './video.service.js';
 import { addActivity } from '../utils/activity.js';
 import { liveLog } from '../utils/liveLog.js';
+import { computeHashFromBuffer } from './image-hash.service.js';
+import { saveImageHash } from '../utils/crm.db.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -1681,6 +1683,16 @@ export const autoPublishRoutine = async () => {
                   await addPostMetric('facebook', postId, selectedSku.name, postContent);
                   liveLog(`✅ [${account.name}] Đăng FB 1 ảnh thành công! (ID: ${postId})`, 'success', 'Facebook');
 
+                  // Lớp 1: Lưu hash ảnh vừa đăng vào DB
+                  try {
+                    const imgBuffer = fs.readFileSync(localFilePaths[0]);
+                    const hash = await computeHashFromBuffer(imgBuffer);
+                    if (hash) {
+                      await saveImageHash(hash, selectedSku.name, 'post');
+                      console.log(`✅ Đã lưu hash ảnh (Lớp 1) cho SKU ${selectedSku.name}`);
+                    }
+                  } catch(e) { console.error('Lỗi tính hash Lớp 1:', e.message); }
+
                   const igTokenToUse = account.name === 'Mặc định (.env)' ? process.env.IG_ACCESS_TOKEN : account.igAccessToken;
                   const igUserToUse = account.name === 'Mặc định (.env)' ? process.env.IG_USER_ID : account.igUserId;
 
@@ -1734,6 +1746,16 @@ export const autoPublishRoutine = async () => {
                   postId = feedRes.data.id;
                   await addPostMetric('facebook', postId, selectedSku.name, postContent);
                   liveLog(`✅ [${account.name}] Đăng Album FB thành công! (ID: ${postId})`, 'success', 'Facebook');
+
+                  // Lớp 1: Lưu hash các ảnh trong album vừa đăng
+                  for (let idx = 0; idx < localFilePaths.length; idx++) {
+                    try {
+                      const imgBuffer = fs.readFileSync(localFilePaths[idx]);
+                      const hash = await computeHashFromBuffer(imgBuffer);
+                      if (hash) await saveImageHash(hash, selectedSku.name, 'post');
+                    } catch(e) {}
+                  }
+                  console.log(`✅ Đã lưu hash cho ${localFilePaths.length} ảnh album (Lớp 1) SKU ${selectedSku.name}`);
 
                   const igTokenToUse = account.name === 'Mặc định (.env)' ? process.env.IG_ACCESS_TOKEN : account.igAccessToken;
                   const igUserToUse = account.name === 'Mặc định (.env)' ? process.env.IG_USER_ID : account.igUserId;

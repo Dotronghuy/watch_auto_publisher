@@ -30,12 +30,29 @@ export const initCRMDB = () => {
           unread_count INTEGER DEFAULT 0,
           is_read INTEGER DEFAULT 0,
           updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-          account_id TEXT -- Để biết đoạn chat này thuộc Page/Account nào
+          account_id TEXT, -- Để biết đoạn chat này thuộc Page/Account nào
+          bot_paused INTEGER DEFAULT 0,
+          bot_paused_at DATETIME
         )
       `);
 
       // Thêm cột is_read cho DB cũ (nếu chưa có)
       db.run('ALTER TABLE conversations ADD COLUMN is_read INTEGER DEFAULT 0', () => {});
+      
+      // Thêm cột bot_paused và bot_paused_at cho chức năng Chatbot AI
+      db.run('ALTER TABLE conversations ADD COLUMN bot_paused INTEGER DEFAULT 0', () => {});
+      db.run('ALTER TABLE conversations ADD COLUMN bot_paused_at DATETIME', () => {});
+
+      // Bảng image_hashes (lưu perceptual hash cho ảnh sản phẩm - Lớp 1 & Lớp 2)
+      db.run(`
+        CREATE TABLE IF NOT EXISTS image_hashes (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          hash TEXT NOT NULL,
+          product_sku TEXT NOT NULL,
+          source_type TEXT NOT NULL, -- 'post' hoặc 'sheet'
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
 
       // Bảng messages (tin nhắn chi tiết hoặc comment cụ thể)
       db.run(`
@@ -171,6 +188,15 @@ export const getMessagesByConversation = (conversationId) => {
   });
 };
 
+export const getMessageById = (id) => {
+  return new Promise((resolve, reject) => {
+    db.get(`SELECT * FROM messages WHERE id = ?`, [id], (err, row) => {
+      if (err) reject(err);
+      else resolve(row);
+    });
+  });
+};
+
 // --- Customer Profile Methods ---
 
 export const getCustomerProfile = (id) => {
@@ -224,6 +250,54 @@ export const updateCustomerProfile = (id, data) => {
         if (err2) reject(err2);
         else resolve();
       });
+    });
+  });
+};
+
+// --- Chatbot & Image Hash Methods ---
+
+export const updateBotPausedStatus = (conversationId, isPaused) => {
+  return new Promise((resolve, reject) => {
+    const pausedVal = isPaused ? 1 : 0;
+    const pausedAt = isPaused ? new Date().toISOString() : null;
+    db.run(
+      `UPDATE conversations SET bot_paused = ?, bot_paused_at = ? WHERE id = ?`,
+      [pausedVal, pausedAt, conversationId],
+      function (err) {
+        if (err) reject(err);
+        else resolve(this.changes);
+      }
+    );
+  });
+};
+
+export const saveImageHash = (hash, productSku, sourceType) => {
+  return new Promise((resolve, reject) => {
+    db.run(
+      `INSERT INTO image_hashes (hash, product_sku, source_type) VALUES (?, ?, ?)`,
+      [hash, productSku, sourceType],
+      function (err) {
+        if (err) reject(err);
+        else resolve(this.lastID);
+      }
+    );
+  });
+};
+
+export const getAllImageHashes = () => {
+  return new Promise((resolve, reject) => {
+    db.all(`SELECT * FROM image_hashes`, [], (err, rows) => {
+      if (err) reject(err);
+      else resolve(rows);
+    });
+  });
+};
+
+export const clearImageHashesBySource = (sourceType) => {
+  return new Promise((resolve, reject) => {
+    db.run(`DELETE FROM image_hashes WHERE source_type = ?`, [sourceType], function (err) {
+      if (err) reject(err);
+      else resolve(this.changes);
     });
   });
 };

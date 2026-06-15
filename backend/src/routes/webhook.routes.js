@@ -5,6 +5,7 @@ import { fileURLToPath } from 'url';
 import { saveConversation, saveMessage, getConversations } from '../utils/crm.db.js';
 import { broadcastCRM } from './api.routes.js';
 import { autoTagCustomer } from '../services/autotag.service.js';
+import { handleIncomingMessage } from '../services/chatbot.service.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -131,6 +132,14 @@ router.post('/', async (req, res) => {
             // Auto-tag khi nhận tin nhắn từ khách (không phải từ Page)
             if (!isFromPage) {
               autoTagCustomer(customerId, convId).catch(e => console.error('Auto-tag error:', e.message));
+              
+              // Gọi AI Chatbot
+              let imageUrl = null;
+              if (msg.attachments) {
+                const imgAtt = msg.attachments.find(a => a.type === 'image');
+                if (imgAtt && imgAtt.payload) imageUrl = imgAtt.payload.url;
+              }
+              handleIncomingMessage(convId, text, imageUrl).catch(e => console.error('Chatbot FB error:', e.message));
             }
           }
 
@@ -220,6 +229,14 @@ router.post('/', async (req, res) => {
             // Auto-tag khi nhận tin nhắn từ khách IG
             if (!isFromPage) {
               autoTagCustomer(customerId, convId).catch(e => console.error('Auto-tag IG error:', e.message));
+
+              // Gọi AI Chatbot
+              let imageUrl = null;
+              if (msg.attachments) {
+                const imgAtt = msg.attachments.find(a => a.type === 'image');
+                if (imgAtt && imgAtt.payload) imageUrl = imgAtt.payload.url;
+              }
+              handleIncomingMessage(convId, text, imageUrl).catch(e => console.error('Chatbot IG error:', e.message));
             }
           }
         }

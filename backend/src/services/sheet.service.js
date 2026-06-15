@@ -1,4 +1,5 @@
 import { google } from 'googleapis';
+import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -153,6 +154,80 @@ export const getAllProductsPostInfo = async () => {
   } catch (error) {
     console.error('Lỗi khi lấy thông tin post từ Sheets:', error.message);
     return [];
+  }
+};
+
+export const getAllProductsWithImages = async () => {
+  try {
+    const res = await sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'A:E',
+    });
+
+    const rows = res.data.values;
+    if (!rows || rows.length === 0) return [];
+
+    const headers = rows[0];
+    const skuIndex = headers.indexOf('Mã sản phẩm');
+    const imageIndex = 4; // Cột E
+
+    if (skuIndex === -1) return [];
+
+    const products = [];
+    for (let i = 1; i < rows.length; i++) {
+      const row = rows[i];
+      if (row[skuIndex] && row[imageIndex]) {
+        products.push({
+          sku: row[skuIndex],
+          imageUrl: row[imageIndex],
+        });
+      }
+    }
+    return products;
+  } catch (error) {
+    console.error('Lỗi khi lấy thông tin ảnh từ Sheets:', error.message);
+    return [];
+  }
+};
+
+export const syncProductCatalog = async () => {
+  try {
+    const res = await sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'A:C', // Mã sản phẩm và Tên sản phẩm thường nằm trong A, B, C
+    });
+
+    const rows = res.data.values;
+    if (!rows || rows.length === 0) return false;
+
+    const headers = rows[0];
+    const skuIndex = headers.indexOf('Mã sản phẩm');
+    const nameIndex = headers.indexOf('Tên sản phẩm');
+
+    if (skuIndex === -1 || nameIndex === -1) return false;
+
+    const catalog = [];
+    for (let i = 1; i < rows.length; i++) {
+      const row = rows[i];
+      if (row[skuIndex] && row[nameIndex]) {
+        catalog.push({
+          sku: row[skuIndex],
+          name: row[nameIndex]
+        });
+      }
+    }
+
+    const dataDir = path.join(__dirname, '../../data');
+    if (!fs.existsSync(dataDir)) {
+      fs.mkdirSync(dataDir, { recursive: true });
+    }
+    
+    fs.writeFileSync(path.join(dataDir, 'catalog.json'), JSON.stringify(catalog, null, 2), 'utf8');
+    console.log(`✅ Đã đồng bộ ${catalog.length} sản phẩm vào catalog.json`);
+    return true;
+  } catch (error) {
+    console.error('Lỗi khi đồng bộ Product Catalog:', error.message);
+    return false;
   }
 };
 

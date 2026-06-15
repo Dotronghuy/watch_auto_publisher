@@ -18,9 +18,10 @@ import { getAllPostedHistory, getTodayEngagement } from '../utils/history.js';
 import { trackPostMetrics } from '../services/tracking.service.js';
 import logEmitter from '../utils/liveLog.js';
 import { getFoldersInFolder, getImagesInFolder, getFolderIdByName, downloadFileFromDrive } from '../services/drive.service.js';
-import { initCRMDB, getConversations, getMessagesByConversation, saveMessage, markConversationAsRead, getConversationById, getCustomerProfile, updateCustomerProfile } from '../utils/crm.db.js';
+import { initCRMDB, getConversations, getMessagesByConversation, saveMessage, markConversationAsRead, getConversationById, getCustomerProfile, updateCustomerProfile, updateBotPausedStatus } from '../utils/crm.db.js';
 import { syncAllCRM, replyCRM } from '../services/crm.service.js';
 import { autoTagAllConversations } from '../services/autotag.service.js';
+import { syncHashesFromSheets } from '../services/image-hash.service.js';
 
 // Khởi tạo bảng CRM DB nếu chưa có
 initCRMDB().then(() => console.log('✅ Đã khởi tạo CRM SQLite DB')).catch(e => console.error('Lỗi CRM DB:', e));
@@ -1344,6 +1345,33 @@ router.post('/crm/customers/:id', async (req, res) => {
     res.json(updatedProfile);
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+// Cập nhật trạng thái Bot (Pause/Resume)
+router.post('/crm/conversations/:id/bot-mode', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { isPaused } = req.body;
+    await updateBotPausedStatus(id, isPaused);
+    res.json({ success: true, bot_paused: isPaused ? 1 : 0 });
+    // Push update to FE
+    const conversations = await getConversations();
+    broadcastCRM('conversations_updated', conversations);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Endpoint đồng bộ ảnh từ Google Sheets (Lớp 2 AI)
+router.post('/crm/bot/sync-images', async (req, res) => {
+  try {
+    // Trả về response ngay để không bị timeout
+    res.json({ success: true, message: 'Đang chạy đồng bộ ngầm...' });
+    // Chạy ngầm
+    syncHashesFromSheets();
+  } catch (err) {
+    console.error('Lỗi API sync-images:', err);
   }
 });
 

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Key, Copy, Link2, Clock, Plus, X, Save, Check, Eye, EyeOff, BrainCircuit, RefreshCw, Sparkles, Trash2, AlertCircle, Play, CheckCircle2, XCircle, FileText, ChevronDown, ChevronRight, Settings, Users, Edit2 } from 'lucide-react';
+import { Key, Copy, Link2, Clock, Plus, X, Save, Check, Eye, EyeOff, BrainCircuit, RefreshCw, Sparkles, Trash2, AlertCircle, Play, CheckCircle2, XCircle, FileText, ChevronDown, ChevronRight, Settings, Users, Edit2, MessageSquare } from 'lucide-react';
 import Swal from 'sweetalert2';
 import { Facebook, Instagram, Threads, TikTok } from '../components/SocialIcons';
 import { useAuth } from '../context/AuthContext';
@@ -14,6 +14,12 @@ const SocialConnections = () => {
   const [testInterval, setTestInterval] = useState(5);
   const [igDelayMin, setIgDelayMin] = useState(10);
   const [igDelayMax, setIgDelayMax] = useState(20);
+  
+  // AI Chatbot Settings
+  const [botEnabled, setBotEnabled] = useState(false);
+  const [botPauseHours, setBotPauseHours] = useState(2);
+  const [botDelayMin, setBotDelayMin] = useState(3);
+  const [botDelayMax, setBotDelayMax] = useState(8);
   const [isSaving, setIsSaving] = useState(false);
   const [connectedSocials, setConnectedSocials] = useState({
     facebook: true,
@@ -30,6 +36,7 @@ const SocialConnections = () => {
   const [isSavingEnv, setIsSavingEnv] = useState(false);
   const [showTokens, setShowTokens] = useState({ fb: false, ig: false, igId: false, tiktok: false });
   const [isResettingAI, setIsResettingAI] = useState(null);
+  const [isSyncingImages, setIsSyncingImages] = useState(false);
 
   const [accounts, setAccounts] = useState([]);
   const [isAccountModalOpen, setIsAccountModalOpen] = useState(false);
@@ -46,6 +53,11 @@ const SocialConnections = () => {
         setTimeSlots(Array.isArray(data.timeSlots) ? data.timeSlots : []);
         setIgDelayMin(data.igDelayMin || 10);
         setIgDelayMax(data.igDelayMax || 20);
+        
+        setBotEnabled(data.botEnabled || false);
+        setBotPauseHours(data.botPauseHours || 2);
+        setBotDelayMin(data.botDelayMin || 3);
+        setBotDelayMax(data.botDelayMax || 8);
         if (data.connectedSocials) {
           setConnectedSocials(data.connectedSocials);
         }
@@ -68,7 +80,7 @@ const SocialConnections = () => {
       await fetch('/api/settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mode, testInterval, timeSlots, igDelayMin, igDelayMax })
+        body: JSON.stringify({ mode, testInterval, timeSlots, igDelayMin, igDelayMax, botEnabled, botPauseHours, botDelayMin, botDelayMax })
       });
       Swal.fire({
         title: 'Thành công',
@@ -204,6 +216,21 @@ const SocialConnections = () => {
     } catch (e) {
       console.error('Lỗi auto save:', e);
     }
+  };
+
+  const handleSyncImages = async () => {
+    setIsSyncingImages(true);
+    try {
+      Swal.fire({
+        toast: true, position: 'top-end', icon: 'info', 
+        title: 'Đang đồng bộ ảnh từ Google Sheets ngầm...', 
+        showConfirmButton: false, timer: 3000
+      });
+      await fetch('/api/crm/bot/sync-images', { method: 'POST' });
+    } catch(e) {
+      console.error(e);
+    }
+    setTimeout(() => setIsSyncingImages(false), 3000);
   };
 
   const addTimeSlot = () => {
@@ -387,6 +414,77 @@ const SocialConnections = () => {
             </div>
 
             
+            {/* ── AI Chatbot Settings ── */}
+            <div className="section-card">
+              <div className="section-header">
+                <div className="icon-circle green"><MessageSquare size={16} /></div>
+                <h3>Cài Đặt Chatbot Tư Vấn (Gemini)</h3>
+              </div>
+              <p className="section-desc">Cấu hình cho trợ lý ảo tự động trả lời khách hàng qua Inbox.</p>
+
+              <div className="schedule-grid">
+                <div className="schedule-panel">
+                  <h4>Trạng thái Chatbot</h4>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '15px', marginTop: '10px' }}>
+                    <label className="switch" style={{ position: 'relative', display: 'inline-block', width: '50px', height: '24px' }}>
+                      <input 
+                        type="checkbox" 
+                        checked={botEnabled} 
+                        onChange={(e) => { setBotEnabled(e.target.checked); autoSaveSettings({ botEnabled: e.target.checked }); }} 
+                        style={{ opacity: 0, width: 0, height: 0, margin: 0 }} 
+                      />
+                      <span className="slider round" style={{ 
+                        position: 'absolute', cursor: 'pointer', top: 0, left: 0, right: 0, bottom: 0, 
+                        backgroundColor: botEnabled ? '#10b981' : '#3f4147', borderRadius: '24px', transition: '.4s' 
+                      }}>
+                        <span style={{ 
+                          position: 'absolute', content: '""', height: '18px', width: '18px', left: botEnabled ? '28px' : '3px', 
+                          bottom: '3px', backgroundColor: 'white', borderRadius: '50%', transition: '.4s' 
+                        }}></span>
+                      </span>
+                    </label>
+                    <span style={{ color: botEnabled ? '#10b981' : '#8a8b91', fontWeight: 'bold' }}>
+                      {botEnabled ? 'Đang bật' : 'Đang tắt'}
+                    </span>
+                  </div>
+
+                  <h4 style={{ marginTop: '20px' }}>Tự động bật lại Bot</h4>
+                  <p className="text-muted" style={{ fontSize: '12px', marginBottom: '8px' }}>
+                    Sau khi Nhân viên can thiệp, Bot sẽ tự động bật lại sau bao lâu?
+                  </p>
+                  <div className="delay-row">
+                    <input className="delay-input" type="number" autoComplete="off" value={botPauseHours} onChange={e => setBotPauseHours(e.target.value)} onBlur={() => autoSaveSettings({ botPauseHours })} min="1" />
+                    <span className="delay-label">Giờ</span>
+                  </div>
+                </div>
+
+                <div className="schedule-panel">
+                  <h4>⏳ Độ trễ trả lời của Bot</h4>
+                  <p className="panel-desc">
+                    Thời gian chờ random trước khi Bot gửi tin nhắn để tạo cảm giác tự nhiên như người thật đang gõ.
+                  </p>
+                  <div className="delay-row">
+                    <input className="delay-input" type="number" autoComplete="off" value={botDelayMin} onChange={e => setBotDelayMin(e.target.value)} onBlur={() => autoSaveSettings({ botDelayMin })} min="0" />
+                    <span className="delay-label">đến</span>
+                    <input className="delay-input" type="number" autoComplete="off" value={botDelayMax} onChange={e => setBotDelayMax(e.target.value)} onBlur={() => autoSaveSettings({ botDelayMax })} min="0" />
+                    <span className="delay-label">Giây</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="section-footer">
+                <button 
+                  className="btn-outline" 
+                  onClick={handleSyncImages} 
+                  disabled={isSyncingImages}
+                  style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
+                >
+                  <RefreshCw size={14} className={isSyncingImages ? 'spin' : ''} />
+                  Đồng bộ Ảnh Gốc (Lớp 2)
+                </button>
+              </div>
+            </div>
+
             {/* ── Section 2: Quản lý Tài Khoản Đăng Bài ── */}
             <div className="section-card">
               <div className="section-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>

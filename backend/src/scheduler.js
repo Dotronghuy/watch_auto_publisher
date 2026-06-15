@@ -5,6 +5,7 @@ import { fileURLToPath } from 'url';
 import cron from 'node-cron';
 import { spawn } from 'child_process';
 import { syncAllCRM } from './services/crm.service.js';
+import { syncHashesFromSheets } from './services/image-hash.service.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -204,6 +205,16 @@ export const startScheduler = async () => {
     }
   });
   console.log('✅ Đã lên lịch Auto-Scan Google Drive lúc 02:00 sáng mỗi ngày.');
+
+  // --- THÊM: Hẹn giờ đồng bộ Lớp 2 Chatbot (Google Sheets Images) tự động lúc 3:00 sáng ---
+  if (global.hashCronJob) {
+    global.hashCronJob.stop();
+  }
+  global.hashCronJob = cron.schedule('0 3 * * *', () => {
+    console.log('⏰ Bắt đầu đồng bộ ảnh Google Sheets cho Chatbot (Lịch định kỳ: 3:00 sáng)...');
+    syncHashesFromSheets().catch(e => console.error('Lỗi syncHashesFromSheets:', e));
+  });
+  console.log('✅ Đã lên lịch Sync Ảnh Google Sheets lúc 03:00 sáng mỗi ngày.');
 
   // --- THÊM: Hẹn giờ đồng bộ CRM định kỳ 5 phút ---
   if (!global.crmInterval) {

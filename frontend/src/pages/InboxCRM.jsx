@@ -737,11 +737,12 @@ const InboxCRM = () => {
                 </div>
                 <div className="conversation-info">
                   <div className="conversation-header-row">
-                    <div className="conversation-name">
+                    <div className="conversation-name" style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                       {conv.type === 'comment' 
                         ? (conv.sender_name || '').replace(/^💬\s*/, '').substring(0, 25) + (conv.sender_name?.length > 25 ? '...' : '')
                         : conv.sender_name
                       }
+                      {conv.bot_paused !== 1 && <span title="AI Bot đang hỗ trợ" style={{ fontSize: '12px' }}>🤖</span>}
                     </div>
                     <div className="conversation-time">{timeAgo(conv.updated_at || conv.created_at || new Date())}</div>
                   </div>
@@ -803,7 +804,34 @@ const InboxCRM = () => {
                   </div>
                 </div>
               </div>
-              <div className="chat-header-actions">
+              <div className="chat-header-actions" style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
+                <div 
+                  className="bot-toggle-btn"
+                  onClick={async () => {
+                    const newPaused = activeConv.bot_paused === 1 ? 0 : 1;
+                    try {
+                      await fetch(`/api/crm/conversations/${activeConv.id}/bot-mode`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ isPaused: newPaused })
+                      });
+                      setActiveConv({ ...activeConv, bot_paused: newPaused });
+                      Swal.fire({
+                        toast: true, position: 'top-end', icon: 'success', 
+                        title: newPaused ? 'Chuyển sang chế độ Nhân viên' : 'Chuyển sang chế độ Bot', 
+                        showConfirmButton: false, timer: 1500
+                      });
+                      fetchConversations(); // Reload list
+                    } catch(e) {}
+                  }}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer',
+                    background: activeConv.bot_paused === 1 ? '#3f4147' : '#10b981',
+                    padding: '6px 12px', borderRadius: '20px', color: '#fff', fontSize: '13px', fontWeight: 'bold'
+                  }}
+                >
+                  {activeConv.bot_paused === 1 ? '👤 Nhân viên' : '🤖 AI Bot'}
+                </div>
                 <Phone size={20} />
                 <Video size={20} />
                 <MoreVertical size={20} />
