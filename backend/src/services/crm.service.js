@@ -2,7 +2,7 @@ import axios from 'axios';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { saveConversation, saveMessage, getConversationById, getMessageById } from '../utils/crm.db.js';
+import { saveConversation, saveMessage, getConversationById, getMessageById, getMessagesByConversation } from '../utils/crm.db.js';
 import dotenv from 'dotenv';
 dotenv.config();
 
@@ -53,6 +53,10 @@ export const fetchFacebookInbox = async (pageToken, accountId, fbPageId) => {
       
       await saveConversation(conv.id, 'facebook', 'inbox', sender.name, sender.id, conv.snippet, conv.updated_time, accountId);
       
+      let hasNewCustomerMessage = false;
+      let textToProcess = '';
+      let imageUrlToProcess = null;
+
       const messages = conv.messages?.data || [];
       for (const msg of messages) {
         // So sánh trực tiếp với Page ID để xác định tin nhắn từ Page
@@ -73,12 +77,24 @@ export const fetchFacebookInbox = async (pageToken, accountId, fbPageId) => {
         const existingMsg = await getMessageById(msg.id);
         await saveMessage(msg.id, conv.id, text.trim() || '📸 Tệp đính kèm', isFromPage, msg.created_time);
         
-        // Cú trigger thủ công khi bấm Sync (dành cho test không có webhook)
         if (!existingMsg && !isFromPage) {
-          try {
-            const { handleIncomingMessage } = await import('./chatbot.service.js');
-            handleIncomingMessage(conv.id, text.trim(), imageUrl).catch(e => console.error('Chatbot Sync error:', e.message));
-          } catch(err) {}
+          hasNewCustomerMessage = true;
+          textToProcess = text.trim() || '📸 Tệp đính kèm';
+          imageUrlToProcess = imageUrl;
+        }
+      }
+
+      if (hasNewCustomerMessage) {
+        const allMsgs = await getMessagesByConversation(conv.id);
+        if (allMsgs.length > 0) {
+          const latestMsg = allMsgs[allMsgs.length - 1];
+          // Chỉ trigger chatbot nếu tin nhắn mới nhất của toàn bộ hội thoại là từ khách hàng
+          if (latestMsg.is_from_page === 0) {
+            try {
+              const { handleIncomingMessage } = await import('./chatbot.service.js');
+              handleIncomingMessage(conv.id, textToProcess, imageUrlToProcess).catch(e => console.error('Chatbot Sync FB error:', e.message));
+            } catch(err) {}
+          }
         }
       }
     }
@@ -152,6 +168,10 @@ export const fetchInstagramInbox = async (pageToken, accountId, igUserId) => {
       
       await saveConversation(conv.id, 'instagram', 'inbox', senderName, sender.id, conv.snippet, conv.updated_time, accountId);
       
+      let hasNewCustomerMessage = false;
+      let textToProcess = '';
+      let imageUrlToProcess = null;
+
       const messages = conv.messages?.data || [];
       for (const msg of messages) {
         const isFromPage = igUserId ? msg.from?.id === igUserId : msg.from?.id !== sender.id;
@@ -172,10 +192,22 @@ export const fetchInstagramInbox = async (pageToken, accountId, igUserId) => {
         await saveMessage(msg.id, conv.id, text.trim() || '📸 Tệp đính kèm', isFromPage, msg.created_time);
 
         if (!existingMsg && !isFromPage) {
-          try {
-            const { handleIncomingMessage } = await import('./chatbot.service.js');
-            handleIncomingMessage(conv.id, text.trim(), imageUrl).catch(e => console.error('Chatbot Sync IG error:', e.message));
-          } catch(err) {}
+          hasNewCustomerMessage = true;
+          textToProcess = text.trim() || '📸 Tệp đính kèm';
+          imageUrlToProcess = imageUrl;
+        }
+      }
+
+      if (hasNewCustomerMessage) {
+        const allMsgs = await getMessagesByConversation(conv.id);
+        if (allMsgs.length > 0) {
+          const latestMsg = allMsgs[allMsgs.length - 1];
+          if (latestMsg.is_from_page === 0) {
+            try {
+              const { handleIncomingMessage } = await import('./chatbot.service.js');
+              handleIncomingMessage(conv.id, textToProcess, imageUrlToProcess).catch(e => console.error('Chatbot Sync IG error:', e.message));
+            } catch(err) {}
+          }
         }
       }
     }

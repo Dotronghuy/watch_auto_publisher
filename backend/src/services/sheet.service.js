@@ -194,7 +194,7 @@ export const syncProductCatalog = async () => {
   try {
     const res = await sheets.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
-      range: 'A:C', // Mã sản phẩm và Tên sản phẩm thường nằm trong A, B, C
+      range: 'A:AH',
     });
 
     const rows = res.data.values;
@@ -203,6 +203,13 @@ export const syncProductCatalog = async () => {
     const headers = rows[0];
     const skuIndex = headers.indexOf('Mã sản phẩm');
     const nameIndex = headers.indexOf('Tên sản phẩm');
+    const colorIndex = headers.indexOf('Màu mặt số');
+    const strapIndex = headers.indexOf('Chất liệu dây');
+    const styleIndex = headers.indexOf('Lấy cảm hứng từ');
+    const brandIndex = headers.indexOf('Thương hiệu');
+    const descIndex = headers.indexOf('Mô tả ngắn');
+    const style2Index = headers.indexOf('Phong cách');
+    const caseIndex = headers.indexOf('Chất liệu vỏ');
 
     if (skuIndex === -1 || nameIndex === -1) return false;
 
@@ -212,7 +219,14 @@ export const syncProductCatalog = async () => {
       if (row[skuIndex] && row[nameIndex]) {
         catalog.push({
           sku: row[skuIndex],
-          name: row[nameIndex]
+          name: row[nameIndex],
+          brand: brandIndex !== -1 ? row[brandIndex] : '',
+          color: colorIndex !== -1 ? row[colorIndex] : '',
+          strap: strapIndex !== -1 ? row[strapIndex] : '',
+          case: caseIndex !== -1 ? row[caseIndex] : '',
+          style: styleIndex !== -1 ? row[styleIndex] : '',
+          category: style2Index !== -1 ? row[style2Index] : '',
+          desc: descIndex !== -1 ? row[descIndex] : ''
         });
       }
     }

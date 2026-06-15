@@ -2,7 +2,7 @@ import express from 'express';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { saveConversation, saveMessage, getConversations } from '../utils/crm.db.js';
+import { saveConversation, saveMessage, getConversations, getMessageById } from '../utils/crm.db.js';
 import { broadcastCRM } from './api.routes.js';
 import { autoTagCustomer } from '../services/autotag.service.js';
 import { handleIncomingMessage } from '../services/chatbot.service.js';
@@ -104,6 +104,8 @@ router.post('/', async (req, res) => {
               accountId
             );
 
+            const existingMessage = messageId ? await getMessageById(messageId) : null;
+
             // Lưu message
             await saveMessage(
               messageId || `wh_${Date.now()}`,
@@ -130,7 +132,7 @@ router.post('/', async (req, res) => {
             });
 
             // Auto-tag khi nhận tin nhắn từ khách (không phải từ Page)
-            if (!isFromPage) {
+            if (!isFromPage && !existingMessage) {
               autoTagCustomer(customerId, convId).catch(e => console.error('Auto-tag error:', e.message));
               
               // Gọi AI Chatbot
@@ -203,6 +205,8 @@ router.post('/', async (req, res) => {
               accountId
             );
 
+            const existingMessage = messageId ? await getMessageById(messageId) : null;
+
             await saveMessage(
               messageId || `wh_ig_${Date.now()}`,
               convId,
@@ -227,7 +231,7 @@ router.post('/', async (req, res) => {
             });
 
             // Auto-tag khi nhận tin nhắn từ khách IG
-            if (!isFromPage) {
+            if (!isFromPage && !existingMessage) {
               autoTagCustomer(customerId, convId).catch(e => console.error('Auto-tag IG error:', e.message));
 
               // Gọi AI Chatbot

@@ -20,7 +20,7 @@ const SocialConnections = () => {
   const [botPauseHours, setBotPauseHours] = useState(2);
   const [botDelayMin, setBotDelayMin] = useState(3);
   const [botDelayMax, setBotDelayMax] = useState(8);
-  const [isSaving, setIsSaving] = useState(false);
+
   const [connectedSocials, setConnectedSocials] = useState({
     facebook: true,
     instagram: true,
@@ -74,27 +74,7 @@ const SocialConnections = () => {
 
   }, []);
 
-  const handleSaveSettings = async () => {
-    setIsSaving(true);
-    try {
-      await fetch('/api/settings', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mode, testInterval, timeSlots, igDelayMin, igDelayMax, botEnabled, botPauseHours, botDelayMin, botDelayMax })
-      });
-      Swal.fire({
-        title: 'Thành công',
-        text: 'Đã lưu cấu hình và khởi động lại lịch hẹn thành công!',
-        icon: 'success',
-        background: 'var(--color-surface)',
-        color: 'var(--color-text)',
-        confirmButtonColor: 'var(--color-primary)'
-      });
-    } catch (e) {
-      Swal.fire('Lỗi', 'Không thể lưu cấu hình', 'error');
-    }
-    setIsSaving(false);
-  };
+
 
   
   const handleSaveAccounts = async (newAccounts) => {
@@ -406,11 +386,7 @@ const SocialConnections = () => {
                 </div>
               </div>
 
-              <div className="section-footer">
-                <button className="btn-primary glow-primary" onClick={handleSaveSettings} disabled={isSaving}>
-                  <Save size={14} style={{marginRight: '6px'}} /> {isSaving ? 'Đang lưu...' : 'Lưu Cấu Hình'}
-                </button>
-              </div>
+
             </div>
 
             
