@@ -8,7 +8,7 @@ import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 chromium.use(StealthPlugin());
 
 import { prisma } from '../services/shopee/db.js';
-import { prepareMediaForShopee, generateShopeeProductName } from '../services/shopee/shopeeSync.service.js';
+import { prepareMediaForShopee, generateShopeeProductName, runShopeeAutomationDemo } from '../services/shopee/shopeeSync.service.js';
 
 const router = express.Router();
 if (!fs.existsSync('uploads')) fs.mkdirSync('uploads');
@@ -427,41 +427,34 @@ router.post('/shopee-login', async (req, res) => {
 
     await page.goto('https://banhang.shopee.vn/');
 
-    let loginSuccess = false;
+    let latestCookies = await browser.cookies();
+    
     let pollInterval = setInterval(async () => {
       try {
-        if (!browser.isConnected()) {
-          clearInterval(pollInterval);
-          return;
-        }
-        const cookies = await browser.contexts()[0].cookies();
-        const hasSession = cookies.some(c => c.name === 'SPC_U' || c.name === 'SPC_ST' || c.name === 'SPC_EC');
-        
-        if (hasSession && !loginSuccess) {
-          loginSuccess = true;
-          clearInterval(pollInterval);
-          await prisma.setting.upsert({
-            where: { key: 'shopee_cookies' },
-            update: { value: JSON.stringify(cookies) },
-            create: { key: 'shopee_cookies', value: JSON.stringify(cookies) }
-          });
-          console.log('[Shopee Login] Đã lấy được Cookie và lưu DB thành công!');
-          if (!res.headersSent) res.json({ success: true, message: 'Đã lưu Cookie thành công! Cửa sổ sẽ tự đóng.' });
-          
-          // Tự động đóng sau 2 giây
-          setTimeout(async () => {
-            try { await browser.close(); } catch(e){}
-          }, 2000);
-        }
+        latestCookies = await browser.cookies();
       } catch (e) {
          // ignore
       }
     }, 2000);
 
-    browser.on('disconnected', () => {
+    // Khi người dùng TỰ TẮT trình duyệt (giống bản cũ), ta mới lưu DB và báo thành công
+    browser.on('close', async () => {
       clearInterval(pollInterval);
-      if (!loginSuccess && !res.headersSent) {
-        res.json({ success: false, message: 'Trình duyệt đã đóng nhưng chưa thấy Cookie đăng nhập.' });
+      if (!res.headersSent) {
+        if (latestCookies.length > 0) {
+          try {
+            await prisma.setting.upsert({
+              where: { key: 'shopee_cookies' },
+              update: { value: JSON.stringify(latestCookies) },
+              create: { key: 'shopee_cookies', value: JSON.stringify(latestCookies) }
+            });
+            res.json({ success: true, message: 'Đã lưu Cookie thành công sau khi đóng trình duyệt!' });
+          } catch (dbErr) {
+            res.json({ success: false, message: 'Lỗi khi lưu Cookie vào DB: ' + dbErr.message });
+          }
+        } else {
+          res.json({ success: false, message: 'Trình duyệt đã đóng nhưng không tìm thấy Cookie nào.' });
+        }
       }
     });
 

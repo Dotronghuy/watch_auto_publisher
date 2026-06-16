@@ -317,6 +317,7 @@ function App() {
     if (result.success) {
       setHasShopeeCookies(true)
       setNotification(`✅ ${result.message}`)
+      alert('Tuyệt vời! ' + result.message)
     } else {
       setNotification('')
       alert('Lỗi đăng nhập Shopee: ' + result.message)
@@ -770,8 +771,7 @@ function App() {
                 </div>
 
                 <div className="relative">
-                  <input type="file" accept=".xlsx,.xls,.csv" onChange={handleImportSapoExcel} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" />
-                  <button className="w-full bg-[#00F5FF] hover:bg-[#00E5EE] text-black font-bold py-4 rounded-xl transition-all flex items-center justify-center gap-2 relative z-0 shadow-[0_0_20px_rgba(0,245,255,0.2)]">
+                  <button onClick={handleImportSapoExcel} className="w-full bg-[#00F5FF] hover:bg-[#00E5EE] text-black font-bold py-4 rounded-xl transition-all flex items-center justify-center gap-2 relative z-0 shadow-[0_0_20px_rgba(0,245,255,0.2)]">
                     <span className="text-lg">↑</span> Select File
                   </button>
                 </div>
@@ -789,8 +789,7 @@ function App() {
                 </div>
 
                 <div className="relative">
-                  <input type="file" accept=".xlsx,.xls,.csv" onChange={handleImportShopeeIdsCustomExcel} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" />
-                  <button className="w-full bg-[#00F5FF] hover:bg-[#00E5EE] text-black font-bold py-4 rounded-xl transition-all flex items-center justify-center gap-2 relative z-0 shadow-[0_0_20px_rgba(0,245,255,0.2)]">
+                  <button onClick={handleImportShopeeIdsCustomExcel} className="w-full bg-[#00F5FF] hover:bg-[#00E5EE] text-black font-bold py-4 rounded-xl transition-all flex items-center justify-center gap-2 relative z-0 shadow-[0_0_20px_rgba(0,245,255,0.2)]">
                     <span className="text-lg">☁</span> Upload Shopee Data
                   </button>
                 </div>

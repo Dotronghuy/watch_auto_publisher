@@ -414,39 +414,28 @@ async function generateShopeeProductName(variantId, customModelName) {
         });
       }
     }
-    const prompt = `T\u1EEB m\xE3 \u0111\u1ED3ng h\u1ED3 "${targetModelName}", h\xE3y t\u1EA1o 1 c\xE2u \u0111\u1EB7t t\xEAn s\u1EA3n ph\u1EA9m \u0111\u1ED3ng h\u1ED3 chu\u1EA9n SEO cho Shopee (T\u1ED1i \u0111a 115 k\xFD t\u1EF1). 
-    B\u1EAFt bu\u1ED9c ph\u1EA3i bao g\u1ED3m c\xE1c th\xF4ng tin theo c\xF4ng th\u1EE9c sau:
-    [\u0110\u1ED3ng H\u1ED3 ${watchGenderText} I&W Carnival ${variant.model.name.replace(/[a-zA-Z]+$/, "")}${suffixLetter} Ch\xEDnh H\xE3ng [M\u1EA1 V\xE0ng H\u1ED3ng | M\u1EA1 V\xE0ng | (b\u1ECF tr\u1ED1ng n\u1EBFu thu\u1EA7n th\xE9p)]] - [M\xE1y C\u01A1/M\xE1y Pin], [M\xE0u m\u1EB7t], [Vi\u1EC1n \u0110\xEDnh \u0110\xE1 (n\u1EBFu c\xF3 \u0111\xEDnh \u0111\xE1)], [D\xE2y + M\xE0u d\xE2y], [K\xEDnh Sapphire], [BH 5 N\u0103m]
+    const prompt = `Từ mã đồng hồ "${targetModelName}", hãy tạo 1 câu đặt tên sản phẩm đồng hồ chuẩn SEO cho Shopee (Tối đa 99 ký tự). 
+    Bắt buộc phải tuân theo đúng định dạng sau:
+    Đồng Hồ ${watchGenderText} I&W Carnival ${variant.model.name.replace(/[a-zA-Z]+$/, "")}${suffixLetter} Chính Hãng - [Vàng Hồng/Vàng (nếu có)], [Máy Cơ/Máy Pin], [Viền Trơn/Viền Đính Đá], [Dây + Màu dây], Kính Sapphire, BH 5 Năm
 
-    V\u1ECA TR\xCD CH\xCDNH X\xC1C: "M\u1EA1 V\xE0ng H\u1ED3ng" ho\u1EB7c "M\u1EA1 V\xE0ng" ph\u1EA3i \u0111\u1EB7t \u0110\xDANG SAU c\u1EE5m "Ch\xEDnh H\xE3ng", TR\u01AF\u1EDAC d\u1EA5u g\u1EA1ch ngang. Kh\xF4ng \u0111\u01B0\u1EE3c \u0111\u1EB7t sau d\u1EA5u g\u1EA1ch ngang.
+    QUY TẮC BẮT BUỘC:
+    1. "Vàng Hồng" hoặc "Vàng": Nếu trong ảnh (ảnh 1) thấy viền, vỏ hoặc dây có màu vàng hồng (rose gold) thì ghi "Vàng Hồng" ngay SAU dấu gạch ngang. Nếu là màu vàng thuần thì ghi "Vàng". Nếu là thuần thép/bạc thì BỎ QUA hoàn toàn vị trí này, từ tiếp theo sau dấu gạch ngang sẽ là loại máy.
+    2. "Viền Trơn" hoặc "Viền Đính Đá": Nếu viền (bezel) có đính đá lấp lánh thì ghi "Viền Đính Đá". Nếu viền thép trơn không đính đá thì bắt buộc ghi "Viền Trơn".
+    3. Đừng dùng tính từ hoa mỹ cho màu mặt (chỉ dùng: Mặt Trắng, Mặt Đen, Mặt Xanh Biển, Mặt Đỏ,...).
 
-    L\u01AFU \xDD \u0110\u1EB6C BI\u1EC6T 1 - M\u1EA0 V\xC0NG H\u1ED2NG: N\u1EBFu trong \u1EA3nh \u0111\u1ED3ng h\u1ED3 m\u1EE5c ti\xEAu (\u1EA3nh th\u1EE9 1) th\u1EA5y v\u1ECF, bezel, d\xE2y ho\u1EB7c c\xE1c chi ti\u1EBFt kim lo\u1EA1i c\xF3 m\xE0u v\xE0ng h\u1ED3ng/rose gold (m\xE0u v\xE0ng \u1EA5m h\u01A1i ng\u1EA3 h\u1ED3ng), B\u1EAET BU\u1ED8C th\xEAm "M\u1EA1 V\xE0ng H\u1ED3ng" SAU "Ch\xEDnh H\xE3ng".
+    QUY TẮC MÀU DÂY:
+    Tôi gửi cho bạn danh sách ${images.length} ảnh. Ảnh 1 là mục tiêu (SKU: ${variant.sku}). Các ảnh sau là mẫu anh em.
+    Hãy đối chiếu màu mặt số của Ảnh 1 với các ảnh khác:
+    - NẾU màu mặt số Ảnh 1 trùng với bất kỳ ảnh nào khác (vd: cùng mặt trắng nhưng khác màu dây): BẮT BUỘC ghi rõ màu dây (vd: Dây Da Đen, Dây Cao Su Xanh, Dây Thép Bạc).
+    - NẾU màu mặt số Ảnh 1 là độc bản (không trùng ai) hoặc chỉ có 1 ảnh duy nhất: CHỈ ghi chất liệu dây, KHÔNG ghi màu (vd: Dây Da, Dây Thép, Dây Cao Su).
 
-    L\u01AFU \xDD \u0110\u1EB6C BI\u1EC6T 2 - M\u1EA0 V\xC0NG: N\u1EBFu th\u1EA5y chi ti\u1EBFt kim lo\u1EA1i m\xE0u v\xE0ng gold thu\u1EA7n (kh\xF4ng h\u1ED3ng), th\xEAm "M\u1EA1 V\xE0ng" SAU "Ch\xEDnh H\xE3ng".
+    Ví dụ đúng (có vàng hồng, viền trơn):
+    Đồng Hồ ${watchGenderText} I&W Carnival ${variant.model.name.replace(/[a-zA-Z]+$/, "")}${suffixLetter} Chính Hãng - Vàng Hồng, Máy Cơ, Viền Trơn, Dây Cao Su, Kính Sapphire, BH 5 Năm
 
-    L\u01AFU \xDD \u0110\u1EB6C BI\u1EC6T 3 - VI\u1EC0N \u0110\xCDNH \u0110\xC1: N\u1EBFu trong \u1EA3nh \u0111\u1ED3ng h\u1ED3 m\u1EE5c ti\xEAu (\u1EA3nh th\u1EE9 1) c\xF3 \u0111\xEDnh \u0111\xE1 \u1EDF vi\u1EC1n (bezel), b\u1EAFt bu\u1ED9c ph\u1EA3i th\xEAm c\u1EE5m "Vi\u1EC1n \u0110\xEDnh \u0110\xE1" v\xE0o danh s\xE1ch thu\u1ED9c t\xEDnh SAU d\u1EA5u g\u1EA1ch ngang (v\xED d\u1EE5: sau m\xE0u m\u1EB7t: M\u1EB7t M\xE0u Xanh Bi\u1EC3n, Vi\u1EC1n \u0110\xEDnh \u0110\xE1, D\xE2y Th\xE9p,...). Tuy\u1EC7t \u0111\u1ED1i KH\xD4NG vi\u1EBFt ch\u1EEF "\u0110\xEDnh \u0110\xE1" \u1EDF tr\u01B0\u1EDBc d\u1EA5u g\u1EA1ch ngang.
+    Ví dụ đúng (thuần thép, có đính đá):
+    Đồng Hồ ${watchGenderText} I&W Carnival ${variant.model.name.replace(/[a-zA-Z]+$/, "")}${suffixLetter} Chính Hãng - Máy Pin, Mặt Trắng, Viền Đính Đá, Dây Da Đen, Kính Sapphire, BH 5 Năm
 
-    L\u01AFU \xDD \u0110\u1EB6C BI\u1EC6T 4 - KH\xD4NG D\xD9NG T\xCDNH T\u1EEA HOA M\u1EF8 CHO M\xC0U M\u1EB6T: Y\xEAu c\u1EA7u \u0111\u1ECBnh d\u1EA1ng m\xE0u m\u1EB7t lu\xF4n c\xF3 ch\u1EEF "M\xE0u" v\xE0 l\xE0 m\xE0u tr\u01A1n c\u01A1 b\u1EA3n, v\xED d\u1EE5: "M\u1EB7t M\xE0u Xanh \u0110en", "M\u1EB7t M\xE0u Xanh Bi\u1EC3n", "M\u1EB7t M\xE0u Tr\u1EAFng", "M\u1EB7t M\xE0u \u0110en", "M\u1EB7t M\xE0u \u0110\u1ECF", "M\u1EB7t M\xE0u H\u1ED3ng", "M\u1EB7t M\xE0u X\xE1m", "M\u1EB7t M\xE0u V\xE0ng". Tuy\u1EC7t \u0111\u1ED1i KH\xD4NG th\xEAm c\xE1c t\xEDnh t\u1EEB hoa m\u1EF9/mi\xEAu t\u1EA3 \u0111i k\xE8m m\xE0u s\u1EAFc nh\u01B0 "L\u1EA5p L\xE1nh", "C\xE1 T\xEDnh", "Sang Tr\u1ECDng", "Qu\xFD Ph\xE1i", "Th\u1EDDi Trang", "Cu\u1ED1n H\xFAt", "Tinh T\u1EBF",...
-
-    L\u01AFU \xDD \u0110\u1EB6C BI\u1EC6T 5 - QUY T\u1EAEC PH\xC2N BI\u1EC6T M\xC0U D\xC2Y (T\u1ED0I QUAN TR\u1ECCNG):
-    T\xF4i g\u1EEDi cho b\u1EA1n danh s\xE1ch ${images.length} \u1EA3nh. Trong \u0111\xF3:
-    - \u1EA2nh th\u1EE9 1 (\u1EA3nh \u0111\u1EA7u ti\xEAn) l\xE0 chi\u1EBFc \u0111\u1ED3ng h\u1ED3 m\u1EE5c ti\xEAu c\u1EA7n \u0111\u1EB7t t\xEAn (SKU: ${variant.sku}).
-    - C\xE1c \u1EA3nh ti\u1EBFp theo t\u1EEB \u1EA3nh th\u1EE9 2 tr\u1EDF \u0111i l\xE0 \u1EA3nh c\xE1c m\u1EABu anh em c\xF9ng d\xF2ng m\xE1y (Model).
-    
-    H\xE3y \u0111\u1ED1i chi\u1EBFu k\u1EF9 l\u01B0\u1EE1ng m\xE0u m\u1EB7t s\u1ED1 (dial) c\u1EE7a \u1EA2nh th\u1EE9 1 v\u1EDBi t\u1EA5t c\u1EA3 c\xE1c \u1EA3nh c\xF2n l\u1EA1i:
-    - N\u1EBEU m\xE0u m\u1EB7t s\u1ED1 c\u1EE7a \u1EA2nh th\u1EE9 1 tr\xF9ng kh\u1EDBp v\u1EDBi m\xE0u m\u1EB7t s\u1ED1 c\u1EE7a b\u1EA5t k\u1EF3 \u1EA3nh n\xE0o kh\xE1c trong danh s\xE1ch (V\xED d\u1EE5: D\xF2ng m\xE1y n\xE0y c\xF3 nhi\u1EC1u SKU c\xF9ng m\u1EB7t tr\u1EAFng, nh\u01B0ng m\u1ED9t m\u1EABu \u0111i k\xE8m d\xE2y da \u0111en, m\u1EABu c\xF2n l\u1EA1i \u0111i k\xE8m d\xE2y da \u0111\u1ECF): B\u1EA1n B\u1EAET BU\u1ED8C ph\u1EA3i ghi r\xF5 m\xE0u s\u1EAFc c\u1EE7a d\xE2y \u0111eo d\u1EA1ng "[Ch\u1EA5t li\u1EC7u d\xE2y] [M\xE0u d\xE2y]" (v\xED d\u1EE5: "D\xE2y Da \u0110en", "D\xE2y Da \u0110\u1ECF", "D\xE2y Th\xE9p B\u1EA1c", "D\xE2y Th\xE9p V\xE0ng H\u1ED3ng", "D\xE2y Th\xE9p Demix", "D\xE2y Cao Su Xanh") \u0111\u1EC3 ph\xE2n bi\u1EC7t.
-    - N\u1EBEU m\xE0u m\u1EB7t s\u1ED1 c\u1EE7a \u1EA2nh th\u1EE9 1 l\xE0 \u0111\u1ED9c b\u1EA3n trong c\u1EA3 d\xF2ng m\xE1y (kh\xF4ng tr\xF9ng m\xE0u m\u1EB7t v\u1EDBi b\u1EA5t k\u1EF3 chi\u1EBFc \u0111\u1ED3ng h\u1ED3 n\xE0o kh\xE1c t\u1EEB \u1EA3nh th\u1EE9 2 tr\u1EDF \u0111i, ho\u1EB7c d\xF2ng m\xE1y n\xE0y ch\u1EC9 c\xF3 duy nh\u1EA5t 1 \u1EA3nh): B\u1EA1n ch\u1EC9 c\u1EA7n ghi chung chung ch\u1EA5t li\u1EC7u d\xE2y d\u1EA1ng "[Ch\u1EA5t li\u1EC7u d\xE2y]" (v\xED d\u1EE5: "D\xE2y Da", "D\xE2y Th\xE9p", "D\xE2y Cao Su") m\xE0 TUY\u1EC6T \u0110\u1ED0I KH\xD4NG th\xEAm m\xE0u s\u1EAFc ph\xEDa sau (v\xED d\u1EE5: vi\u1EBFt "D\xE2y Da" thay v\xEC "D\xE2y Da \u0110en").
-
-    V\xED d\u1EE5 \u0111\u1ED3ng h\u1ED3 hai m\xE0u (th\xE9p + v\xE0ng h\u1ED3ng):
-    \u0110\u1ED3ng H\u1ED3 ${watchGenderText} I&W Carnival ${variant.model.name.replace(/[a-zA-Z]+$/, "")}${suffixLetter} Ch\xEDnh H\xE3ng M\u1EA1 V\xE0ng H\u1ED3ng - M\xE1y C\u01A1, M\u1EB7t M\xE0u Tr\u1EAFng, D\xE2y Th\xE9p B\u1EA1c, K\xEDnh Sapphire, BH 5 N\u0103m
-
-    V\xED d\u1EE5 \u0111\u1ED3ng h\u1ED3 \u0111\xEDnh \u0111\xE1:
-    \u0110\u1ED3ng H\u1ED3 ${watchGenderText} I&W Carnival ${variant.model.name.replace(/[a-zA-Z]+$/, "")}${suffixLetter} Ch\xEDnh H\xE3ng M\u1EA1 V\xE0ng H\u1ED3ng - M\xE1y Pin, M\u1EB7t M\xE0u Xanh \u0110en, Vi\u1EC1n \u0110\xEDnh \u0110\xE1, D\xE2y Da \u0110en, K\xEDnh Sapphire, BH 5 N\u0103m
-
-    V\xED d\u1EE5 \u0111\u1ED3ng h\u1ED3 thu\u1EA7n th\xE9p kh\xF4ng m\u1EA1:
-    \u0110\u1ED3ng H\u1ED3 ${watchGenderText} I&W Carnival ${variant.model.name.replace(/[a-zA-Z]+$/, "")}${suffixLetter} Ch\xEDnh H\xE3ng - M\xE1y Pin, M\u1EB7t M\xE0u Xanh \u0110en, D\xE2y Da \u0110\u1ECF, K\xEDnh Sapphire, BH 5 N\u0103m
-
-    H\xE3y d\xF9ng c\xE1c \u1EA3nh \u0111\u01B0\u1EE3c cung c\u1EA5p \u0111\u1EC3 th\u1EF1c hi\u1EC7n \u0111\xFAng quy t\u1EAFc so s\xE1nh m\xE0u m\u1EB7t s\u1ED1 tr\xEAn. Tuy\u1EC7t \u0111\u1ED1i kh\xF4ng th\xEAm b\u1EA5t k\u1EF3 hashtag, k\xFD t\u1EF1 d\u01B0 th\u1EEBa hay m\xF4 t\u1EA3 d\xE0i d\xF2ng n\xE0o. Tr\u1EA3 v\u1EC1 \u0110\xDANG M\u1ED8T D\xD2NG t\xEAn s\u1EA3n ph\u1EA9m duy nh\u1EA5t.`;
+    Tuyệt đối không thêm hashtag, không viết dông dài. Chỉ trả về 1 dòng duy nhất.`;
     let generatedName = await callAIWithRotation(prompt, images);
     if (generatedName) {
       generatedName = generatedName.replace(/Xanh Lam/gi, "Xanh Bi\u1EC3n").replace(/Xanh ngọc/gi, "Xanh Tiffany").replace(/Xanh Mint/gi, "Xanh Tiffany").replace(/xanh lam/gi, "xanh bi\u1EC3n").replace(/xanh ngọc/gi, "xanh Tiffany").replace(/xanh mint/gi, "xanh Tiffany").replace(/Màu bạc/gi, "M\xE0u x\xE1m").replace(/Mặt bạc/gi, "M\u1EB7t x\xE1m").replace(/màu bạc/gi, "m\xE0u x\xE1m").replace(/mặt bạc/gi, "m\u1EB7t x\xE1m").replace(/Màu Trắng Bạc/gi, "M\xE0u Tr\u1EAFng").replace(/Mặt Trắng Bạc/gi, "M\u1EB7t Tr\u1EAFng").replace(/Mặt Màu Trắng Bạc/gi, "M\u1EB7t M\xE0u Tr\u1EAFng").replace(/màu trắng bạc/gi, "m\xE0u tr\u1EAFng").replace(/mặt trắng bạc/gi, "m\u1EB7t tr\u1EAFng").replace(/-\s*Pin/gi, "- M\xE1y Pin").replace(/,\s*Pin/gi, ", M\xE1y Pin").replace(/-\s*Cơ/gi, "- M\xE1y C\u01A1").replace(/,\s*Cơ/gi, ", M\xE1y C\u01A1").replace(/Máy\s+Máy\s+Pin/gi, "M\xE1y Pin").replace(/Máy\s+Máy\s+Cơ/gi, "M\xE1y C\u01A1").replace(/,\s*Sapphire/gi, ", K\xEDnh Sapphire").replace(/Kính\s+Kính\s+Sapphire/gi, "K\xEDnh Sapphire");
@@ -460,58 +449,50 @@ async function generateShopeeProductName(variantId, customModelName) {
         "quy\u1EBFn r\u0169",
         "\u0111\u1ED9c \u0111\xE1o",
         "\u1EA5n t\u01B0\u1EE3ng",
-        "tinh t\u1EBF",
-        "cu\u1ED1n h\xFAt",
-        "n\u1ED5i b\u1EADt",
-        "tr\u1EBB trung",
-        "\u0111\u1EB3ng c\u1EA5p",
-        "phong c\xE1ch"
+        "tinh tế",
+        "cuốn hút",
+        "nổi bật",
+        "trẻ trung",
+        "đẳng cấp",
+        "phong cách"
       ];
       for (const adj of adjectives) {
         const regex = new RegExp(`\\s+${adj}\\b`, "gi");
         generatedName = generatedName.replace(regex, "");
       }
       generatedName = generatedName.replace(/Mặt\s+(?!Màu\s+)(Xanh Biển|Xanh Tiffany|Xám|Đỏ|Đen|Trắng|Hồng|Vàng|Xanh Đen|Xanh Lá|Tím|Nâu|Bạc|Vàng Hồng|Khói|Xanh|Ghi)/gi, "M\u1EB7t M\xE0u $1");
-      for (const plating of ["M\u1EA1 V\xE0ng H\u1ED3ng", "M\u1EA1 V\xE0ng"]) {
+      for (const plating of ["Vàng Hồng", "Vàng"]) {
         const misplacedRegex = new RegExp(`,?\\s*${plating}\\s*,?`, "i");
         if (misplacedRegex.test(generatedName) && generatedName.includes(" - ")) {
           const dashIdx = generatedName.indexOf(" - ");
-          const beforeDash = generatedName.substring(0, dashIdx);
           const afterDash = generatedName.substring(dashIdx + 3);
-          if (!beforeDash.toLowerCase().includes("m\u1EA1 v\xE0ng")) {
-            const cleanedAfter = afterDash.replace(misplacedRegex, "").replace(/^,\s*/, "").replace(/,\s*,/, ",").trim();
-            generatedName = `${beforeDash} ${plating} - ${cleanedAfter}`;
+          const beforeDash = generatedName.substring(0, dashIdx).replace(misplacedRegex, "").trim();
+          
+          if (!afterDash.trim().toLowerCase().startsWith(plating.toLowerCase())) {
+            const cleanedAfter = afterDash.replace(misplacedRegex, "").replace(/^,\s*/, "").replace(/,\s*,/g, ",").trim();
+            generatedName = `${beforeDash} - ${plating}, ${cleanedAfter}`;
           }
           break;
         }
       }
-      if (generatedName && generatedName.length > 119) {
-        const sapphireRegex = /,\s*Kính\s+Sapphire/i;
+      if (generatedName && generatedName.length > 99) {
+        // Tự động xoá Kính Sapphire hoặc BH 5 Năm nếu quá dài
+        const sapphireRegex = /,\s*Kính\s+Sapph?ire/i;
         if (sapphireRegex.test(generatedName)) {
           const temp = generatedName.replace(sapphireRegex, "");
-          if (temp.length <= 119) {
-            generatedName = temp;
-          } else {
-            generatedName = temp;
+          generatedName = temp;
+        }
+
+        if (generatedName.length > 99) {
+          const warrantyText = /,\s*BH\s+[\d\s]+Năm/i;
+          if (warrantyText.test(generatedName)) {
+             generatedName = generatedName.replace(warrantyText, "");
           }
         }
-        if (generatedName.length > 119) {
-          const strapRegex = /,\s*Dây\s+[^\,]+/i;
-          if (strapRegex.test(generatedName)) {
-            const temp = generatedName.replace(strapRegex, "");
-            if (temp.length <= 119) {
-              generatedName = temp;
-            } else {
-              generatedName = temp;
-            }
-          }
-        }
-        if (generatedName.length > 119) {
-          const warrantyText = ", BH 5 N\u0103m";
-          const cutLength = 119 - warrantyText.length;
-          let base = generatedName;
-          base = base.replace(/,\s*BH\s+[\d\s]+Năm/i, "").replace(/,\s*BH\s+\d/i, "");
-          generatedName = base.substring(0, cutLength) + warrantyText;
+        
+        // Cắt cụt triệt để nếu vẫn quá dài (phòng hờ)
+        if (generatedName.length > 99) {
+          generatedName = generatedName.substring(0, 99).trim().replace(/,$/, "");
         }
       }
     }
@@ -521,6 +502,93 @@ async function generateShopeeProductName(variantId, customModelName) {
     return null;
   }
 }
+
+async function generateShopeeProductDescription(sku, productName, zenSpecs, avatarImagePath) {
+  try {
+    const aiIntro = await _generateDescriptionAI(sku, productName, zenSpecs, avatarImagePath);
+    
+    // Fallback if AI fails
+    const introText = aiIntro || `${productName} – Chiếc đồng hồ mang đậm phong thái lịch lãm dành cho quý ông yêu thích sự tinh tế và chỉn chu. Thiết kế nam tính và sang trọng, phù hợp từ công sở đến những buổi tiệc trang trọng. Lịch lãm – Tinh tế – Chuẩn phong thái.`;
+
+    const specsText = `THÔNG TIN CHI TIẾT:
+Thương hiệu: I&W Carnival
+Mã sản phẩm: ${sku}
+Giới tính: ${zenSpecs?.gender || "Nam"}
+Kiểu máy: ${zenSpecs?.movement || "Cơ/Automatic"}
+Đường kính mặt: ${zenSpecs?.diameter || "41 mm"}
+Độ dày: ${zenSpecs?.thickness || "10.5 mm"}
+Chất liệu vỏ: Thép không gỉ 316L
+Chất liệu dây: Dây cao cấp
+Mặt kính: Sapphire Crystal
+Độ chịu nước: ${zenSpecs?.waterproof || "30M"}
+Bảo hành: 5 năm`;
+
+    const policyText = `CHÍNH SÁCH BẢO HÀNH:
+Thời gian bảo hành: 5 năm
+Miễn phí thay pin trọn đời với đồng hồ pin
+Miễn phí điều chỉnh nhanh chậm đối với đồng hồ cơ
+Miễn phí xử lý khi đồng hồ bị vào nước
+
+CAM KẾT:
+✔ Hàng chính hãng 100%
+✔ Kiểm tra kỹ trước khi giao
+✔ Đóng gói cẩn thận, hỗ trợ đổi trả theo quy định Shopee
+✔ Hỗ trợ tư vấn nhanh chóng trước và sau mua hàng`;
+
+    const hashtagText = `#donghonam #donghonamchinhhang #donghochinhhangnam #donghonamdayda #donghonamdaythep #donghonamdaycaosu #donghonamco #donghonamchongnuoc #iwcarnival #donghocarnival #donghoiw #donghoiwcarnival #donghocarnivalnam #donghocarnival1986`;
+
+    return `${introText}\n\n${specsText}\n\n${policyText}\n\n${hashtagText}`;
+  } catch (error) {
+    console.error("Error generating description:", error.message);
+    return null;
+  }
+}
+
+async function _generateDescriptionAI(sku, productName, zenSpecs, avatarImagePath) {
+  if (!avatarImagePath || !fs.existsSync(avatarImagePath)) {
+    return null;
+  }
+  
+  const prompt = `Bạn là một chuyên gia viết mô tả sản phẩm đồng hồ chuẩn SEO cho Shopee.
+Dựa vào hình ảnh đồng hồ (ảnh Avatar) và các thông tin sau:
+- Tên sản phẩm: ${productName}
+- Mã sản phẩm (SKU): ${sku}
+- Thông số kỹ thuật (Tham khảo): ${JSON.stringify(zenSpecs || {})}
+
+Hãy phân tích hình ảnh và viết một đoạn văn (khoảng 2 đoạn ngắn) giới thiệu sản phẩm thật hấp dẫn, tương tự phong cách của đoạn mẫu dưới đây:
+
+--- BẢN MẪU THAM KHẢO ---
+I&W Carnival 525G – Chiếc đồng hồ nam chính hãng mang đậm phong thái lịch lãm dành cho quý ông yêu thích sự tinh tế và chỉn chu. Thiết kế mặt trắng thanh thoát kết hợp vỏ vàng hồng sang trọng, cọc số La Mã cổ điển và dây da đen cao cấp tạo nên vẻ ngoài nổi bật nhưng vẫn rất dễ phối đồ.
+
+Điểm nhấn open-heart ở vị trí 6 giờ để lộ chuyển động cơ khí đầy cuốn hút, thể hiện vẻ đẹp tinh xảo của bộ máy Automatic bền bỉ từ Seiko – Miyota Nhật Bản. Từng đường nét được hoàn thiện cân đối, nam tính và sang trọng, phù hợp từ công sở, gặp gỡ đối tác đến những buổi tiệc trang trọng. Lịch lãm – Tinh tế – Chuẩn phong thái quý ông.
+------------------------
+
+CHÚ Ý QUAN TRỌNG:
+1. CHỈ TRẢ VỀ phần đoạn văn giới thiệu (viết liền hoặc chia tối đa 2 đoạn). Tuyệt đối KHÔNG sinh ra các phần như "THÔNG TIN CHI TIẾT", "CHÍNH SÁCH", hay hashtag (tôi sẽ tự ghép vào sau).
+2. Tên đồng hồ bắt đầu nên dùng tên từ "${productName}" hoặc một phần của nó.
+3. Chỉ miêu tả những chi tiết thực sự thấy trong ảnh (Màu mặt, màu viền, loại dây, kim, cọc số...). Đừng tự bịa ra tính năng (ví dụ: open-heart) nếu trong ảnh không có!
+4. Giữ giọng văn sang trọng, tinh tế.`;
+
+  try {
+    const avatarData = fs.readFileSync(avatarImagePath);
+    const mimeType = avatarImagePath.toLowerCase().endsWith(".png") ? "image/png" : "image/jpeg";
+    const imagePart = {
+      data: avatarData.toString("base64"),
+      mimeType: mimeType
+    };
+    
+    const result = await callAIWithRotation(prompt, [imagePart]);
+    if (result) {
+      // Dọn dẹp nếu AI lỡ sinh ra THÔNG TIN CHI TIẾT
+      let cleanResult = result.replace(/THÔNG TIN CHI TIẾT.*|CHÍNH SÁCH BẢO HÀNH.*|CAM KẾT.*/is, "").trim();
+      return cleanResult;
+    }
+  } catch (error) {
+    console.error("AI Description Error:", error.message);
+  }
+  return null;
+}
+
 async function runShopeeAutomationDemo(cookiesString, productName, shopeeProductId, media, variantId, onProgress) {
   const log = (msg) => {
     console.log(msg);
@@ -574,8 +642,13 @@ async function runShopeeAutomationDemo(cookiesString, productName, shopeeProduct
   try {
     preZenSpecs = await scrapeZenwatchData(currentVariant.sku);
   } catch (e) {
-    log("[Zenwatch] L\u1ED7i pre-fetch: " + e.message);
+    log("[Zenwatch] Lỗi pre-fetch: " + e.message);
   }
+  
+  log("[Browser] Đang tạo Mô tả sản phẩm bằng AI...");
+  const avatarPath = media?.images && media.images.length > 0 ? media.images[0] : null;
+  const productDescription = await generateShopeeProductDescription(sku, productName, preZenSpecs, avatarPath);
+  log("[Browser] Đã tạo xong Mô tả sản phẩm!");
   log(`[Browser] \u0110ang chu\u1EA9n b\u1ECB tr\xECnh duy\u1EC7t cho ID: ${shopeeProductId || "T\u1EA0O M\u1EDAI"}`);
   try {
     let isNewProduct = false;
@@ -748,8 +821,36 @@ async function runShopeeAutomationDemo(cookiesString, productName, shopeeProduct
           nameInput.dispatchEvent(new Event("change", { bubbles: true }));
         }
       }, productName);
-      log("[Browser] \u0110\xE3 \u0111i\u1EC1n xong t\xEAn s\u1EA3n ph\u1EA9m (Fallback)!");
+      log("[Browser] Đã điền xong tên sản phẩm (Fallback)!");
     }
+
+    log("[Browser] Đang điền Mô tả sản phẩm...");
+    if (productDescription) {
+      try {
+        const descInputLocator = page.locator('textarea[placeholder*="mô tả"], textarea[placeholder*="Mô tả"], .product-edit-form-item textarea').first();
+        if (await descInputLocator.isVisible({ timeout: 5000 }).catch(() => false)) {
+          await descInputLocator.fill("");
+          await descInputLocator.fill(productDescription);
+          await page.waitForTimeout(1000);
+          log("[Browser] Đã điền xong mô tả sản phẩm bằng Playwright!");
+        } else {
+          await page.evaluate((desc) => {
+            const textareas = Array.from(document.querySelectorAll("textarea"));
+            const descInput = textareas.find((i) => i.placeholder && i.placeholder.toLowerCase().includes("mô tả"));
+            if (descInput) {
+              descInput.value = "";
+              descInput.value = desc;
+              descInput.dispatchEvent(new Event("input", { bubbles: true }));
+              descInput.dispatchEvent(new Event("change", { bubbles: true }));
+            }
+          }, productDescription);
+          log("[Browser] Đã điền xong mô tả sản phẩm (Fallback)!");
+        }
+      } catch (e) {
+        log("[Browser] Lỗi điền mô tả sản phẩm: " + e.message);
+      }
+    }
+
     if (isNewProduct) {
       log("[Browser] \u0110ang ch\u1ECDn Ng\xE0nh h\xE0ng...");
       const isNu = productName.toLowerCase().includes("n\u1EEF");
