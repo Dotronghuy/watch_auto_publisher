@@ -17,8 +17,8 @@
   "sdApiUrl": "http://127.0.0.1:8188",
   "googleSheetId": "1tWg6zzAw6F9_2vlvOFfPy_2tV88xFGPB-4f5NvbwS_M",
   "aiTasks": {
-    "fbChatUrl": "6a2fcfa0-6fd4-83ec-a300-18600a899c2d",
-    "igChatUrl": "6a2fd0a7-51b4-83ec-8cee-774662d6b98f"
+    "fbChatUrl": "6a312170-3a44-83ec-b3b4-0e58f992d848",
+    "igChatUrl": "6a3121ae-d280-83ec-968e-aa5cccb73fa9"
   },
   "botPauseHours": 2,
   "botDelayMin": "10",

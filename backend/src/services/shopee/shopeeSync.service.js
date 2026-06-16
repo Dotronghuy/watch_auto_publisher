@@ -1,0 +1,1711 @@
+import * as fs from "fs";
+import * as os from "os";
+import * as path from "path";
+import * as xlsx from "xlsx";
+import ffmpeg from "fluent-ffmpeg";
+import ffmpegInstaller from "@ffmpeg-installer/ffmpeg";
+import ffprobeInstaller from "@ffprobe-installer/ffprobe";
+import { chromium } from "playwright";
+import { PrismaClient } from "@prisma/client";
+import sharp from "sharp";
+const prisma = new PrismaClient();
+ffmpeg.setFfmpegPath(ffmpegInstaller.path);
+import { getFolderIdByName, getImagesInFolder, getVideosInFolder, downloadFileFromDrive, getFoldersInFolder } from '../drive.service.js';
+ffmpeg.setFfprobePath(ffprobeInstaller.path);
+async function appendToGoogleSheet(shopeeProductId, sku, productName, onProgress) {
+  const log = (msg) => {
+    console.log(msg);
+    if (onProgress) onProgress(msg);
+  };
+  try {
+    const setting = await prisma.setting.findUnique({ where: { key: "google_sheet_webhook_url" } });
+    const webhookUrl = setting?.value?.trim();
+    if (!webhookUrl) {
+      log("[Sheet] Ch\u01B0a c\u1EA5u h\xECnh Google Sheet Webhook URL. B\u1ECF qua ghi log.");
+      return;
+    }
+    const payload = {
+      shopeeProductId,
+      sku,
+      productName,
+      timestamp: (/* @__PURE__ */ new Date()).toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" })
+    };
+    const response = await fetch(webhookUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      redirect: "follow",
+      body: JSON.stringify(payload)
+    });
+    if (response.ok) {
+      log(`[Sheet] \u2705 \u0110\xE3 ghi v\xE0o Google Sheet: ${sku} - ID ${shopeeProductId}`);
+    } else {
+      log(`[Sheet] \u26A0\uFE0F Ghi Sheet th\u1EA5t b\u1EA1i (HTTP ${response.status})`);
+    }
+  } catch (e) {
+    log(`[Sheet] L\u1ED7i ghi Google Sheet: ${e.message}`);
+  }
+}
+function filterAndReportVariants(variants) {
+  const validVariants = [];
+  const ignoredVariants = [];
+  for (const variant of variants) {
+    validVariants.push(variant);
+  }
+  return { validVariants, ignoredVariants };
+}
+function exportIgnoredReport(ignoredVariants) {
+  if (ignoredVariants.length === 0) return null;
+  const worksheet = xlsx.utils.json_to_sheet(ignoredVariants);
+  const workbook = xlsx.utils.book_new();
+  xlsx.utils.book_append_sheet(workbook, worksheet, "Bi B\u1ECF Qua");
+  const reportDir = path.join(process.cwd(), "Reports");
+  if (!fs.existsSync(reportDir)) {
+    fs.mkdirSync(reportDir, { recursive: true });
+  }
+  const filePath = path.join(reportDir, `Shopee_Sync_Report_${Date.now()}.xlsx`);
+  xlsx.writeFile(workbook, filePath);
+  return filePath;
+}
+function findModelFolders(baseDir, modelName, depth = 0) {
+  if (depth > 2) return [];
+  if (!fs.existsSync(baseDir)) return [];
+  let results = [];
+  const entries = fs.readdirSync(baseDir, { withFileTypes: true });
+  for (const entry of entries) {
+    if (entry.isDirectory() && entry.name.toLowerCase().includes(modelName.toLowerCase())) {
+      results.push(path.join(baseDir, entry.name));
+    }
+  }
+  for (const entry of entries) {
+    if (entry.isDirectory()) {
+      results = results.concat(findModelFolders(path.join(baseDir, entry.name), modelName, depth + 1));
+    }
+  }
+  return results;
+}
+function shuffleArray(array) {
+  for (let i = array.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [array[i], array[j]] = [array[j], array[i]];
+  }
+  return array;
+}
+async function callAIWithRotation(prompt, images = []) {
+  const geminiSetting = await prisma.setting.findUnique({ where: { key: "gemini_api_key" } });
+  const geminiKeys = (geminiSetting?.value || "").split(",").map((k) => k.trim()).filter((k) => k !== "");
+  const openaiSetting = await prisma.setting.findUnique({ where: { key: "openai_api_key" } });
+  const openaiKeys = (openaiSetting?.value || "").split(",").map((k) => k.trim()).filter((k) => k !== "");
+  const { GoogleGenerativeAI } = await import("@google/generative-ai");
+  for (let i = 0; i < geminiKeys.length; i++) {
+    const apiKey = geminiKeys[i];
+    try {
+      const ai = new GoogleGenerativeAI(apiKey);
+      const model = ai.getGenerativeModel({ model: "gemini-2.5-flash" });
+      const parts = [prompt, ...images.map((img) => ({ inlineData: { data: img.data, mimeType: img.mimeType } }))];
+      const result = await model.generateContent(parts);
+      const response = await result.response;
+      return response.text().trim();
+    } catch (error) {
+      if (error.message?.includes("429") || error.status === 429) {
+        console.warn(`[AI] Gemini Key ${i + 1} qu\xE1 t\u1EA3i, th\u1EED key ti\u1EBFp theo...`);
+        continue;
+      }
+      console.error(`[AI] L\u1ED7i Gemini Key ${i + 1}:`, error.message);
+    }
+  }
+  for (let i = 0; i < openaiKeys.length; i++) {
+    const apiKey = openaiKeys[i];
+    try {
+      console.log(`[AI] \u0110ang th\u1EED s\u1EED d\u1EE5ng OpenAI (GPT-4o) l\xE0m d\u1EF1 ph\xF2ng...`);
+      const response = await fetch("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${apiKey}`
+        },
+        body: JSON.stringify({
+          model: "gpt-4o",
+          messages: [
+            {
+              role: "user",
+              content: [
+                { type: "text", text: prompt },
+                ...images.map((img) => ({
+                  type: "image_url",
+                  image_url: { url: `data:${img.mimeType};base64,${img.data}` }
+                }))
+              ]
+            }
+          ],
+          max_tokens: 300
+        })
+      });
+      const data = await response.json();
+      if (data.choices && data.choices[0]) {
+        return data.choices[0].message.content.trim();
+      } else if (data.error) {
+        throw new Error(data.error.message);
+      }
+    } catch (error) {
+      console.error(`[AI] L\u1ED7i OpenAI Key ${i + 1}:`, error.message);
+    }
+  }
+  throw new Error("T\u1EA5t c\u1EA3 c\xE1c API Key (Gemini & OpenAI) \u0111\u1EC1u kh\xF4ng kh\u1EA3 d\u1EE5ng ho\u1EB7c h\u1EBFt h\u1EA1n m\u1EE9c.");
+}
+async function checkColorMatchWithAI(avatarPath, targetImagePath) {
+  try {
+    let fileToGenerativePart = function(filePath, mimeType) {
+      return {
+        data: Buffer.from(fs.readFileSync(filePath)).toString("base64"),
+        mimeType
+      };
+    };
+    const avatarPart = fileToGenerativePart(avatarPath, "image/jpeg");
+    const targetPart = fileToGenerativePart(targetImagePath, "image/jpeg");
+    const prompt = "H\xE3y ki\u1EC3m tra xem hai chi\u1EBFc \u0111\u1ED3ng h\u1ED3 trong 2 b\u1EE9c \u1EA3nh n\xE0y c\xF3 ho\xE0n to\xE0n tr\xF9ng kh\u1EDBp v\u1EC1 m\xE0u s\u1EAFc (m\xE0u m\u1EB7t s\u1ED1, m\xE0u vi\u1EC1n v\u1ECF, m\xE0u d\xE2y \u0111eo) hay kh\xF4ng. B\u1ECF qua s\u1EF1 kh\xE1c bi\u1EC7t v\u1EC1 g\xF3c ch\u1EE5p, \xE1nh s\xE1ng ho\u1EB7c ph\xF4ng n\u1EC1n. Ch\u1EC9 tr\u1EA3 l\u1EDDi duy nh\u1EA5t b\u1EB1ng ch\u1EEF YES n\u1EBFu ch\xFAng ho\xE0n to\xE0n gi\u1ED1ng nhau v\u1EC1 m\xE0u s\u1EAFc, ho\u1EB7c NO n\u1EBFu c\xF3 b\u1EA5t k\u1EF3 \u0111i\u1EC3m kh\xE1c bi\u1EC7t n\xE0o.";
+    const text = await callAIWithRotation(prompt, [avatarPart, targetPart]);
+    if (!text) return false;
+    const resultText = text.toUpperCase();
+    console.log(`[Media] AI Color Match k\u1EBFt qu\u1EA3: ${resultText}`);
+    return resultText.includes("YES");
+  } catch (e) {
+    console.error("[Media] AI Color Match l\u1ED7i:", e);
+    return false;
+  }
+}
+async function prepareMediaForShopee(modelName, sku, avatarPath, onProgress) {
+  const log = (msg) => {
+    console.log(msg);
+    if (onProgress) onProgress(msg);
+  };
+  if (!avatarPath || !fs.existsSync(avatarPath)) {
+    throw new Error("Thi\u1EBFu \u1EA3nh Avatar c\u1EE7a bi\u1EBFn th\u1EC3. Vui l\xF2ng t\u1EA1o Avatar tr\u01B0\u1EDBc khi Sync.");
+  }
+  log(`[Media] \u0110ang t\xECm ki\u1EBFm th\u01B0 m\u1EE5c g\u1ED1c cho m\xE3 ${sku} tr\xEAn Google Drive...`);
+  
+  const rootFolderId = process.env.ROOT_DRIVE_FOLDER_ID;
+  if (!rootFolderId) throw new Error("Ch\u01B0a c\u1EA5u h\xECnh ROOT_DRIVE_FOLDER_ID trong file .env");
+
+  let modelFolderId = await getFolderIdByName(modelName, rootFolderId);
+  if (!modelFolderId) {
+    const numericModelMatch = modelName.match(/^(\d+)/);
+    if (numericModelMatch) {
+      log(`[Media] Kh\xF4ng t\xECm th\u1EA5y th\u01B0 m\u1EE5c ${modelName}, th\u1EED t\xECm d\u1EF1 ph\xF2ng ${numericModelMatch[1]}`);
+      modelFolderId = await getFolderIdByName(numericModelMatch[1], rootFolderId);
+    }
+  }
+
+  if (!modelFolderId) {
+    log(`[Media] C\u1EA3nh b\xE1o: Kh\xF4ng t\xECm th\u1EA5y th\u01B0 m\u1EE5c ${modelName} tr\xEAn Drive. Ch\u1EC9 s\u1EED d\u1EE5ng Avatar.`);
+    return { images: [avatarPath], video: null };
+  }
+
+  let targetFolderId = modelFolderId;
+  const subFolders = await getFoldersInFolder(modelFolderId);
+  
+  // T\xECm th\u01B0 m\u1EE5c con mang t\xEAn SKU
+  const skuFolder = subFolders.find(f => f.name.includes(sku) || sku.includes(f.name));
+  if (skuFolder) {
+      targetFolderId = skuFolder.id;
+  } else {
+      // N\u1EBFu kh\xF4ng c\xF3 th\u01B0 m\u1EE5c SKU, t\xECm th\u01B0 m\u1EE5c con \u0111\u1EA7u ti\xEAn ch\u1EE9a "B\u1ED9 2" ho\u1EB7c "m\xE1y \u1EA3nh" (M\xF4 ph\u1ECFng AI search)
+      const bestFolder = subFolders.find(f => f.name.toLowerCase().includes("b\u1ED9 t\u1EBFt") || f.name.toLowerCase().includes("b\u1ED9 2") || f.name.toLowerCase().includes("b\u1ED9 1") || f.name.toLowerCase().includes("m\xE1y \u1EA3nh"));
+      if (bestFolder) targetFolderId = bestFolder.id;
+  }
+  
+  log(`[Media] L\u1EA5y \u1EA3nh t\u1EEB folder ID: ${targetFolderId}`);
+  const images = await getImagesInFolder(targetFolderId);
+  
+  let finalImages = [avatarPath];
+  let selectedFiles = shuffleArray(images).slice(0, 7);
+  
+  for (let i = 0; i < selectedFiles.length; i++) {
+     const file = selectedFiles[i];
+     log(`[Media] \u0110ang t\u1EA3i \u1EA3nh: ${file.name}`);
+     let downloadedPath = await downloadFileFromDrive(file.id, file.name);
+     
+     const stats = fs.statSync(downloadedPath);
+     if (stats.size > 2 * 1024 * 1024) {
+         log(`[Media] \u1EA2nh l\u1EDBn h\u01A1n 2MB, \u0111ang n\xE9n v\u1EDBi Sharp...`);
+         const compressedPath = path.join(os.tmpdir(), `shopee_img_compressed_${Date.now()}_${i}.jpg`);
+         await sharp(downloadedPath).resize({ width: 1200, withoutEnlargement: true }).jpeg({ quality: 80 }).toFile(compressedPath);
+         downloadedPath = compressedPath;
+     }
+     finalImages.push(downloadedPath);
+  }
+
+  let finalVideo = null;
+  const videos = await getVideosInFolder(targetFolderId);
+  if (videos.length === 0 && targetFolderId !== modelFolderId) {
+      const rootVideos = await getVideosInFolder(modelFolderId);
+      if (rootVideos.length > 0) videos.push(rootVideos[0]);
+  }
+
+  if (videos.length > 0) {
+      const vid = videos[0];
+      log(`[Video] \u0110ang t\u1EA3i video: ${vid.name}`);
+      let downloadedVidPath = await downloadFileFromDrive(vid.id, vid.name);
+      
+      const stats = fs.statSync(downloadedVidPath);
+      const sizeMB = stats.size / (1024 * 1024);
+      let musicPath = path.join(process.cwd(), "music.mp3");
+      const hasMusic = fs.existsSync(musicPath);
+
+      if (sizeMB > 30 || hasMusic) {
+         log(`[Video] X\u1EED l\xFD video (N\xE9n/L\u1ED3ng nh\u1EA1c)...`);
+         const compressedPath = path.join(os.tmpdir(), `processed_${Date.now()}.mp4`);
+         await new Promise((resolve, reject) => {
+             let command = ffmpeg(downloadedVidPath);
+             if (hasMusic) command = command.input(musicPath);
+             command.videoCodec("libx264").audioCodec("aac").outputOptions(hasMusic ? ["-preset fast", "-crf 28", "-pix_fmt yuv420p", "-map 0:v:0", "-map 1:a:0", "-shortest"] : ["-preset fast", "-crf 28", "-pix_fmt yuv420p"]).save(compressedPath).on("end", () => {
+                 finalVideo = compressedPath;
+                 log(`[Video] \u0110\xE3 x\u1EED l\xFD xong video th\xE0nh c\xF4ng.`);
+                 resolve(true);
+             }).on("error", (err) => {
+                 reject(err);
+             });
+         });
+      } else {
+         finalVideo = downloadedVidPath;
+      }
+  }
+
+  log(`[Ho\xE0n t\u1EA5t Media] T\xECm th\u1EA5y ${finalImages.length} \u1EA3nh v\xE0 ${finalVideo ? "c\xF3" : "kh\xF4ng c\xF3"} video.`);
+  return { images: finalImages, video: finalVideo };
+}
+const zenwatchCache = /* @__PURE__ */ new Map();
+async function getProductGender(variant) {
+  const skuUpper = (variant.sku || "").toUpperCase();
+  const modelUpper = (variant.model?.name || "").toUpperCase();
+  const endsWithL = /L\b|L\d*$/i;
+  if (endsWithL.test(skuUpper) || endsWithL.test(modelUpper)) {
+    return "N\u1EEF";
+  }
+  try {
+    const specs = await scrapeZenwatchData(variant.sku);
+    if (specs && specs.gender) {
+      if (specs.gender.toLowerCase().includes("n\u1EEF") || specs.gender.toLowerCase().includes("female")) {
+        return "N\u1EEF";
+      }
+      if (specs.gender.toLowerCase().includes("nam") || specs.gender.toLowerCase().includes("male")) {
+        return "Nam";
+      }
+    }
+  } catch (e) {
+    console.error("[Gender Detect] L\u1ED7i c\xE0o gi\u1EDBi t\xEDnh t\u1EEB Zenwatch:", e);
+  }
+  return "Nam";
+}
+async function scrapeZenwatchData(modelCode) {
+  const cacheKey = modelCode.split("-")[0].trim().toUpperCase();
+  if (zenwatchCache.has(cacheKey)) {
+    console.log(`[Scraper Cache] S\u1EED d\u1EE5ng th\xF4ng s\u1ED1 cached cho: ${cacheKey}`);
+    return zenwatchCache.get(cacheKey);
+  }
+  
+  let browser;
+  try {
+    let searchCode = modelCode.split("-")[0].trim();
+    if (modelCode.toUpperCase().includes("-T")) searchCode += " T";
+    else if (modelCode.toUpperCase().includes("-D")) searchCode += " D";
+    else if (modelCode.toUpperCase().includes("-S")) searchCode += " S";
+    browser = await chromium.launch({ headless: true });
+    const page = await browser.newPage();
+    await page.goto(`https://zenwatch.vn/?s=${searchCode}&post_type=product`, { waitUntil: "domcontentloaded", timeout: 15e3 });
+    await page.waitForTimeout(2e3);
+    const linkHrefs = await page.evaluate(() => {
+      return Array.from(document.querySelectorAll("a")).map((a) => a.href).filter((h) => h.includes("/product/"));
+    });
+    if (linkHrefs.length > 0) {
+      await page.goto(linkHrefs[0], { waitUntil: "domcontentloaded", timeout: 15e3 });
+      const specs = await page.evaluate(() => {
+        const data = {};
+        const rows = Array.from(document.querySelectorAll("tr, .row"));
+        rows.forEach((row) => {
+          const text = row.textContent || "";
+          if (text.toLowerCase().includes("ch\u1ED1ng n\u01B0\u1EDBc") || text.toLowerCase().includes("ch\u1ECBu n\u01B0\u1EDBc")) data.waterproof = text.split(/[:\n]/).pop()?.trim();
+          if (text.toLowerCase().includes("\u0111\u01B0\u1EDDng k\xEDnh")) data.diameter = text.split(/[:\n]/).pop()?.trim();
+          if (text.toLowerCase().includes("gi\u1EDBi t\xEDnh")) data.gender = text.split(/[:\n]/).pop()?.trim();
+          if (text.toLowerCase().includes("ki\u1EC3u m\xE1y")) data.movement = text.split(/[:\n]/).pop()?.trim();
+          if (text.toLowerCase().includes("\u0111\u1ED9 d\xE0y")) data.thickness = text.split(/[:\n]/).pop()?.trim();
+        });
+        if (!data.diameter || !data.waterproof || !data.gender || !data.movement || !data.thickness) {
+          const pTags = Array.from(document.querySelectorAll(".tab-panels p, #tab-description p, .product-main p, article p"));
+          pTags.forEach((p) => {
+            let html = p.innerHTML;
+            html = html.replace(/<br\s*[\/]?>/gi, "\n");
+            const tempDiv = document.createElement("div");
+            tempDiv.innerHTML = html;
+            const textContent = tempDiv.innerText || tempDiv.textContent || "";
+            const lines = textContent.split("\n");
+            lines.forEach((line) => {
+              const text = line.trim();
+              if (text.toLowerCase().includes("ch\u1ED1ng n\u01B0\u1EDBc") || text.toLowerCase().includes("ch\u1ECBu n\u01B0\u1EDBc")) {
+                data.waterproof = text.split(/[:\n]/).pop()?.trim();
+              }
+              if (text.toLowerCase().includes("\u0111\u01B0\u1EDDng k\xEDnh")) {
+                data.diameter = text.split(/[:\n]/).pop()?.trim();
+              }
+              if (text.toLowerCase().includes("gi\u1EDBi t\xEDnh")) {
+                data.gender = text.split(/[:\n]/).pop()?.trim();
+              }
+              if (text.toLowerCase().includes("ki\u1EC3u m\xE1y")) {
+                data.movement = text.split(/[:\n]/).pop()?.trim();
+              }
+              if (text.toLowerCase().includes("\u0111\u1ED9 d\xE0y")) {
+                data.thickness = text.split(/[:\n]/).pop()?.trim();
+              }
+            });
+          });
+        }
+        return data;
+      });
+      let wp = specs.waterproof || "";
+      let dia = specs.diameter?.match(/\d+/)?.[0];
+      if (dia) dia = dia + "mm";
+      else dia = "";
+      const result = {
+        waterproof: wp,
+        diameter: dia,
+        gender: specs.gender || "Nam",
+        movement: specs.movement || "Automatic",
+        thickness: specs.thickness || ""
+      };
+      zenwatchCache.set(cacheKey, result);
+      return result;
+    }
+  } catch (e) {
+    console.error("[Scraper] L\u1ED7i c\xE0o zenwatch:", e);
+  } finally {
+    if (browser) await browser.close();
+  }
+  const defaultResult = { waterproof: "", diameter: "", gender: "Nam", movement: "Automatic", thickness: "" };
+  zenwatchCache.set(cacheKey, defaultResult);
+  return defaultResult;
+}
+async function generateShopeeProductName(variantId, customModelName) {
+  try {
+    let variant = await prisma.variant.findUnique({ where: { id: variantId }, include: { model: true } });
+    if (!variant) throw new Error("Variant not found");
+    let targetModelName = customModelName || variant.model.name;
+    const gender = await getProductGender(variant);
+    const isFemale = gender === "N\u1EEF";
+    const watchGenderText = isFemale ? "N\u1EEF" : "Nam";
+    const suffixLetter = isFemale ? "L" : "G";
+    const siblings = await prisma.variant.findMany({
+      where: {
+        modelId: variant.modelId,
+        avatarImage: { not: null }
+      },
+      orderBy: {
+        sku: "asc"
+      }
+    });
+    const sortedSiblings = [
+      variant,
+      ...siblings.filter((s) => s.id !== variant.id)
+    ];
+    let images = [];
+    for (const sib of sortedSiblings) {
+      if (sib.avatarImage && fs.existsSync(sib.avatarImage)) {
+        images.push({
+          data: fs.readFileSync(sib.avatarImage).toString("base64"),
+          mimeType: "image/jpeg"
+        });
+      }
+    }
+    const prompt = `T\u1EEB m\xE3 \u0111\u1ED3ng h\u1ED3 "${targetModelName}", h\xE3y t\u1EA1o 1 c\xE2u \u0111\u1EB7t t\xEAn s\u1EA3n ph\u1EA9m \u0111\u1ED3ng h\u1ED3 chu\u1EA9n SEO cho Shopee (T\u1ED1i \u0111a 115 k\xFD t\u1EF1). 
+    B\u1EAFt bu\u1ED9c ph\u1EA3i bao g\u1ED3m c\xE1c th\xF4ng tin theo c\xF4ng th\u1EE9c sau:
+    [\u0110\u1ED3ng H\u1ED3 ${watchGenderText} I&W Carnival ${variant.model.name.replace(/[a-zA-Z]+$/, "")}${suffixLetter} Ch\xEDnh H\xE3ng [M\u1EA1 V\xE0ng H\u1ED3ng | M\u1EA1 V\xE0ng | (b\u1ECF tr\u1ED1ng n\u1EBFu thu\u1EA7n th\xE9p)]] - [M\xE1y C\u01A1/M\xE1y Pin], [M\xE0u m\u1EB7t], [Vi\u1EC1n \u0110\xEDnh \u0110\xE1 (n\u1EBFu c\xF3 \u0111\xEDnh \u0111\xE1)], [D\xE2y + M\xE0u d\xE2y], [K\xEDnh Sapphire], [BH 5 N\u0103m]
+
+    V\u1ECA TR\xCD CH\xCDNH X\xC1C: "M\u1EA1 V\xE0ng H\u1ED3ng" ho\u1EB7c "M\u1EA1 V\xE0ng" ph\u1EA3i \u0111\u1EB7t \u0110\xDANG SAU c\u1EE5m "Ch\xEDnh H\xE3ng", TR\u01AF\u1EDAC d\u1EA5u g\u1EA1ch ngang. Kh\xF4ng \u0111\u01B0\u1EE3c \u0111\u1EB7t sau d\u1EA5u g\u1EA1ch ngang.
+
+    L\u01AFU \xDD \u0110\u1EB6C BI\u1EC6T 1 - M\u1EA0 V\xC0NG H\u1ED2NG: N\u1EBFu trong \u1EA3nh \u0111\u1ED3ng h\u1ED3 m\u1EE5c ti\xEAu (\u1EA3nh th\u1EE9 1) th\u1EA5y v\u1ECF, bezel, d\xE2y ho\u1EB7c c\xE1c chi ti\u1EBFt kim lo\u1EA1i c\xF3 m\xE0u v\xE0ng h\u1ED3ng/rose gold (m\xE0u v\xE0ng \u1EA5m h\u01A1i ng\u1EA3 h\u1ED3ng), B\u1EAET BU\u1ED8C th\xEAm "M\u1EA1 V\xE0ng H\u1ED3ng" SAU "Ch\xEDnh H\xE3ng".
+
+    L\u01AFU \xDD \u0110\u1EB6C BI\u1EC6T 2 - M\u1EA0 V\xC0NG: N\u1EBFu th\u1EA5y chi ti\u1EBFt kim lo\u1EA1i m\xE0u v\xE0ng gold thu\u1EA7n (kh\xF4ng h\u1ED3ng), th\xEAm "M\u1EA1 V\xE0ng" SAU "Ch\xEDnh H\xE3ng".
+
+    L\u01AFU \xDD \u0110\u1EB6C BI\u1EC6T 3 - VI\u1EC0N \u0110\xCDNH \u0110\xC1: N\u1EBFu trong \u1EA3nh \u0111\u1ED3ng h\u1ED3 m\u1EE5c ti\xEAu (\u1EA3nh th\u1EE9 1) c\xF3 \u0111\xEDnh \u0111\xE1 \u1EDF vi\u1EC1n (bezel), b\u1EAFt bu\u1ED9c ph\u1EA3i th\xEAm c\u1EE5m "Vi\u1EC1n \u0110\xEDnh \u0110\xE1" v\xE0o danh s\xE1ch thu\u1ED9c t\xEDnh SAU d\u1EA5u g\u1EA1ch ngang (v\xED d\u1EE5: sau m\xE0u m\u1EB7t: M\u1EB7t M\xE0u Xanh Bi\u1EC3n, Vi\u1EC1n \u0110\xEDnh \u0110\xE1, D\xE2y Th\xE9p,...). Tuy\u1EC7t \u0111\u1ED1i KH\xD4NG vi\u1EBFt ch\u1EEF "\u0110\xEDnh \u0110\xE1" \u1EDF tr\u01B0\u1EDBc d\u1EA5u g\u1EA1ch ngang.
+
+    L\u01AFU \xDD \u0110\u1EB6C BI\u1EC6T 4 - KH\xD4NG D\xD9NG T\xCDNH T\u1EEA HOA M\u1EF8 CHO M\xC0U M\u1EB6T: Y\xEAu c\u1EA7u \u0111\u1ECBnh d\u1EA1ng m\xE0u m\u1EB7t lu\xF4n c\xF3 ch\u1EEF "M\xE0u" v\xE0 l\xE0 m\xE0u tr\u01A1n c\u01A1 b\u1EA3n, v\xED d\u1EE5: "M\u1EB7t M\xE0u Xanh \u0110en", "M\u1EB7t M\xE0u Xanh Bi\u1EC3n", "M\u1EB7t M\xE0u Tr\u1EAFng", "M\u1EB7t M\xE0u \u0110en", "M\u1EB7t M\xE0u \u0110\u1ECF", "M\u1EB7t M\xE0u H\u1ED3ng", "M\u1EB7t M\xE0u X\xE1m", "M\u1EB7t M\xE0u V\xE0ng". Tuy\u1EC7t \u0111\u1ED1i KH\xD4NG th\xEAm c\xE1c t\xEDnh t\u1EEB hoa m\u1EF9/mi\xEAu t\u1EA3 \u0111i k\xE8m m\xE0u s\u1EAFc nh\u01B0 "L\u1EA5p L\xE1nh", "C\xE1 T\xEDnh", "Sang Tr\u1ECDng", "Qu\xFD Ph\xE1i", "Th\u1EDDi Trang", "Cu\u1ED1n H\xFAt", "Tinh T\u1EBF",...
+
+    L\u01AFU \xDD \u0110\u1EB6C BI\u1EC6T 5 - QUY T\u1EAEC PH\xC2N BI\u1EC6T M\xC0U D\xC2Y (T\u1ED0I QUAN TR\u1ECCNG):
+    T\xF4i g\u1EEDi cho b\u1EA1n danh s\xE1ch ${images.length} \u1EA3nh. Trong \u0111\xF3:
+    - \u1EA2nh th\u1EE9 1 (\u1EA3nh \u0111\u1EA7u ti\xEAn) l\xE0 chi\u1EBFc \u0111\u1ED3ng h\u1ED3 m\u1EE5c ti\xEAu c\u1EA7n \u0111\u1EB7t t\xEAn (SKU: ${variant.sku}).
+    - C\xE1c \u1EA3nh ti\u1EBFp theo t\u1EEB \u1EA3nh th\u1EE9 2 tr\u1EDF \u0111i l\xE0 \u1EA3nh c\xE1c m\u1EABu anh em c\xF9ng d\xF2ng m\xE1y (Model).
+    
+    H\xE3y \u0111\u1ED1i chi\u1EBFu k\u1EF9 l\u01B0\u1EE1ng m\xE0u m\u1EB7t s\u1ED1 (dial) c\u1EE7a \u1EA2nh th\u1EE9 1 v\u1EDBi t\u1EA5t c\u1EA3 c\xE1c \u1EA3nh c\xF2n l\u1EA1i:
+    - N\u1EBEU m\xE0u m\u1EB7t s\u1ED1 c\u1EE7a \u1EA2nh th\u1EE9 1 tr\xF9ng kh\u1EDBp v\u1EDBi m\xE0u m\u1EB7t s\u1ED1 c\u1EE7a b\u1EA5t k\u1EF3 \u1EA3nh n\xE0o kh\xE1c trong danh s\xE1ch (V\xED d\u1EE5: D\xF2ng m\xE1y n\xE0y c\xF3 nhi\u1EC1u SKU c\xF9ng m\u1EB7t tr\u1EAFng, nh\u01B0ng m\u1ED9t m\u1EABu \u0111i k\xE8m d\xE2y da \u0111en, m\u1EABu c\xF2n l\u1EA1i \u0111i k\xE8m d\xE2y da \u0111\u1ECF): B\u1EA1n B\u1EAET BU\u1ED8C ph\u1EA3i ghi r\xF5 m\xE0u s\u1EAFc c\u1EE7a d\xE2y \u0111eo d\u1EA1ng "[Ch\u1EA5t li\u1EC7u d\xE2y] [M\xE0u d\xE2y]" (v\xED d\u1EE5: "D\xE2y Da \u0110en", "D\xE2y Da \u0110\u1ECF", "D\xE2y Th\xE9p B\u1EA1c", "D\xE2y Th\xE9p V\xE0ng H\u1ED3ng", "D\xE2y Th\xE9p Demix", "D\xE2y Cao Su Xanh") \u0111\u1EC3 ph\xE2n bi\u1EC7t.
+    - N\u1EBEU m\xE0u m\u1EB7t s\u1ED1 c\u1EE7a \u1EA2nh th\u1EE9 1 l\xE0 \u0111\u1ED9c b\u1EA3n trong c\u1EA3 d\xF2ng m\xE1y (kh\xF4ng tr\xF9ng m\xE0u m\u1EB7t v\u1EDBi b\u1EA5t k\u1EF3 chi\u1EBFc \u0111\u1ED3ng h\u1ED3 n\xE0o kh\xE1c t\u1EEB \u1EA3nh th\u1EE9 2 tr\u1EDF \u0111i, ho\u1EB7c d\xF2ng m\xE1y n\xE0y ch\u1EC9 c\xF3 duy nh\u1EA5t 1 \u1EA3nh): B\u1EA1n ch\u1EC9 c\u1EA7n ghi chung chung ch\u1EA5t li\u1EC7u d\xE2y d\u1EA1ng "[Ch\u1EA5t li\u1EC7u d\xE2y]" (v\xED d\u1EE5: "D\xE2y Da", "D\xE2y Th\xE9p", "D\xE2y Cao Su") m\xE0 TUY\u1EC6T \u0110\u1ED0I KH\xD4NG th\xEAm m\xE0u s\u1EAFc ph\xEDa sau (v\xED d\u1EE5: vi\u1EBFt "D\xE2y Da" thay v\xEC "D\xE2y Da \u0110en").
+
+    V\xED d\u1EE5 \u0111\u1ED3ng h\u1ED3 hai m\xE0u (th\xE9p + v\xE0ng h\u1ED3ng):
+    \u0110\u1ED3ng H\u1ED3 ${watchGenderText} I&W Carnival ${variant.model.name.replace(/[a-zA-Z]+$/, "")}${suffixLetter} Ch\xEDnh H\xE3ng M\u1EA1 V\xE0ng H\u1ED3ng - M\xE1y C\u01A1, M\u1EB7t M\xE0u Tr\u1EAFng, D\xE2y Th\xE9p B\u1EA1c, K\xEDnh Sapphire, BH 5 N\u0103m
+
+    V\xED d\u1EE5 \u0111\u1ED3ng h\u1ED3 \u0111\xEDnh \u0111\xE1:
+    \u0110\u1ED3ng H\u1ED3 ${watchGenderText} I&W Carnival ${variant.model.name.replace(/[a-zA-Z]+$/, "")}${suffixLetter} Ch\xEDnh H\xE3ng M\u1EA1 V\xE0ng H\u1ED3ng - M\xE1y Pin, M\u1EB7t M\xE0u Xanh \u0110en, Vi\u1EC1n \u0110\xEDnh \u0110\xE1, D\xE2y Da \u0110en, K\xEDnh Sapphire, BH 5 N\u0103m
+
+    V\xED d\u1EE5 \u0111\u1ED3ng h\u1ED3 thu\u1EA7n th\xE9p kh\xF4ng m\u1EA1:
+    \u0110\u1ED3ng H\u1ED3 ${watchGenderText} I&W Carnival ${variant.model.name.replace(/[a-zA-Z]+$/, "")}${suffixLetter} Ch\xEDnh H\xE3ng - M\xE1y Pin, M\u1EB7t M\xE0u Xanh \u0110en, D\xE2y Da \u0110\u1ECF, K\xEDnh Sapphire, BH 5 N\u0103m
+
+    H\xE3y d\xF9ng c\xE1c \u1EA3nh \u0111\u01B0\u1EE3c cung c\u1EA5p \u0111\u1EC3 th\u1EF1c hi\u1EC7n \u0111\xFAng quy t\u1EAFc so s\xE1nh m\xE0u m\u1EB7t s\u1ED1 tr\xEAn. Tuy\u1EC7t \u0111\u1ED1i kh\xF4ng th\xEAm b\u1EA5t k\u1EF3 hashtag, k\xFD t\u1EF1 d\u01B0 th\u1EEBa hay m\xF4 t\u1EA3 d\xE0i d\xF2ng n\xE0o. Tr\u1EA3 v\u1EC1 \u0110\xDANG M\u1ED8T D\xD2NG t\xEAn s\u1EA3n ph\u1EA9m duy nh\u1EA5t.`;
+    let generatedName = await callAIWithRotation(prompt, images);
+    if (generatedName) {
+      generatedName = generatedName.replace(/Xanh Lam/gi, "Xanh Bi\u1EC3n").replace(/Xanh ngọc/gi, "Xanh Tiffany").replace(/Xanh Mint/gi, "Xanh Tiffany").replace(/xanh lam/gi, "xanh bi\u1EC3n").replace(/xanh ngọc/gi, "xanh Tiffany").replace(/xanh mint/gi, "xanh Tiffany").replace(/Màu bạc/gi, "M\xE0u x\xE1m").replace(/Mặt bạc/gi, "M\u1EB7t x\xE1m").replace(/màu bạc/gi, "m\xE0u x\xE1m").replace(/mặt bạc/gi, "m\u1EB7t x\xE1m").replace(/Màu Trắng Bạc/gi, "M\xE0u Tr\u1EAFng").replace(/Mặt Trắng Bạc/gi, "M\u1EB7t Tr\u1EAFng").replace(/Mặt Màu Trắng Bạc/gi, "M\u1EB7t M\xE0u Tr\u1EAFng").replace(/màu trắng bạc/gi, "m\xE0u tr\u1EAFng").replace(/mặt trắng bạc/gi, "m\u1EB7t tr\u1EAFng").replace(/-\s*Pin/gi, "- M\xE1y Pin").replace(/,\s*Pin/gi, ", M\xE1y Pin").replace(/-\s*Cơ/gi, "- M\xE1y C\u01A1").replace(/,\s*Cơ/gi, ", M\xE1y C\u01A1").replace(/Máy\s+Máy\s+Pin/gi, "M\xE1y Pin").replace(/Máy\s+Máy\s+Cơ/gi, "M\xE1y C\u01A1").replace(/,\s*Sapphire/gi, ", K\xEDnh Sapphire").replace(/Kính\s+Kính\s+Sapphire/gi, "K\xEDnh Sapphire");
+      const adjectives = [
+        "l\u1EA5p l\xE1nh",
+        "c\xE1 t\xEDnh",
+        "sang tr\u1ECDng",
+        "th\u1EDDi trang",
+        "hi\u1EC7n \u0111\u1EA1i",
+        "qu\xFD ph\xE1i",
+        "quy\u1EBFn r\u0169",
+        "\u0111\u1ED9c \u0111\xE1o",
+        "\u1EA5n t\u01B0\u1EE3ng",
+        "tinh t\u1EBF",
+        "cu\u1ED1n h\xFAt",
+        "n\u1ED5i b\u1EADt",
+        "tr\u1EBB trung",
+        "\u0111\u1EB3ng c\u1EA5p",
+        "phong c\xE1ch"
+      ];
+      for (const adj of adjectives) {
+        const regex = new RegExp(`\\s+${adj}\\b`, "gi");
+        generatedName = generatedName.replace(regex, "");
+      }
+      generatedName = generatedName.replace(/Mặt\s+(?!Màu\s+)(Xanh Biển|Xanh Tiffany|Xám|Đỏ|Đen|Trắng|Hồng|Vàng|Xanh Đen|Xanh Lá|Tím|Nâu|Bạc|Vàng Hồng|Khói|Xanh|Ghi)/gi, "M\u1EB7t M\xE0u $1");
+      for (const plating of ["M\u1EA1 V\xE0ng H\u1ED3ng", "M\u1EA1 V\xE0ng"]) {
+        const misplacedRegex = new RegExp(`,?\\s*${plating}\\s*,?`, "i");
+        if (misplacedRegex.test(generatedName) && generatedName.includes(" - ")) {
+          const dashIdx = generatedName.indexOf(" - ");
+          const beforeDash = generatedName.substring(0, dashIdx);
+          const afterDash = generatedName.substring(dashIdx + 3);
+          if (!beforeDash.toLowerCase().includes("m\u1EA1 v\xE0ng")) {
+            const cleanedAfter = afterDash.replace(misplacedRegex, "").replace(/^,\s*/, "").replace(/,\s*,/, ",").trim();
+            generatedName = `${beforeDash} ${plating} - ${cleanedAfter}`;
+          }
+          break;
+        }
+      }
+      if (generatedName && generatedName.length > 119) {
+        const sapphireRegex = /,\s*Kính\s+Sapphire/i;
+        if (sapphireRegex.test(generatedName)) {
+          const temp = generatedName.replace(sapphireRegex, "");
+          if (temp.length <= 119) {
+            generatedName = temp;
+          } else {
+            generatedName = temp;
+          }
+        }
+        if (generatedName.length > 119) {
+          const strapRegex = /,\s*Dây\s+[^\,]+/i;
+          if (strapRegex.test(generatedName)) {
+            const temp = generatedName.replace(strapRegex, "");
+            if (temp.length <= 119) {
+              generatedName = temp;
+            } else {
+              generatedName = temp;
+            }
+          }
+        }
+        if (generatedName.length > 119) {
+          const warrantyText = ", BH 5 N\u0103m";
+          const cutLength = 119 - warrantyText.length;
+          let base = generatedName;
+          base = base.replace(/,\s*BH\s+[\d\s]+Năm/i, "").replace(/,\s*BH\s+\d/i, "");
+          generatedName = base.substring(0, cutLength) + warrantyText;
+        }
+      }
+    }
+    return generatedName;
+  } catch (error) {
+    console.error("Error generating Shopee name:", error.message);
+    return null;
+  }
+}
+async function runShopeeAutomationDemo(cookiesString, productName, shopeeProductId, media, variantId, onProgress) {
+  const log = (msg) => {
+    console.log(msg);
+    try {
+      fs.appendFileSync(path.join(process.cwd(), "shopee_debug.txt"), msg + "");
+    } catch (e) {
+    }
+    if (onProgress) onProgress(msg);
+  };
+  const currentVariant = await prisma.variant.findUnique({
+    where: { id: variantId },
+    include: { model: true }
+  });
+  if (!currentVariant) throw new Error("Kh\xF4ng t\xECm th\u1EA5y bi\u1EBFn th\u1EC3 trong DB");
+  const sku = currentVariant.sku;
+  const cookies = JSON.parse(cookiesString);
+  let allVariants = [];
+  log(`[Browser] \u0110ang kh\u1EDFi \u0111\u1ED9ng Playwright (Chrome)...`);
+  let browser = null;
+  browser = await chromium.launch({
+    headless: false,
+    args: ["--start-maximized"]
+  });
+  const context = await browser.newContext({ viewport: null });
+  const playwrightCookies = cookies.map((c) => {
+    let sameSite = "Lax";
+    const s = (c.sameSite || "").toLowerCase();
+    if (s === "strict") sameSite = "Strict";
+    else if (s === "none") sameSite = "None";
+    else sameSite = "Lax";
+    return {
+      name: c.name,
+      value: c.value,
+      domain: c.domain.startsWith(".") ? c.domain : `.${c.domain}`,
+      path: c.path || "/",
+      expires: c.expires || -1,
+      httpOnly: c.httpOnly || false,
+      secure: c.secure || false,
+      sameSite
+    };
+  });
+  await context.addCookies(playwrightCookies);
+  let page = await context.newPage();
+  page.on("console", (msg) => {
+    if (msg.text().includes("[Browser]")) {
+      log(msg.text());
+    }
+  });
+  log("[Browser] Pre-fetch d\u1EEF li\u1EC7u Zenwatch tr\u01B0\u1EDBc khi m\u1EDF Shopee...");
+  let preZenSpecs = null;
+  try {
+    preZenSpecs = await scrapeZenwatchData(currentVariant.sku);
+  } catch (e) {
+    log("[Zenwatch] L\u1ED7i pre-fetch: " + e.message);
+  }
+  log(`[Browser] \u0110ang chu\u1EA9n b\u1ECB tr\xECnh duy\u1EC7t cho ID: ${shopeeProductId || "T\u1EA0O M\u1EDAI"}`);
+  try {
+    let isNewProduct = false;
+    const cleanId = (shopeeProductId || "").trim();
+    if (!cleanId || cleanId === "" || cleanId.toLowerCase() === "id" || !/^\d+$/.test(cleanId)) {
+      isNewProduct = true;
+      log(`[Browser] Shopee ID kh\xF4ng h\u1EE3p l\u1EC7 ho\u1EB7c tr\u1ED1ng (ID hi\u1EC7n t\u1EA1i: "${shopeeProductId}"), b\u1EAFt \u0111\u1EA7u quy tr\xECnh t\u1EA1o s\u1EA3n ph\u1EA9m m\u1EDBi...`);
+      await page.goto("https://banhang.shopee.vn/portal/product/list/all", { waitUntil: "load", timeout: 9e4 });
+      await page.waitForTimeout(3e3);
+      log(`[Browser] URL Hi\u1EC7n T\u1EA1i: ${page.url()} | Ti\xEAu \u0110\u1EC1: ${await page.title()}`);
+      log(`[Browser] \u0110ang ki\u1EC3m tra v\xE0 \u0111\xF3ng c\xE1c popup h\u01B0\u1EDBng d\u1EABn c\u1EE7a Shopee...`);
+      try {
+        const checkNowBtn = page.locator("button").filter({ hasText: /Check Now|Kiểm tra ngay/i }).first();
+        if (await checkNowBtn.isVisible({ timeout: 2e3 }).catch(() => false)) {
+          await checkNowBtn.click();
+          await page.waitForTimeout(1e3);
+        }
+        for (let i = 0; i < 3; i++) {
+          const skipBtn = page.locator("button").filter({ hasText: /^Bỏ qua$|^Skip$/i }).first();
+          if (await skipBtn.isVisible({ timeout: 1e3 }).catch(() => false)) {
+            await skipBtn.click();
+            await page.waitForTimeout(500);
+          }
+        }
+      } catch (e) {
+      }
+      log(`[Browser] \u0110ang click n\xFAt Th\xEAm 1 s\u1EA3n ph\u1EA9m m\u1EDBi...`);
+      const addBtn = page.locator('#top-add-new-product-btn, button:has-text("Th\xEAm 1 s\u1EA3n ph\u1EA9m m\u1EDBi")').first();
+      await addBtn.waitFor({ state: "visible", timeout: 15e3 });
+      const [newPage] = await Promise.all([
+        context.waitForEvent("page"),
+        addBtn.click()
+      ]);
+      page = newPage;
+      page.on("console", (msg) => {
+        if (msg.text().includes("[Browser]")) {
+          log(msg.text());
+        }
+      });
+      try {
+        await page.waitForURL("**/portal/product/new**", { timeout: 2e4 });
+      } catch (_) {
+        await page.waitForLoadState("domcontentloaded", { timeout: 15e3 });
+      }
+      await page.waitForTimeout(3e3);
+      log(`[Browser] \u0110\xE3 v\xE0o trang Th\xEAm s\u1EA3n ph\u1EA9m m\u1EDBi. URL: ${page.url()} | Ti\xEAu \u0110\u1EC1: ${await page.title()}`);
+    } else {
+      await page.goto(`https://banhang.shopee.vn/portal/product/${shopeeProductId}`, { waitUntil: "load", timeout: 9e4 });
+      await page.waitForTimeout(8e3);
+      log(`[Browser] \u0110\xE3 v\xE0o trang S\u1EEDa s\u1EA3n ph\u1EA9m. URL: ${page.url()} | Ti\xEAu \u0110\u1EC1: ${await page.title()}`);
+    }
+    if (!isNewProduct) {
+      log("[Browser] \u0110ang d\xF2 t\xECm v\xE0 x\xF3a to\xE0n b\u1ED9 \u1EA3nh/video c\u0169...");
+      try {
+        let basicInfoPanel = page.locator('input[type="file"]').first().locator('xpath=./ancestor::*[contains(@class, "panel-container") or contains(@class, "section") or contains(@class, "product-edit")][1]');
+        if (await basicInfoPanel.count() === 0) {
+          basicInfoPanel = page.locator(':text("H\xECnh \u1EA3nh s\u1EA3n ph\u1EA9m")').locator('xpath=./ancestor::*[contains(@class, "panel-container") or contains(@class, "section") or contains(@class, "basic-info")][1]');
+        }
+        let deletedAny = true;
+        for (let i = 0; i < 20 && deletedAny; i++) {
+          deletedAny = false;
+          const imgs = await basicInfoPanel.locator('.shopee-image-manager__item, [class*="image-manager__item"], .eds-upload__item, [class*="ratio-box"], [class*="upload-wrapper"], [class*="image-item"]').all();
+          for (const img of imgs.reverse()) {
+            if (await img.isVisible()) {
+              try {
+                await img.hover();
+                await page.waitForTimeout(800);
+                const deleteIcons = await img.locator('svg, i, button, [class*="delete"], [class*="remove"], [class*="trash"], [class*="close"]').all();
+                let clicked = false;
+                for (const icon of deleteIcons) {
+                  const className = await icon.getAttribute("class") || "";
+                  const title = await icon.getAttribute("title") || "";
+                  if (className.toLowerCase().includes("delete") || className.toLowerCase().includes("remove") || className.toLowerCase().includes("trash") || className.toLowerCase().includes("close") || title.toLowerCase().includes("x\xF3a")) {
+                    if (await icon.isVisible()) {
+                      await icon.click({ force: true });
+                      clicked = true;
+                      break;
+                    }
+                  }
+                }
+                if (clicked) {
+                  await page.waitForTimeout(1e3);
+                  deletedAny = true;
+                  break;
+                }
+              } catch (e) {
+              }
+            }
+          }
+        }
+        const videoLabel = basicInfoPanel.locator("label, div, span").filter({ hasText: /video sản phẩm|product video/i }).first();
+        if (await videoLabel.isVisible()) {
+          let videoSection = videoLabel.locator("..");
+          for (let i = 0; i < 3; i++) {
+            if (await videoSection.locator("..").isVisible()) {
+              videoSection = videoSection.locator("..");
+            }
+          }
+          const hasVideoMedia = await videoSection.locator("video, img").count() > 0;
+          const vStyle = await videoSection.getAttribute("style") || "";
+          const hasVideoBg = vStyle.toLowerCase().includes("url(") || vStyle.toLowerCase().includes("background-image");
+          if (hasVideoMedia || hasVideoBg) {
+            await videoSection.hover();
+            await page.waitForTimeout(500);
+            const svgs = await videoSection.locator('svg, i, [class*="delete"]').all();
+            if (svgs.length > 0) {
+              try {
+                await svgs[svgs.length - 1].click({ force: true });
+                await page.waitForTimeout(500);
+              } catch (e) {
+              }
+            }
+          }
+        }
+      } catch (e) {
+        log("[Browser] L\u1ED7i khi x\xF3a \u1EA3nh c\u0169: " + e.message);
+      }
+      await new Promise((r) => setTimeout(r, 2e3));
+    }
+    try {
+      log("[Browser] \u0110ang upload \u1EA3nh v\xE0 video m\u1EDBi...");
+      await page.waitForSelector('input[type="file"]', { state: "attached", timeout: 15e3 }).catch(() => {
+      });
+      const fileInputs = await page.locator('input[type="file"]').all();
+      if (fileInputs.length > 0 && media.images.length > 0) {
+        log(`[Browser] Upload ${media.images.length} \u1EA3nh...`);
+        await fileInputs[0].setInputFiles(media.images);
+        await page.waitForTimeout(5e3);
+      }
+      if (fileInputs.length > 1 && media.video) {
+        log("[Browser] Upload Video...");
+        try {
+          await fileInputs[1].setInputFiles(media.video);
+          await page.waitForTimeout(5e3);
+          const confirmBtns = await page.locator("button").filter({ hasText: /Xác nhận|Confirm|Đồng ý/i }).all();
+          for (const btn of confirmBtns) {
+            if (await btn.isVisible()) {
+              await btn.click({ force: true });
+              await page.waitForTimeout(1e3);
+            }
+          }
+        } catch (e) {
+          log("[Browser] L\u1ED7i upload video: " + e.message);
+        }
+      }
+    } catch (e) {
+      log("[Browser] L\u1ED7i upload media: " + e.message);
+    }
+    await page.waitForTimeout(2e3);
+    log("[Browser] \u0110ang \u0111i\u1EC1n T\xEAn s\u1EA3n ph\u1EA9m...");
+    const nameInputLocator = page.locator('input[placeholder*="t\xEAn s\u1EA3n ph\u1EA9m"], input[placeholder*="T\xEAn s\u1EA3n ph\u1EA9m"], input[maxlength="120"], .product-edit-form-item input').first();
+    await nameInputLocator.waitFor({ state: "visible", timeout: 1e4 }).catch(() => {
+    });
+    if (await nameInputLocator.isVisible({ timeout: 5e3 }).catch(() => false)) {
+      await nameInputLocator.fill("");
+      await nameInputLocator.fill(productName);
+      await nameInputLocator.pressSequentially(" ", { delay: 50 });
+      await page.waitForTimeout(500);
+      await nameInputLocator.press("Backspace");
+      await page.waitForTimeout(2e3);
+      log("[Browser] \u0110\xE3 \u0111i\u1EC1n xong t\xEAn s\u1EA3n ph\u1EA9m b\u1EB1ng Playwright!");
+    } else {
+      await page.evaluate((name) => {
+        const inputs = Array.from(document.querySelectorAll("input, textarea"));
+        const nameInput = inputs.find((i) => i.maxLength >= 100 || i.placeholder && i.placeholder.toLowerCase().includes("t\xEAn s\u1EA3n ph\u1EA9m"));
+        if (nameInput) {
+          nameInput.value = "";
+          nameInput.value = name;
+          nameInput.dispatchEvent(new Event("input", { bubbles: true }));
+          nameInput.dispatchEvent(new Event("change", { bubbles: true }));
+        }
+      }, productName);
+      log("[Browser] \u0110\xE3 \u0111i\u1EC1n xong t\xEAn s\u1EA3n ph\u1EA9m (Fallback)!");
+    }
+    if (isNewProduct) {
+      log("[Browser] \u0110ang ch\u1ECDn Ng\xE0nh h\xE0ng...");
+      const isNu = productName.toLowerCase().includes("n\u1EEF");
+      const targetCategoryText = isNu ? "\u0110\u1ED3ng h\u1ED3 n\u1EEF" : "\u0110\u1ED3ng h\u1ED3 nam";
+      log(`[Browser] M\u1EE5c ti\xEAu Ng\xE0nh h\xE0ng: ${targetCategoryText}`);
+      let recommendedClicked = false;
+      try {
+        log("[Browser] \u0110ang \u0111\u1EE3i 5 gi\xE2y \u0111\u1EC3 Shopee ph\xE2n t\xEDch t\xEAn v\xE0 \u0111\u01B0a ra G\u1EE3i \xFD ng\xE0nh h\xE0ng...");
+        await page.waitForTimeout(5e3);
+        const candidateLocators = page.locator('div, span, button, a, [class*="recommend"], [class*="item"]').filter({ hasText: /Đồng hồ/i });
+        const count = await candidateLocators.count();
+        log(`[Browser] T\xECm th\u1EA5y ${count} ph\u1EA7n t\u1EED ch\u1EE9a ch\u1EEF "\u0110\u1ED3ng h\u1ED3" trong danh s\xE1ch \u0111\u1EC1 xu\u1EA5t.`);
+        for (let i = 0; i < count; i++) {
+          const item = candidateLocators.nth(i);
+          const text = (await item.textContent() || "").trim();
+          const cleanText = text.replace(/\s+/g, " ").toLowerCase();
+          if (cleanText.includes("\u0111\u1ED3ng h\u1ED3") && cleanText.includes(">") && cleanText.includes(targetCategoryText.toLowerCase())) {
+            log(`[Browser] T\xECm th\u1EA5y g\u1EE3i \xFD kh\u1EDBp ho\xE0n h\u1EA3o: "${text}"! \u0110ang click ch\u1ECDn...`);
+            await item.scrollIntoViewIfNeeded();
+            await item.click({ force: true });
+            recommendedClicked = true;
+            log(`[Browser] \u0110\xE3 ch\u1ECDn th\xE0nh c\xF4ng Ng\xE0nh h\xE0ng g\u1EE3i \xFD: "${text}"`);
+            await page.waitForTimeout(4e3);
+            break;
+          }
+        }
+      } catch (e) {
+        log(`[Browser] L\u1ED7i khi qu\xE9t Ng\xE0nh h\xE0ng g\u1EE3i \xFD: ${e.message}`);
+      }
+      if (!recommendedClicked) {
+        log("[Browser] Kh\xF4ng ch\u1ECDn \u0111\u01B0\u1EE3c t\u1EEB g\u1EE3i \xFD tr\u1EF1c ti\u1EBFp. Chuy\u1EC3n sang m\u1EDF modal ch\u1ECDn th\u1EE7 c\xF4ng...");
+        try {
+          const categoryBox = page.locator(".product-category-box-inner").first();
+          await categoryBox.waitFor({ state: "visible", timeout: 15e3 });
+          await categoryBox.click();
+          await page.waitForSelector('.eds-modal__box, .category-selector-wrap, [role="dialog"]', { state: "visible", timeout: 1e4 });
+          await page.waitForTimeout(1e3);
+          log("[Browser] \u0110\xE3 m\u1EDF popup Ng\xE0nh h\xE0ng.");
+          const searchBox = page.locator([
+            ".category-search input",
+            ".category-selector-wrap input",
+            ".eds-modal__box input",
+            'input[placeholder*="ng\xE0nh"]',
+            'input[placeholder*="Ng\xE0nh"]',
+            'input[placeholder*="t\xECm ki\u1EBFm"]',
+            'input[placeholder*="T\xECm ki\u1EBFm"]'
+          ].join(", ")).first();
+          if (await searchBox.isVisible({ timeout: 5e3 }).catch(() => false)) {
+            await searchBox.click();
+            await searchBox.fill("\u0111\u1ED3ng h\u1ED3");
+            await page.waitForTimeout(2e3);
+            log('[Browser] \u0110\xE3 g\xF5 "\u0111\u1ED3ng h\u1ED3" v\xE0o \xF4 t\xECm ki\u1EBFm.');
+          } else {
+            log("[Browser] C\u1EA3nh b\xE1o: Kh\xF4ng t\xECm th\u1EA5y \xF4 t\xECm ki\u1EBFm trong modal.");
+          }
+          const dongHoItem = page.locator([
+            "li.category-item p.text-overflow",
+            ".category-item",
+            '[class*="category-item"]'
+          ].join(", ")).filter({ hasText: /^\s*Đồng\s*Hồ\s*$/i }).first();
+          if (await dongHoItem.isVisible({ timeout: 5e3 }).catch(() => false)) {
+            await dongHoItem.click();
+            await page.waitForTimeout(1500);
+            log('[Browser] \u0110\xE3 click "\u0110\u1ED3ng H\u1ED3" \u1EDF c\u1ED9t 1.');
+          } else {
+            log('[Browser] C\u1EA3nh b\xE1o: Kh\xF4ng t\xECm th\u1EA5y "\u0110\u1ED3ng H\u1ED3" trong danh s\xE1ch.');
+          }
+          const col2Item = page.locator([
+            "li.category-item p.text-overflow",
+            ".category-item",
+            '[class*="category-item"]'
+          ].join(", ")).filter({ hasText: new RegExp("^\\s*" + targetCategoryText + "\\s*$", "i") }).first();
+          if (await col2Item.isVisible({ timeout: 5e3 }).catch(() => false)) {
+            await col2Item.click();
+            await page.waitForTimeout(1e3);
+            log(`[Browser] \u0110\xE3 ch\u1ECDn "${targetCategoryText}" \u1EDF c\u1ED9t 2.`);
+          } else {
+            log(`[Browser] C\u1EA3nh b\xE1o: Kh\xF4ng t\xECm th\u1EA5y "${targetCategoryText}" \u1EDF c\u1ED9t 2.`);
+          }
+          const confirmBtn = page.locator("button.eds-button--primary, button").filter({ hasText: /Confirm|Xác nhận|Xác Nhận/i }).first();
+          try {
+            await confirmBtn.waitFor({ state: "visible", timeout: 5e3 });
+            await page.waitForFunction(() => {
+              const btn = Array.from(document.querySelectorAll("button")).find((b) => {
+                const text = b.textContent || "";
+                return text.includes("Confirm") || text.includes("X\xE1c nh\u1EADn") || text.includes("X\xE1c Nh\u1EADn");
+              });
+              return btn && !btn.disabled;
+            }, { timeout: 5e3 }).catch(() => {
+            });
+            await confirmBtn.click({ force: true });
+            log("[Browser] \u0110\xE3 Confirm Ng\xE0nh h\xE0ng!");
+          } catch (e) {
+            log("[Browser] L\u1ED7i: Kh\xF4ng t\xECm th\u1EA5y ho\u1EB7c kh\xF4ng click \u0111\u01B0\u1EE3c n\xFAt Confirm/X\xE1c nh\u1EADn.");
+          }
+          log("[Browser] \u0110ang \u0111\u1EE3i Shopee load thu\u1ED9c t\xEDnh chi ti\u1EBFt...");
+          await page.waitForTimeout(4e3);
+        } catch (e) {
+          log(`[Browser] L\u1ED7i ch\u1ECDn Ng\xE0nh h\xE0ng th\u1EE7 c\xF4ng: ${e.message}`);
+        }
+      }
+    }
+    await new Promise((r) => setTimeout(r, 1e3));
+    log("[Browser] \u0110ang t\u1EF1 \u0111\u1ED9ng \u0111i\u1EC1n thu\u1ED9c t\xEDnh chi ti\u1EBFt...");
+    const zenSpecs = preZenSpecs || { waterproof: "", diameter: "", gender: "Nam", movement: "", thickness: "" };
+    log(`[Zenwatch] S\u1EED d\u1EE5ng d\u1EEF li\u1EC7u: ${JSON.stringify(zenSpecs)}`);
+    let strapMaterial = ["Kh\xE1c"];
+    if (productName.toLowerCase().includes("d\xE2y da")) strapMaterial = ["Da"];
+    else if (productName.toLowerCase().includes("d\xE2y cao su")) strapMaterial = ["Silicone", "Cao su"];
+    else if (productName.toLowerCase().includes("d\xE2y th\xE9p")) strapMaterial = ["Th\xE9p kh\xF4ng g\u1EC9"];
+    try {
+      log("[Browser] \u0110ang t\xECm n\xFAt Hi\u1EC3n th\u1ECB \u0111\u1EA7y \u0111\u1EE7...");
+      const showMoreLocator = page.locator('.attribute-select-showmore, button:has-text("Hi\u1EC3n th\u1ECB \u0111\u1EA7y \u0111\u1EE7 danh s\xE1ch")').first();
+      if (await showMoreLocator.isVisible({ timeout: 3e3 })) {
+        await showMoreLocator.scrollIntoViewIfNeeded();
+        await page.waitForTimeout(500);
+        await showMoreLocator.click();
+        log("[Browser] \u0110\xE3 click m\u1EDF r\u1ED9ng danh s\xE1ch thu\u1ED9c t\xEDnh!");
+        await page.waitForTimeout(1500);
+      } else {
+        log("[Browser] Kh\xF4ng c\u1EA7n b\u1EA5m m\u1EDF r\u1ED9ng ho\u1EB7c kh\xF4ng t\xECm th\u1EA5y n\xFAt.");
+      }
+    } catch (e) {
+      log("[Browser] B\u1ECF qua b\u01B0\u1EDBc b\u1EA5m n\xFAt m\u1EDF r\u1ED9ng.");
+    }
+    let parsedWaterproof = (zenSpecs.waterproof || "").toLowerCase();
+    let waterproofArr = ["30m - 50m"];
+    if (parsedWaterproof.includes("200")) {
+      waterproofArr = [">200m", "200m", "> 200m"];
+    } else if (parsedWaterproof.includes("100")) {
+      waterproofArr = ["50m-100m", "50m - 100m", "100m"];
+    } else if (parsedWaterproof.includes("50") || parsedWaterproof.includes("5 atm") || parsedWaterproof.includes("5atm")) {
+      waterproofArr = ["30m - 50m", "30m-50m", "50m", "5 ATM"];
+    } else if (parsedWaterproof.includes("30") || parsedWaterproof.includes("3 atm") || parsedWaterproof.includes("3atm")) {
+      waterproofArr = ["30m", "3 ATM", "<30m"];
+    }
+    const isAuto = productName.toLowerCase().includes("m\xE1y c\u01A1") || productName.toLowerCase().includes("automatic") || productName.toLowerCase().includes("m\xE1y t\u1EF1 \u0111\u1ED9ng");
+    const attributes = [
+      { l: "Th\u01B0\u01A1ng hi\u1EC7u", v: "I&W Carnival", multi: false },
+      { l: "M\u1EB7t \u0111\u1ED3ng h\u1ED3", v: "Kim", multi: false },
+      { l: "Lo\u1EA1i b\u1EA3o h\xE0nh", v: "B\u1EA3o h\xE0nh nh\xE0 cung c\u1EA5p", multi: false },
+      { l: "H\u1EA1n b\u1EA3o h\xE0nh", v: "5 n\u0103m", multi: false },
+      { l: "Ch\u1ED1ng n\u01B0\u1EDBc", v: "C\xF3", multi: false },
+      { l: "\u0110\u1ED3ng h\u1ED3 \u0111eo tay", v: isAuto ? "T\u1EF1 \u0111\u1ED9ng" : "Th\u1EA1ch anh", multi: false },
+      { l: "Ki\u1EC3u \u0111\u1ED3ng h\u1ED3", v: ["Th\u1EDDi trang"], multi: true },
+      { l: "Ki\u1EC3u v\u1ECF \u0111\u1ED3ng h\u1ED3", v: "Tr\xF2n", multi: false },
+      { l: "Ch\u1EA5t li\u1EC7u v\u1ECF \u0111\u1ED3ng h\u1ED3", v: "Th\xE9p kh\xF4ng g\u1EC9", multi: false },
+      { l: "Ki\u1EC3u kh\xF3a \u0111\u1ED3ng h\u1ED3", v: ["Kh\xF3a g\xE0i/m\xF3c", "Kho\xE1 g\xE0i/m\xF3c", "Kh\xF3a g\xE0i", "Kho\xE1 g\xE0i", "C\xE0i kh\xF3a", "C\xE0i kho\xE1", "M\xF3c"], multi: false },
+      { l: "Ch\u1EA5t li\u1EC7u d\xE2y \u0111eo", v: strapMaterial, multi: false },
+      { l: ["K\xEDnh \u0111\u1ED3ng h\u1ED3", "Kinh \u0111\u1ED3ng h\u1ED3"], v: ["K\xEDnh Sapphire", "Sapphire", "Sapphire crystal"], multi: false },
+      { l: ["Ch\u1EA5t li\u1EC7u"], v: ["Kim lo\u1EA1i"], multi: true },
+      { l: "T\xEDnh n\u0103ng", v: ["Ng\xE0y", "Ph\u1EA3n quang", "Ch\u1ED1ng s\u1ED1c"], multi: true },
+      { l: "\u0110\u1ED9 s\xE2u ch\u1ED1ng n\u01B0\u1EDBc", v: waterproofArr, multi: false },
+      { l: "\u0110\u01B0\u1EDDng k\xEDnh v\u1ECF \u0111\u1ED3ng h\u1ED3", v: zenSpecs.diameter ? zenSpecs.diameter.replace(/mm/gi, "").trim() : "", multi: false }
+    ];
+    for (const attr of attributes) {
+      const targetLabels = Array.isArray(attr.l) ? attr.l.map((x) => x.normalize("NFC").toLowerCase()) : [attr.l.normalize("NFC").toLowerCase()];
+      log(`[Browser] \u0110ang x\u1EED l\xFD: ${targetLabels.join(" / ")}`);
+      try {
+        let label = null;
+        const labels = await page.locator('label, .edit-label, .attribute-item-title, .title, [class*="title"]').all();
+        for (const l of labels) {
+          if (await l.isVisible()) {
+            let text = await l.innerText();
+            let textLower = text.normalize("NFC").toLowerCase();
+            let matched = false;
+            for (const t of targetLabels) {
+              if (t === "ch\u1EA5t li\u1EC7u") {
+                if (textLower.includes("ch\u1EA5t li\u1EC7u") && !textLower.includes("d\xE2y") && !textLower.includes("v\u1ECF")) {
+                  matched = true;
+                  break;
+                }
+              } else if (t === "ch\u1ED1ng n\u01B0\u1EDBc") {
+                if (textLower.includes("ch\u1ED1ng n\u01B0\u1EDBc") && !textLower.includes("\u0111\u1ED9 s\xE2u")) {
+                  matched = true;
+                  break;
+                }
+              } else if (t === "k\xEDnh \u0111\u1ED3ng h\u1ED3" || t === "kinh \u0111\u1ED3ng h\u1ED3") {
+                if (textLower.includes("kinh \u0111\u1ED3ng h\u1ED3") || textLower.includes("k\xEDnh \u0111\u1ED3ng h\u1ED3")) {
+                  matched = true;
+                  break;
+                }
+              } else {
+                if (textLower.includes(t)) {
+                  matched = true;
+                  break;
+                }
+              }
+            }
+            if (matched) {
+              label = l;
+              break;
+            }
+          }
+        }
+        if (!label) {
+          log(`[Browser] B\u1ECF qua: Kh\xF4ng t\xECm th\u1EA5y nh\xE3n ${attr.l}`);
+          continue;
+        }
+        await label.scrollIntoViewIfNeeded();
+        let row = label.locator('xpath=ancestor::*[contains(@class, "edit-row") or contains(@class, "shopee-form-item") or contains(@class, "attribute-item")][1]');
+        if (!await row.isVisible()) {
+          row = label.locator("..").locator("..");
+        }
+        const clearBtns = await row.locator('.eds-tag__close, .shopee-tag__close, .eds-icon-close, .shopee-select__clear, svg[class*="close"], i[class*="close"], svg[class*="clear"]').all();
+        for (const btn of clearBtns) {
+          try {
+            if (await btn.isVisible()) {
+              await btn.click({ force: true });
+              await page.waitForTimeout(300);
+            }
+          } catch (e) {
+          }
+        }
+        const dropdownTrigger = row.locator(".eds-select__wrap, .eds-select, .shopee-select, .attribute-select-list-column, .eds-input__inner, input, button").first();
+        try {
+          if (await dropdownTrigger.isVisible({ timeout: 2e3 })) {
+            await dropdownTrigger.click();
+          } else {
+            const rowBox = await row.boundingBox();
+            if (rowBox && rowBox.width > 200) {
+              await page.mouse.click(rowBox.x + rowBox.width * 0.7, rowBox.y + rowBox.height / 2);
+            } else {
+              const labelBox = await label.boundingBox();
+              if (labelBox) {
+                await page.mouse.click(labelBox.x + labelBox.width + 100, labelBox.y + labelBox.height / 2);
+              }
+            }
+          }
+        } catch (e) {
+          log(`[Browser] L\u1ED7i m\u1EDF dropdown ${attr.l}: B\u1ECF qua \u0111\u1EC3 th\u1EED ti\u1EBFp t\u1EE5c`);
+        }
+        await page.waitForTimeout(1e3);
+        const targetValues = Array.isArray(attr.v) ? attr.v : [attr.v];
+        if (targetValues.length === 1 && !targetValues[0]) continue;
+        for (const val of targetValues) {
+          let hasTyped = false;
+          const searchInputs = page.locator(".eds-popper-container input, .shopee-popover input, .eds-select__filter input, .eds-select-dropdown input, .shopee-popper input");
+          let searchEl = null;
+          for (const input of await searchInputs.all()) {
+            if (await input.isVisible()) {
+              searchEl = input;
+            }
+          }
+          if (searchEl) {
+            await searchEl.fill("");
+            await searchEl.fill(val);
+            await page.waitForTimeout(1500);
+            hasTyped = true;
+          } else {
+            const inputInsideRow = row.locator('input[type="text"]').first();
+            if (await inputInsideRow.isVisible()) {
+              await inputInsideRow.fill("");
+              await inputInsideRow.fill(val);
+              await page.waitForTimeout(1500);
+              hasTyped = true;
+            } else {
+              await page.keyboard.type(val);
+              await page.waitForTimeout(1500);
+              hasTyped = true;
+            }
+          }
+          let optionHandle = await page.evaluateHandle((searchValue) => {
+            const searchLower = searchValue.normalize("NFC").toLowerCase().trim();
+            const opts = Array.from(document.querySelectorAll('.eds-option, .shopee-option, [role="option"], li.eds-select-dropdown__item, .shopee-checkbox'));
+            let bestMatch = null;
+            for (const opt of opts) {
+              const rect = opt.getBoundingClientRect();
+              if (rect.width > 0 && rect.height > 0 && rect.top >= 0 && rect.left >= 0) {
+                const text = (opt.textContent || opt.innerText || "").normalize("NFC").trim().toLowerCase();
+                if (text === searchLower) {
+                  return opt;
+                }
+                if (text.includes(searchLower) && !bestMatch) {
+                  bestMatch = opt;
+                }
+              }
+            }
+            return bestMatch;
+          }, val);
+          let clicked = false;
+          const el = optionHandle.asElement();
+          if (el) {
+            const isSelected = await el.evaluate((opt) => {
+              if (opt.classList.contains("selected") || opt.classList.contains("shopee-option-selected")) return true;
+              if (opt.getAttribute("aria-selected") === "true" || opt.getAttribute("aria-checked") === "true") return true;
+              if (opt.className.includes("checked")) return true;
+              if (opt.querySelector('.selected, .shopee-option-selected, input:checked, [class*="checked"]')) return true;
+              return false;
+            });
+            if (isSelected) {
+              clicked = true;
+            } else {
+              try {
+                await el.click();
+                clicked = true;
+              } catch (e) {
+                await el.click({ force: true });
+                clicked = true;
+              }
+            }
+          }
+          if (clicked) {
+            await page.waitForTimeout(600);
+            if (!attr.multi) break;
+          } else {
+            log(`[Browser] Kh\xF4ng t\xECm th\u1EA5y t\xF9y ch\u1ECDn: ${val}`);
+            if (hasTyped) {
+              await page.keyboard.down("Control");
+              await page.keyboard.press("a");
+              await page.keyboard.up("Control");
+              await page.keyboard.press("Backspace");
+              await page.waitForTimeout(500);
+            }
+          }
+        }
+        try {
+          await label.click({ force: true });
+          await page.waitForTimeout(400);
+        } catch (e) {
+        }
+      } catch (e) {
+        log(`[Browser] L\u1ED7i x\u1EED l\xFD thu\u1ED9c t\xEDnh ${attr.l}: ${e.message}`);
+      }
+    }
+    try {
+      log("[Browser] \u0110ang t\u1EA1o v\xE0 \u0111i\u1EC1n m\xF4 t\u1EA3 s\u1EA3n ph\u1EA9m...");
+      const isFemale = (zenSpecs.gender || "").toLowerCase().includes("n\u1EEF") || (zenSpecs.gender || "").toLowerCase().includes("female") || sku.toUpperCase().includes("L") || currentVariant.model.name.toUpperCase().includes("L");
+      const genderText = isFemale ? "n\u1EEF" : "nam";
+      const genderCapText = isFemale ? "N\u1EEF" : "Nam";
+      const suffixLetter = isFemale ? "L" : "G";
+      const targetUserText = isFemale ? "ng\u01B0\u1EDDi ph\u1EE5 n\u1EEF hi\u1EC7n \u0111\u1EA1i, thanh l\u1ECBch v\xE0 quy\u1EBFn r\u0169" : "ng\u01B0\u1EDDi \u0111\xE0n \xF4ng hi\u1EC7n \u0111\u1EA1i, th\xE0nh \u0111\u1EA1t";
+      const modelCode = sku.split("-")[0].replace(/[a-zA-Z]+$/, "");
+      const modelCodesStr = `${modelCode}${suffixLetter} ${modelCode}${suffixLetter}1 ${modelCode}${suffixLetter}2 ${modelCode}${suffixLetter}3 IW${modelCode}`;
+      let loaiMayText = "b\u1ED9 m\xE1y pin (quartz)";
+      const scrapedMovement = (zenSpecs.movement || "").toLowerCase();
+      if (scrapedMovement.includes("c\u01A1") || scrapedMovement.includes("automatic")) {
+        loaiMayText = "b\u1ED9 m\xE1y c\u01A1 t\u1EF1 \u0111\u1ED9ng (automatic)";
+      }
+      let chatLieuDayText = "th\xE9p kh\xF4ng g\u1EC9 316L";
+      let chatLieuDaySpecs = "Th\xE9p kh\xF4ng g\u1EC9 316L (M\u1EA1 PVD cao c\u1EA5p v\u1EDBi phi\xEAn b\u1EA3n m\xE0u v\xE0ng)";
+      if (sku.toUpperCase().includes("-D")) {
+        chatLieuDayText = "da";
+        chatLieuDaySpecs = "D\xE2y da cao c\u1EA5p";
+      } else if (sku.toUpperCase().includes("-S")) {
+        chatLieuDayText = "cao su";
+        chatLieuDaySpecs = "D\xE2y cao su cao c\u1EA5p";
+      }
+      let descriptionText = `\u0110\u1ED3ng h\u1ED3 ${genderText} ch\xEDnh h\xE3ng I&W Carnival ${modelCodesStr} d\xE2y ${chatLieuDayText} cao c\u1EA5p, s\u1EED d\u1EE5ng ${loaiMayText} t\u1EEB c\xE1c th\u01B0\u01A1ng hi\u1EC7u Seiko - Miyota Nh\u1EADt B\u1EA3n, m\u1EB7t k\xEDnh sapphire nguy\xEAn kh\u1ED1i
+
+GI\u1EDAI THI\u1EC6U
+
+I&W CARNIVAL \u2013 \u0110\u1ED3ng H\u1ED3 \u0110eo Tay Ch\xEDnh H\xE3ng, Sang Tr\u1ECDng - \u0110\u1EB3ng C\u1EA5p
+
+I&W Carnival l\xE0 th\u01B0\u01A1ng hi\u1EC7u \u0111\u1ED3ng h\u1ED3 cao c\u1EA5p \u0111\xE3 chinh ph\u1EE5c nh\u1EEFng th\u1ECB tr\u01B0\u1EDDng kh\xF3 t\xEDnh b\u1EADc nh\u1EA5t th\u1EBF gi\u1EDBi nh\u01B0 ch\xE2u \xC2u v\xE0 ch\xE2u M\u1EF9, v\xE0 su\u1ED1t 5 n\u0103m qua \u0111\xE3 \u0111\u01B0\u1EE3c \u0111\xF4ng \u0111\u1EA3o kh\xE1ch h\xE0ng Vi\u1EC7t Nam tin d\xF9ng v\xE0 y\xEAu th\xEDch. S\u1EF1 hi\u1EC7n di\u1EC7n b\u1EC1n v\u1EEFng c\u1EE7a I&W Carnival tr\xEAn th\u1ECB tr\u01B0\u1EDDng qu\u1ED1c t\u1EBF l\u1EABn trong n\u01B0\u1EDBc ch\xEDnh l\xE0 minh ch\u1EE9ng thuy\u1EBFt ph\u1EE5c nh\u1EA5t cho ch\u1EA5t l\u01B0\u1EE3ng v\u01B0\u1EE3t tr\u1ED9i v\xE0 ti\xEAu chu\u1EA9n k\u1EF9 thu\u1EADt nghi\xEAm ng\u1EB7t m\xE0 th\u01B0\u01A1ng hi\u1EC7u lu\xF4n cam k\u1EBFt.
+
+M\u1ED7i chi\u1EBFc \u0111\u1ED3ng h\u1ED3 I&W Carnival \u0111\u1EC1u \u0111\u01B0\u1EE3c ch\u1EBF t\xE1c t\u1EC9 m\u1EC9 \u0111\u1EBFn t\u1EEBng chi ti\u1EBFt \u2013 t\u1EEB m\u1EB7t s\u1ED1 tinh x\u1EA3o, v\u1ECF \u0111\u1ED3ng h\u1ED3 l\xE0m t\u1EEB th\xE9p kh\xF4ng g\u1EC9 316L cao c\u1EA5p \u0111\u01B0\u1EE3c \u0111\xE1nh b\xF3ng ho\xE0n h\u1EA3o, b\u1EC1n b\u1EC9 v\u1EDBi th\u1EDDi gian v\xE0 th\xE2n thi\u1EC7n v\u1EDBi l\xE0n da cho \u0111\u1EBFn d\xE2y \u0111eo ho\xE0n thi\u1EC7n sang tr\u1ECDng. T\u1EA5t c\u1EA3 t\u1EA1o n\xEAn m\u1ED9t t\u1ED5ng th\u1EC3 h\xE0i ho\xE0, l\u1ECBch l\xE3m, x\u1EE9ng t\u1EA7m \u0111\u1EC3 \u0111\u1ED3ng h\xE0nh c\xF9ng b\u1EA1n trong nh\u1EEFng bu\u1ED5i g\u1EB7p g\u1EE1 quan tr\u1ECDng, s\u1EF1 ki\u1EC7n \u0111\u1EB7c bi\u1EC7t hay nh\u1EEFng kho\u1EA3nh kh\u1EAFc \u0111\xE1ng nh\u1EDB trong cu\u1ED9c s\u1ED1ng.
+
+S\u1EDF h\u1EEFu m\u1ED9t chi\u1EBFc I&W Carnival kh\xF4ng ch\u1EC9 l\xE0 \u0111\u1EA7u t\u01B0 cho phong c\xE1ch c\xE1 nh\xE2n, m\xE0 c\xF2n l\xE0 l\u1EF1a ch\u1ECDn th\u1EC3 hi\u1EC7n \u0111\u1EB3ng c\u1EA5p v\xE0 gu th\u1EA9m m\u1EF9 c\u1EE7a ${targetUserText}.
+
+CH\xCDNH S\xC1CH B\u1EA2O H\xC0NH
+Th\u1EDDi gian b\u1EA3o h\xE0nh: 5 n\u0103m
+Mi\u1EC5n ph\xED thay pin tr\u1ECDn \u0111\u1EDDi v\u1EDBi \u0111\u1ED3ng h\u1ED3 pin
+Mi\u1EC5n ph\xED \u0111i\u1EC1u ch\u1EC9nh nhanh ch\u1EADm \u0111\u1ED1i v\u1EDBi \u0111\u1ED3ng h\u1ED3 c\u01A1
+Mi\u1EC5n ph\xED x\u1EED l\xFD khi \u0111\u1ED3ng h\u1ED3 b\u1ECB v\xE0o n\u01B0\u1EDBc
+
+TH\xD4NG TIN CHI TI\u1EBET:
+Th\u01B0\u01A1ng hi\u1EC7u: I&W Carnival
+M\xE3 s\u1EA3n ph\u1EA9m: ${modelCode}
+Gi\u1EDBi t\xEDnh: ${zenSpecs.gender || genderCapText}
+Ki\u1EC3u m\xE1y: ${zenSpecs.movement || "Automatic"}
+\u0110\u01B0\u1EDDng k\xEDnh m\u1EB7t: ${zenSpecs.diameter || "\u0110ang c\u1EADp nh\u1EADt"}
+\u0110\u1ED9 d\xE0y: ${zenSpecs.thickness || "\u0110ang c\u1EADp nh\u1EADt"}
+Ch\u1EA5t li\u1EC7u v\u1ECF: Th\xE9p kh\xF4ng g\u1EC9 316L (M\u1EA1 PVD cao c\u1EA5p v\u1EDBi phi\xEAn b\u1EA3n m\xE0u v\xE0ng)
+Ch\u1EA5t li\u1EC7u d\xE2y: ${chatLieuDaySpecs}
+M\u1EB7t k\xEDnh: Sapphire Crystal (Sapphire nguy\xEAn kh\u1ED1i)
+\u0110\u1ED9 ch\u1ECBu n\u01B0\u1EDBc: ${zenSpecs.waterproof || "\u0110ang c\u1EADp nh\u1EADt"}
+B\u1EA3o h\xE0nh: 5 n\u0103m
+
+CAM K\u1EBET:
+\u2714 H\xE0ng ch\xEDnh h\xE3ng 100%
+\u2714 Ki\u1EC3m tra k\u1EF9 tr\u01B0\u1EDBc khi giao
+\u2714 \u0110\xF3ng g\xF3i c\u1EA9n th\u1EADn, h\u1ED7 tr\u1EE3 \u0111\u1ED5i tr\u1EA3 theo quy \u0111\u1ECBnh Shopee
+\u2714 H\u1ED7 tr\u1EE3 t\u01B0 v\u1EA5n nhanh ch\xF3ng tr\u01B0\u1EDBc v\xE0 sau mua h\xE0ng
+`;
+      let hashtags = "";
+      if (isFemale) {
+        hashtags = `#donghonu #donghonuchinhhang #donghochinhhangnu #donghonudayda #donghonudaythep #donghonudaycaosu #donghonuco #donghonuchongnuoc #iwcarnival #donghocarnival #donghoiw #donghoiwcarnival #donghonuaudemarspiguetroyaloak #audemarspiguetroyaloak #donghocarnivalnu #donghocarnival1986 #audemarspiguetroyaloakautomatic #audemarspiguetroyaloakdayda #audemarspiguetroyaloak #donghonupatekphilippe #patekphilippe #donghocarnivalnu #donghocarnival1986 #patekphilippeco #patekphilippenu #patekphilippeautomatic #patekphilippedayda #patekphilippenautilus #rolexdatejustco #rolexdatejustnu #rolexdatejustautomatic #rolexdatejustdayda #rolexdatejust #donghonurolexdatejust #rolexsubmariner #rolexsubmarinerautomatic #rolexsubmarinerdayda #donghonurolexsubmariner`;
+      } else {
+        hashtags = `#donghonam #donghonamchinhhang #donghochinhhangnam #donghonamdayda #donghonamdaythep #donghonamdaycaosu #donghonamco #donghonamchongnuoc #iwcarnival #donghocarnival #donghoiw #donghoiwcarnival #donghonamaudemarspiguetroyaloak #audemarspiguetroyaloak #donghocarnivalnam #donghocarnival1986 #audemarspiguetroyaloakautomatic #audemarspiguetroyaloakdayda #audemarspiguetroyaloak #donghonampatekphilippe #patekphilippe #donghocarnivalnam #donghocarnival1986 #patekphilippeco #patekphilippenam #patekphilippeautomatic #patekphilippedayda #patekphilippenautilus #rolexdatejustco #rolexdatejustnam #rolexdatejustautomatic #rolexdatejustdayda #rolexdatejust #donghonamrolexdatejust #rolexsubmariner #rolexsubmarinerautomatic #rolexsubmarinerdayda #donghonamrolexsubmariner`;
+      }
+      descriptionText += "\n" + hashtags;
+      const descEditor = page.locator('.ql-editor[contenteditable="true"]').last();
+      if (await descEditor.isVisible({ timeout: 5e3 })) {
+        await descEditor.scrollIntoViewIfNeeded();
+        await page.waitForTimeout(500);
+        await descEditor.click();
+        await page.keyboard.down("Control");
+        await page.keyboard.press("a");
+        await page.keyboard.up("Control");
+        await page.keyboard.press("Backspace");
+        await page.waitForTimeout(500);
+        await page.keyboard.insertText(descriptionText);
+        log("[Browser] \u0110\xE3 x\xF3a s\u1EA1ch m\xF4 t\u1EA3 c\u0169 v\xE0 \u0111i\u1EC1n m\xF4 t\u1EA3 m\u1EDBi v\xE0o Quill Editor!");
+      } else {
+        log("[Browser] Kh\xF4ng t\xECm th\u1EA5y \xF4 nh\u1EADp M\xF4 t\u1EA3 (ql-editor).");
+      }
+    } catch (e) {
+      log(`[Browser] L\u1ED7i \u0111i\u1EC1n m\xF4 t\u1EA3: ${e.message}`);
+    }
+    try {
+      log("[Browser] \u0110ang c\u1EA5u h\xECnh Th\xF4ng tin b\xE1n h\xE0ng & Bi\u1EBFn th\u1EC3...");
+      allVariants = await prisma.variant.findMany({
+        where: { modelId: currentVariant.modelId },
+        orderBy: { sku: "asc" }
+      });
+      if (allVariants.length > 0) {
+        const salesTab = page.locator(".shopee-tabs__nav-item", { hasText: "Th\xF4ng tin b\xE1n h\xE0ng" });
+        if (await salesTab.isVisible()) {
+          await salesTab.click();
+          await page.waitForTimeout(1e3);
+        }
+        const existingGroupNameInput = page.locator('.variation-selector-custom-len-calc-input input, input[placeholder*="Type or Select"], input[placeholder*="m\xE0u s\u1EAFc"], input[placeholder*="M\xE0u s\u1EAFc"]').first();
+        const hasExistingGroup = await existingGroupNameInput.isVisible().catch(() => false);
+        if (!hasExistingGroup) {
+          const addGroupBtn = page.locator(".primary-dash-button, button").filter({ hasText: /Thêm nhóm phân loại/i }).first();
+          try {
+            await addGroupBtn.waitFor({ state: "visible", timeout: 5e3 });
+            await addGroupBtn.scrollIntoViewIfNeeded();
+            log('[Browser] Ch\u01B0a c\xF3 nh\xF3m ph\xE2n lo\u1EA1i n\xE0o. Ti\u1EBFn h\xE0nh click "+ Th\xEAm nh\xF3m ph\xE2n lo\u1EA1i"...');
+            await addGroupBtn.click({ force: true });
+            await page.waitForTimeout(2e3);
+          } catch (e) {
+            log('[Browser] Kh\xF4ng t\xECm th\u1EA5y ho\u1EB7c kh\xF4ng c\u1EA7n click n\xFAt "+ Th\xEAm nh\xF3m ph\xE2n lo\u1EA1i".');
+          }
+        } else {
+          log("[Browser] \u0110\xE3 ph\xE1t hi\u1EC7n nh\xF3m ph\xE2n lo\u1EA1i c\xF3 s\u1EB5n. Kh\xF4ng click th\xEAm nh\xF3m ph\xE2n lo\u1EA1i m\u1EDBi.");
+        }
+        log("[Browser] \u0110ang x\xF3a to\xE0n b\u1ED9 c\xE1c t\xF9y ch\u1ECDn c\u0169...");
+        let deleteBtn = page.locator(".variation-selector-item-delete-btn").first();
+        while (await deleteBtn.isVisible()) {
+          await deleteBtn.click();
+          await page.waitForTimeout(600);
+          deleteBtn = page.locator(".variation-selector-item-delete-btn").first();
+          if (await page.locator(".variation-selector-item").count() <= 1) break;
+        }
+        const variationGroupNameInput = page.locator('.variation-selector-custom-len-calc-input input, input[placeholder*="Type or Select"], input[placeholder*="m\xE0u s\u1EAFc"], input[placeholder*="M\xE0u s\u1EAFc"]').first();
+        if (await variationGroupNameInput.isVisible()) {
+          await variationGroupNameInput.scrollIntoViewIfNeeded();
+          await variationGroupNameInput.focus();
+          await variationGroupNameInput.fill("M\xE0u s\u1EAFc");
+          await page.waitForTimeout(500);
+          await page.keyboard.press("Escape").catch(() => {
+          });
+          await page.waitForTimeout(500);
+        }
+        log("[Browser] \u0110ang \u0111i\u1EC1n c\xE1c m\xE3 SKU bi\u1EBFn th\u1EC3 m\u1EDBi...");
+        for (let i = 0; i < allVariants.length; i++) {
+          const v = allVariants[i];
+          const inputs = await page.locator('.variation-selector-custom-len-calc-input input, input[placeholder*="Type or Select"], input[placeholder*="e.g. Red"], input[placeholder*="v\xED d\u1EE5: \u0111\u1ECF"]').all();
+          const targetInput = inputs[i + 1];
+          if (targetInput) {
+            await targetInput.scrollIntoViewIfNeeded();
+            await targetInput.focus();
+            await targetInput.click({ force: true });
+            await page.waitForTimeout(200);
+            await targetInput.fill(v.sku);
+            await page.waitForTimeout(300);
+            await targetInput.press("Enter");
+            await page.waitForTimeout(800);
+          }
+        }
+        log("[Browser] \u0110ang upload \u1EA3nh Avatar cho t\u1EEBng bi\u1EBFn th\u1EC3...");
+        for (let i = 0; i < allVariants.length; i++) {
+          const v = allVariants[i];
+          let cell = page.locator(".variation-model-table-main, .shopee-table__body").locator("div, td").filter({ has: page.locator(`:text-is("${v.sku}")`) }).filter({ has: page.locator('[class*="image-manager"], [class*="upload"]') }).last();
+          let imageCell = cell.locator('[class*="image-manager"], [class*="upload-wrapper"], .eds-upload__item').first();
+          if (await imageCell.count() === 0) {
+            imageCell = page.locator('.variation-model-table-main [class*="image-manager"], .variation-model-table-main .eds-upload__item, .variation-model-table-main [class*="upload-wrapper"], .shopee-table__body [class*="image-manager"], .shopee-table__body [class*="upload-wrapper"]').nth(i);
+          }
+          if (await imageCell.isVisible().catch(() => false)) {
+            await imageCell.hover();
+            await page.waitForTimeout(800);
+            const deleteIcons = await imageCell.locator('svg, i, button, [class*="delete"], [class*="remove"], [class*="trash"], [class*="close"]').all();
+            for (const icon of deleteIcons) {
+              const className = await icon.getAttribute("class") || "";
+              const title = await icon.getAttribute("title") || "";
+              if (className.toLowerCase().includes("delete") || className.toLowerCase().includes("remove") || className.toLowerCase().includes("trash") || className.toLowerCase().includes("close") || title.toLowerCase().includes("x\xF3a")) {
+                if (await icon.isVisible()) {
+                  await icon.click({ force: true });
+                  await page.waitForTimeout(1200);
+                  break;
+                }
+              }
+            }
+            if (v.avatarImage && fs.existsSync(v.avatarImage)) {
+              log(`[Browser] Upload Avatar: ${v.sku}`);
+              const uploadBtn = imageCell.locator('input[type="file"]');
+              if (await uploadBtn.count() > 0) {
+                await uploadBtn.first().setInputFiles(v.avatarImage);
+              } else {
+                const [fileChooser] = await Promise.all([
+                  page.waitForEvent("filechooser"),
+                  imageCell.click({ force: true })
+                ]);
+                await fileChooser.setFiles(v.avatarImage);
+              }
+              await imageCell.locator("img").first().waitFor({ state: "visible", timeout: 15e3 }).catch(() => {
+              });
+              await page.waitForTimeout(1500);
+            }
+          }
+        }
+        log("[Browser] \u0110ang \u0111i\u1EC1n b\u1EA3ng Gi\xE1 (Excel), Kho h\xE0ng (10) v\xE0 SKU ph\xE2n lo\u1EA1i...");
+        const tableLoc = page.locator(".variation-model-table-main, .shopee-table__body").first();
+        await tableLoc.locator('input:not([type="file"])').first().waitFor({ state: "visible", timeout: 2e4 }).catch(() => log("[Browser] B\u1ECF qua ch\u1EDD tableLoc v\xEC timeout"));
+        await page.waitForTimeout(2e3);
+        for (let i = 0; i < allVariants.length; i++) {
+          const v = allVariants[i];
+          const atomicFill = async (sku2, fieldIndex, val, fieldName) => {
+            await page.evaluate(({ sku: sku3, fieldIndex: fieldIndex2 }) => {
+              const table = document.querySelector(".variation-model-table-main") || document.querySelector(".shopee-table__body") || document.body;
+              document.querySelectorAll("[data-bot-target]").forEach((el) => el.removeAttribute("data-bot-target"));
+              const inputs = Array.from(table.querySelectorAll('input:not([type="file"]):not([type="hidden"]):not([type="checkbox"]):not([disabled]), textarea:not([disabled])'));
+              const visibleInputs = inputs.filter((i2) => {
+                const rect = i2.getBoundingClientRect();
+                return rect.width > 0 && rect.height > 0;
+              });
+              const cells = Array.from(table.querySelectorAll(".table-cell, td, tr, .edit-row, div"));
+              const labelCell = cells.find((e) => {
+                const directText = Array.from(e.childNodes).filter((n) => n.nodeType === 3).map((n) => n.textContent).join("").trim();
+                return directText === sku3;
+              });
+              if (!labelCell) return;
+              const labelRect = labelCell.getBoundingClientRect();
+              const labelCenterY = labelRect.top + labelRect.height / 2;
+              const rowInputs = visibleInputs.filter((input) => {
+                const inputCell = input.closest(".table-cell, td, tr, .edit-row") || input;
+                const inputRect = inputCell.getBoundingClientRect();
+                const inputCenterY = inputRect.top + inputRect.height / 2;
+                return Math.abs(inputCenterY - labelCenterY) < 50;
+              });
+              rowInputs.sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
+              if (rowInputs[fieldIndex2]) {
+                rowInputs[fieldIndex2].setAttribute("data-bot-target", "active-target");
+              }
+            }, { sku: sku2, fieldIndex });
+            const targetLoc = page.locator('[data-bot-target="active-target"]');
+            try {
+              await targetLoc.waitFor({ state: "visible", timeout: 5e3 });
+              await targetLoc.scrollIntoViewIfNeeded();
+              await targetLoc.click({ force: true });
+              await page.waitForTimeout(150);
+              await page.keyboard.down("Control");
+              await page.keyboard.press("a");
+              await page.keyboard.up("Control");
+              await page.keyboard.press("Backspace");
+              await page.waitForTimeout(150);
+              await targetLoc.fill(val);
+              await page.waitForTimeout(300);
+              await page.keyboard.press("Tab");
+              await page.waitForTimeout(300);
+              return true;
+            } catch (err) {
+              log(`[Browser] C\u1EA2NH B\xC1O: L\u1ED7i \u0111i\u1EC1n ${fieldName} cho ${sku2} - Kh\xF4ng t\xECm th\u1EA5y ho\u1EB7c \u0111i\u1EC1n th\u1EA5t b\u1EA1i.`);
+              return false;
+            }
+          };
+          let successCount = 0;
+          if (await atomicFill(v.sku, 0, String(v.price), "Gi\xE1")) successCount++;
+          if (await atomicFill(v.sku, 1, "10", "Kho")) successCount++;
+          if (await atomicFill(v.sku, 2, v.sku, "SKU")) successCount++;
+          if (successCount === 3) {
+            log(`[Browser] \u0110\xE3 \u0111i\u1EC1n th\xE0nh c\xF4ng d\xF2ng ${i + 1}: Gi\xE1=${v.price}, Kho=10, SKU=${v.sku}`);
+          } else {
+            log(`[Browser] D\xF2ng ${i + 1} (${v.sku}) \u0111i\u1EC1n ch\u01B0a ho\xE0n ch\u1EC9nh (${successCount}/3 \xF4).`);
+          }
+        }
+      }
+    } catch (e) {
+      log(`[Browser] L\u1ED7i x\u1EED l\xFD Th\xF4ng tin b\xE1n h\xE0ng: ${e.message}`);
+    }
+    try {
+      log("[Browser] \u0110ang upload \u1EA3nh v\xE0 video m\u1EDBi...");
+      const basicTab = page.locator(".shopee-tabs__nav-item", { hasText: "Th\xF4ng tin c\u01A1 b\u1EA3n" });
+      if (await basicTab.isVisible()) {
+        await basicTab.click();
+        await page.waitForTimeout(1e3);
+      }
+      const fileInputs = await page.locator('input[type="file"]').all();
+      if (fileInputs.length > 0 && media.images.length > 0) {
+        log(`[Browser] Upload ${media.images.length} \u1EA3nh...`);
+        await fileInputs[0].setInputFiles(media.images);
+        await page.waitForTimeout(2e3);
+      }
+      if (fileInputs.length > 1 && media.video) {
+        log(`[Browser] Upload Video...`);
+        try {
+          await fileInputs[1].setInputFiles(media.video);
+          await page.waitForTimeout(4e3);
+          await page.evaluate(async () => {
+            const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
+            const buttons = Array.from(document.querySelectorAll("button"));
+            const confirmBtn = buttons.find((b) => b.textContent && b.textContent.toLowerCase().includes("x\xE1c nh\u1EADn"));
+            if (confirmBtn && confirmBtn.offsetParent !== null) {
+              confirmBtn.click();
+              await sleep(1e3);
+            }
+          });
+          if (fs.existsSync(media.video)) {
+            try {
+              fs.unlinkSync(media.video);
+            } catch (e) {
+            }
+          }
+        } catch (e) {
+          log(`[Browser] L\u1ED7i upload video: ${e.message}`);
+        }
+      }
+      try {
+        log("[Browser] \u0110ang c\u1EA5u h\xECnh V\u1EADn chuy\u1EC3n & Th\xF4ng tin kh\xE1c...");
+        const shippingTab = page.locator(".shopee-tabs__nav-item", { hasText: "V\u1EADn chuy\u1EC3n" });
+        if (await shippingTab.isVisible()) {
+          await shippingTab.click();
+          await page.waitForTimeout(1e3);
+        }
+        log("[Browser] \u0110ang \u0111i\u1EC1n c\xE2n n\u1EB7ng \u0111\xF3ng g\xF3i: 500g...");
+        const weightInput = page.locator(".eds-input__inner, .eds-input").filter({ has: page.locator(".eds-input__suffix, span").filter({ hasText: /^gr$/i }) }).locator("input").first();
+        if (await weightInput.isVisible({ timeout: 5e3 }).catch(() => false)) {
+          await weightInput.scrollIntoViewIfNeeded();
+          await weightInput.focus();
+          await weightInput.fill("500");
+          await page.waitForTimeout(200);
+          log("[Browser] \u0110\xE3 \u0111i\u1EC1n c\xE2n n\u1EB7ng: 500g");
+        } else {
+          log("[Browser] C\u1EA3nh b\xE1o: Kh\xF4ng t\xECm th\u1EA5y \xF4 nh\u1EADp c\xE2n n\u1EB7ng.");
+        }
+        log("[Browser] \u0110ang \u0111i\u1EC1n k\xEDch th\u01B0\u1EDBc \u0111\xF3ng g\xF3i: D x R x C = 20x20x10...");
+        const rInput = page.locator('input[placeholder="R"], input[placeholder*="R\u1ED9ng"], input[placeholder*="Width"]').first();
+        if (await rInput.isVisible()) {
+          await rInput.fill("20");
+          await page.waitForTimeout(200);
+        }
+        const dInput = page.locator('input[placeholder="D"], input[placeholder*="D\xE0i"], input[placeholder*="Length"]').first();
+        if (await dInput.isVisible()) {
+          await dInput.fill("20");
+          await page.waitForTimeout(200);
+        }
+        const cInput = page.locator('input[placeholder="C"], input[placeholder*="Cao"], input[placeholder*="Height"]').first();
+        if (await cInput.isVisible()) {
+          await cInput.fill("10");
+          await page.waitForTimeout(200);
+        }
+        log("[Browser] \u0110ang \u0111\u1EE3i 2 gi\xE2y \u0111\u1EC3 Shopee t\u1EF1 \u0111\u1ED9ng load c\xE1c k\xEAnh v\u1EADn chuy\u1EC3n...");
+        await page.waitForTimeout(2e3);
+        log("[Browser] \u0110ang c\u1EA5u h\xECnh c\xE1c k\xEAnh v\u1EADn chuy\u1EC3n (Ch\u1EC9 m\u1EDF Nhanh v\xE0 Trong Ng\xE0y)...");
+        try {
+          const channelsToConfig = [
+            { label: "Nhanh", target: true, regex: /Nhanh/i },
+            { label: "H\u1ECFa T\u1ED1c", target: false, regex: /Hỏa Tốc|Hoa Toc/i },
+            { label: "Trong Ng\xE0y", target: true, regex: /Trong Ngày|Trong Ngay/i },
+            { label: "T\u1EF1 nh\u1EADn h\xE0ng", target: false, regex: /Tự nhận hàng/i },
+            { label: "T\u1EE7 nh\u1EADn h\xE0ng - SPX", target: false, regex: /Tủ nhận hàng|SPX/i },
+            { label: "\u0110i\u1EC3m nh\u1EADn h\xE0ng", target: false, regex: /Điểm nhận hàng|Diem nhan hang/i }
+          ];
+          for (const config of channelsToConfig) {
+            const row = page.locator("tr, div").filter({ hasText: config.regex }).first();
+            if (await row.isVisible().catch(() => false)) {
+              const switchEl = row.locator('.eds-switch, .shopee-switch, input[type="checkbox"]').first();
+              if (await switchEl.isVisible()) {
+                const isChecked = await switchEl.evaluate((el) => {
+                  const hasCheckedClass = el.className.includes("checked") || el.className.includes("active") || el.className.includes("open");
+                  const hasAriaChecked = el.getAttribute("aria-checked") === "true";
+                  const isCheckboxChecked = el.checked === true;
+                  return hasCheckedClass || hasAriaChecked || isCheckboxChecked;
+                });
+                if (isChecked !== config.target) {
+                  await switchEl.click();
+                  await page.waitForTimeout(800);
+                  log(`[Browser] \u0110\xE3 chuy\u1EC3n tr\u1EA1ng th\xE1i k\xEAnh "${config.label}" th\xE0nh ${config.target ? "B\u1EACT" : "T\u1EAET"}`);
+                } else {
+                  log(`[Browser] K\xEAnh "${config.label}" \u0111\xE3 \u1EDF tr\u1EA1ng th\xE1i ${config.target ? "B\u1EACT" : "T\u1EAET"} s\u1EB5n.`);
+                }
+              }
+            }
+          }
+        } catch (e) {
+          log(`[Browser] C\u1EA3nh b\xE1o: L\u1ED7i khi c\u1EA5u h\xECnh c\xE1c k\xEAnh v\u1EADn chuy\u1EC3n: ${e.message}`);
+        }
+        const otherInfoTab = page.locator(".shopee-tabs__nav-item", { hasText: "Th\xF4ng tin kh\xE1c" });
+        if (await otherInfoTab.isVisible()) {
+          await otherInfoTab.click();
+          await page.waitForTimeout(1e3);
+        }
+        log(`[Browser] \u0110ang \u0111i\u1EC1n SKU s\u1EA3n ph\u1EA9m: ${sku}`);
+        const parentSkuInput = page.locator('[data-product-edit-field-unique-id="parentSku"] input, .parent-sku input').first();
+        if (await parentSkuInput.isVisible()) {
+          await parentSkuInput.fill("");
+          await parentSkuInput.fill(sku);
+          await page.waitForTimeout(500);
+        }
+        log("[Browser] \u0110ang b\u1EA5m n\xFAt L\u01B0u / Hi\u1EC3n th\u1ECB...");
+        let clickedSave = false;
+        const publishBtns = await page.locator("button").filter({ hasText: /Lưu và Hiển thị|Lưu & Hiển thị|^Hiển thị$/i }).all();
+        for (const btn of publishBtns.reverse()) {
+          if (await btn.isVisible() && !await btn.isDisabled()) {
+            await btn.click();
+            clickedSave = true;
+            log("[Browser] \u0110\xE3 click n\xFAt Hi\u1EC3n th\u1ECB/L\u01B0u.");
+            break;
+          }
+        }
+        if (!clickedSave) {
+          const updateBtns = await page.locator("button").filter({ hasText: /^Cập nhật$/i }).all();
+          for (const btn of updateBtns.reverse()) {
+            if (await btn.isVisible() && !await btn.isDisabled()) {
+              await btn.click();
+              clickedSave = true;
+              log("[Browser] \u0110\xE3 click n\xFAt C\u1EADp nh\u1EADt.");
+              break;
+            }
+          }
+        }
+        if (clickedSave) {
+          await page.waitForTimeout(1500);
+          try {
+            const dialogConfirmBtn = page.locator('.eds-modal button, .shopee-dialog button, [role="dialog"] button, .modal button, .eds-modal__box button').filter({ hasText: /Lưu & Hiển thị|^Hiển thị$|Lưu và Hiển thị/i }).last();
+            if (await dialogConfirmBtn.isVisible({ timeout: 5e3 }).catch(() => false)) {
+              await dialogConfirmBtn.click({ force: true });
+              log("[Browser] \u0110\xE3 click n\xFAt L\u01B0u & Hi\u1EC3n th\u1ECB trong h\u1ED9p tho\u1EA1i x\xE1c nh\u1EADn.");
+              await page.waitForTimeout(2e3);
+            }
+          } catch (e) {
+          }
+          log("[Browser] \u0110\xE3 click n\xFAt X\xE1c nh\u1EADn, \u0111ang ch\u1EDD Shopee x\u1EED l\xFD...");
+          let submitSuccess = false;
+          try {
+            await Promise.race([
+              page.waitForSelector('.shopee-message-wrapper:has-text("th\xE0nh c\xF4ng"), .shopee-toast:has-text("th\xE0nh c\xF4ng"), .shopee-message:has-text("th\xE0nh c\xF4ng")', { state: "visible", timeout: 25e3 }),
+              page.waitForURL("**/portal/product/list/**", { timeout: 25e3 }),
+              page.waitForNavigation({ waitUntil: "networkidle", timeout: 25e3 })
+            ]);
+            submitSuccess = true;
+          } catch (e) {
+            const currentUrl = page.url();
+            if (currentUrl.includes("/product/list") || !currentUrl.includes("/product/new") && !currentUrl.includes(`/product/${shopeeProductId}`)) {
+              submitSuccess = true;
+            }
+          }
+          if (submitSuccess) {
+            log(`[Browser] \u0110\xE3 \u0111\u0103ng/c\u1EADp nh\u1EADt th\xE0nh c\xF4ng s\u1EA3n ph\u1EA9m model ${sku}`);
+            let finalShopeeId = shopeeProductId;
+            const isCleanNew = !shopeeProductId || shopeeProductId.trim() === "" || shopeeProductId.toLowerCase() === "id";
+            if (isCleanNew) {
+              log(`[Browser] \u23F3 Ph\xE1t hi\u1EC7n s\u1EA3n ph\u1EA9m m\u1EDBi. \u0110ang b\u1EAFt \u0111\u1EA7u quy tr\xECnh d\xF2 l\u1EA5y Shopee Product ID t\u1EEB s\xE0n...`);
+              let newShopeeId = "";
+              for (let attempt = 1; attempt <= 6; attempt++) {
+                log(`[Browser] D\xF2 Shopee Product ID (L\u1EA7n th\u1EED ${attempt}/6)...`);
+                try {
+                  const searchUrl = `https://banhang.shopee.vn/portal/product/list/live/all?keyword=${encodeURIComponent(currentVariant.model.name)}`;
+                  if (attempt > 1) {
+                    log(`[Browser] \u23F3 \u0110ang \u0111\u1EE3i 5 gi\xE2y \u0111\u1EC3 Shopee \u0111\u1ED3ng b\u1ED9 d\u1EEF li\u1EC7u s\u1EA3n ph\u1EA9m m\u1EDBi...`);
+                    await page.waitForTimeout(5e3);
+                  }
+                  log(`[Browser] \u{1F504} \u0110ang t\u1EA3i/l\xE0m m\u1EDBi trang danh s\xE1ch s\u1EA3n ph\u1EA9m \u0111\u1EC3 qu\xE9t ID m\u1EDBi nh\u1EA5t...`);
+                  await page.goto(searchUrl, { waitUntil: "load", timeout: 35e3 });
+                  await page.waitForTimeout(5e3);
+                  try {
+                    const popupSkipBtn = page.locator('button, [role="button"], span, div').filter({ hasText: /^Bỏ qua$/i }).first();
+                    if (await popupSkipBtn.isVisible({ timeout: 2500 }).catch(() => false)) {
+                      await popupSkipBtn.click({ force: true }).catch(() => {
+                      });
+                      log("[Browser] \u0110\xE3 t\u1EF1 \u0111\u1ED9ng \u0111\xF3ng popup qu\u1EA3ng c\xE1o/h\u01B0\u1EDBng d\u1EABn c\u1EA3n tr\u1EDF.");
+                      await page.waitForTimeout(1500);
+                    }
+                  } catch (popupErr) {
+                  }
+                  const foundId = await page.evaluate((targetSku) => {
+                    const skuElements = Array.from(document.querySelectorAll('.product-sku, [class*="product-sku"], .product-sku-text'));
+                    for (const el of skuElements) {
+                      const text = el.textContent || "";
+                      const hasParentLabel = text.toLowerCase().includes("sku s\u1EA3n ph\u1EA9m") || text.toLowerCase().includes("product sku");
+                      const hasVariationLabel = text.toLowerCase().includes("sku ph\xE2n lo\u1EA1i") || text.toLowerCase().includes("variation sku");
+                      if (!hasParentLabel || hasVariationLabel) continue;
+                      const cleanSku = text.replace(/sku sản phẩm:?/i, "").replace(/product sku:?/i, "").trim().toLowerCase();
+                      if (cleanSku === targetSku.toLowerCase()) {
+                        let parent = el.parentElement;
+                        for (let depth = 0; depth < 10 && parent; depth++) {
+                          const link = parent.querySelector('a[href*="/portal/product/"]');
+                          if (link) {
+                            const href = link.getAttribute("href") || "";
+                            const match = href.match(/\/portal\/product\/(\d+)/);
+                            if (match && match[1]) return match[1];
+                          }
+                          const itemIdEl = parent.querySelector('.item-id, [class*="item-id"], [class*="product-id"]');
+                          if (itemIdEl) {
+                            const itemIdText = itemIdEl.textContent || "";
+                            const match = itemIdText.match(/ID Sản phẩm:\s*(\d+)/i) || itemIdText.match(/ID:\s*(\d+)/i) || itemIdText.match(/(\d+)/);
+                            if (match && match[1]) return match[1];
+                          }
+                          parent = parent.parentElement;
+                        }
+                      }
+                    }
+                    return null;
+                  }, currentVariant.sku);
+                  if (foundId) {
+                    newShopeeId = foundId;
+                    log(`[Browser] \u{1F389} \u0110\xE3 t\xECm th\u1EA5y Shopee Product ID m\u1EDBi: ${newShopeeId}`);
+                    break;
+                  }
+                } catch (e) {
+                  log(`[Browser] L\u1ED7i khi t\u1EA3i trang danh s\xE1ch \u0111\u1EC3 d\xF2 ID: ${e.message}`);
+                }
+                log(`[Browser] Ch\u01B0a t\xECm th\u1EA5y s\u1EA3n ph\u1EA9m ${currentVariant.sku} tr\xEAn Shopee. \u0110\u1EE3i 5 gi\xE2y r\u1ED3i th\u1EED l\u1EA1i...`);
+                await page.waitForTimeout(5e3);
+              }
+              if (newShopeeId) {
+                finalShopeeId = newShopeeId;
+                await prisma.variant.update({
+                  where: { id: currentVariant.id },
+                  data: { shopeeProductId: newShopeeId }
+                });
+                log(`[Browser] \u2705 \u0110\xE3 c\u1EADp nh\u1EADt Shopee Product ID (${newShopeeId}) v\xE0o DB cho SKU ${currentVariant.sku}`);
+              } else {
+                log(`[Browser] \u26A0\uFE0F Kh\xF4ng th\u1EC3 t\u1EF1 \u0111\u1ED9ng t\xECm th\u1EA5y Shopee Product ID m\u1EDBi sau 6 l\u1EA7n th\u1EED. B\u1EA1n c\xF3 th\u1EC3 c\u1EA7n \u0111i\u1EC1n th\u1EE7 c\xF4ng.`);
+              }
+            }
+            await appendToGoogleSheet(finalShopeeId, currentVariant.sku, productName, onProgress);
+            await sendTelegramNotification(
+              currentVariant.sku,
+              currentVariant.model.name,
+              productName,
+              finalShopeeId,
+              isCleanNew,
+              onProgress
+            );
+          } else {
+            throw new Error("N\xFAt L\u01B0u/C\u1EADp nh\u1EADt \u0111\xE3 \u0111\u01B0\u1EE3c b\u1EA5m nh\u01B0ng Shopee kh\xF4ng l\u01B0u th\xE0nh c\xF4ng (v\u1EABn \u0111ang b\u1ECB gi\u1EEF l\u1EA1i \u1EDF trang ch\u1EC9nh s\u1EEDa s\u1EA3n ph\u1EA9m). Vui l\xF2ng ki\u1EC3m tra xem b\u1EA1n c\xF3 b\u1ECF s\xF3t tr\u01B0\u1EDDng th\xF4ng tin b\u1EAFt bu\u1ED9c n\xE0o ho\u1EB7c m\xF4 t\u1EA3 s\u1EA3n ph\u1EA9m b\u1ECB tr\u1ED1ng hay kh\xF4ng.");
+          }
+        } else {
+          log("[Browser] L\u1ED7i: Kh\xF4ng t\xECm th\u1EA5y n\xFAt Hi\u1EC3n th\u1ECB/C\u1EADp nh\u1EADt \u0111\u1EC3 b\u1EA5m!");
+        }
+      } catch (e) {
+        log(`[Browser] L\u1ED7i x\u1EED l\xFD V\u1EADn chuy\u1EC3n & Ho\xE0n t\u1EA5t: ${e.message}`);
+      }
+      log(`[Ho\xE0n t\u1EA5t] Qu\xE1 tr\xECnh Sync Shopee \u0111\xE3 ch\u1EA1y xong! B\u1EA1n h\xE3y ki\u1EC3m tra l\u1EA1i tr\xEAn tr\xECnh duy\u1EC7t.`);
+    } catch (e) {
+      log("[Browser] L\u1ED7i t\u1EF1 \u0111\u1ED9ng upload media.");
+    }
+  } catch (e) {
+    log(`[L\u1ED7i Browser] ${e.message}`);
+    try {
+      if (page) {
+        const screenshotPath = path.join(process.cwd(), "shopee_error_screenshot.png");
+        await page.screenshot({ path: screenshotPath });
+        log(`[Browser] \u0110\xE3 ch\u1EE5p \u1EA3nh m\xE0n h\xECnh l\u1ED7i l\u01B0u t\u1EA1i: ${screenshotPath}`);
+      }
+    } catch (err) {
+      log(`[Browser] Kh\xF4ng th\u1EC3 ch\u1EE5p \u1EA3nh m\xE0n h\xECnh l\u1ED7i: ${err.message}`);
+    }
+  } finally {
+    if (browser) {
+      log("[Browser] \u0110ang t\u1EF1 \u0111\u1ED9ng \u0111\xF3ng tr\xECnh duy\u1EC7t...");
+      await browser.close();
+    }
+  }
+}
+async function sendTelegramNotification(sku, modelName, productName, shopeeProductId, isNew, onProgress) {
+  const log = (msg) => {
+    console.log(msg);
+    if (onProgress) onProgress(msg);
+  };
+  try {
+    const enabledSetting = await prisma.setting.findUnique({ where: { key: "telegram_notify_enabled" } });
+    const isEnabled = enabledSetting?.value === "true";
+    if (!isEnabled) {
+      return;
+    }
+    const tokenSetting = await prisma.setting.findUnique({ where: { key: "telegram_bot_token" } });
+    const chatIdSetting = await prisma.setting.findUnique({ where: { key: "telegram_chat_id" } });
+    const botToken = tokenSetting?.value?.trim();
+    const chatId = chatIdSetting?.value?.trim();
+    if (!botToken || !chatId) {
+      log("[Telegram] Thi\u1EBFu c\u1EA5u h\xECnh Telegram Bot Token ho\u1EB7c Chat ID. B\u1ECF qua th\xF4ng b\xE1o.");
+      return;
+    }
+    const statusText = isNew ? "\u0110\u0102NG M\u1EDAI S\u1EA2N PH\u1EA8M \u{1F195}" : "C\u1EACP NH\u1EACT BI\u1EBEN TH\u1EC2 \u270F\uFE0F";
+    const linkProduct = `https://shopee.vn/product/${shopeeProductId}`;
+    const timeStr = (/* @__PURE__ */ new Date()).toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" });
+    const message = `\u{1F514} <b>[HOROLOGIST] \u0110\u1ED2NG B\u1ED8 TH\xC0NH C\xD4NG!</b>
+\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501
+\u{1F3F7}\uFE0F <b>Tr\u1EA1ng th\xE1i:</b> ${statusText}
+\u231A <b>SKU K\xEDch ho\u1EA1t:</b> <code>${sku}</code>
+\u{1F4C1} <b>D\xF2ng m\xE1y:</b> <code>${modelName}</code>
+\u{1F4DD} <b>T\xEAn SEO:</b> ${productName}
+\u{1F6D2} <b>Shopee Product ID:</b> <code>${shopeeProductId}</code>
+\u{1F517} <a href="${linkProduct}">Link s\u1EA3n ph\u1EA9m tr\xEAn Shopee</a>
+\u23F0 <b>Th\u1EDDi gian:</b> ${timeStr}
+\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501`;
+    const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text: message,
+        parse_mode: "HTML",
+        disable_web_page_preview: false
+      })
+    });
+    if (response.ok) {
+      log(`[Telegram] \u2705 \u0110\xE3 g\u1EEDi th\xF4ng b\xE1o Telegram cho SKU: ${sku}`);
+    } else {
+      const errText = await response.text();
+      log(`[Telegram] \u26A0\uFE0F G\u1EEDi th\xF4ng b\xE1o th\u1EA5t b\u1EA1i (HTTP ${response.status}): ${errText}`);
+    }
+  } catch (e) {
+    log(`[Telegram] L\u1ED7i g\u1EEDi th\xF4ng b\xE1o Telegram: ${e.message}`);
+  }
+}
+async function testTelegramNotification(botToken, chatId) {
+  try {
+    const timeStr = (/* @__PURE__ */ new Date()).toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" });
+    const message = `\u{1F514} <b>[HOROLOGIST] K\u1EBET N\u1ED0I TH\xC0NH C\xD4NG!</b>
+\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501
+\u{1F4F1} \u0110\xE2y l\xE0 tin nh\u1EAFn th\u1EED nghi\u1EC7m t\u1EEB c\xF4ng c\u1EE5 <b>Horologist Shopee Manager</b>.
+\u2705 Telegram Bot c\u1EE7a b\u1EA1n \u0111\xE3 \u0111\u01B0\u1EE3c c\u1EA5u h\xECnh ch\xEDnh x\xE1c v\xE0 s\u1EB5n s\xE0ng nh\u1EADn th\xF4ng b\xE1o t\u1EF1 \u0111\u1ED9ng.
+\u23F0 <b>Th\u1EDDi gian:</b> ${timeStr}
+\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501`;
+    const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text: message,
+        parse_mode: "HTML"
+      })
+    });
+    if (response.ok) {
+      return { success: true, message: "\u0110\xE3 g\u1EEDi tin nh\u1EAFn test th\xE0nh c\xF4ng! H\xE3y ki\u1EC3m tra \u0111i\u1EC7n tho\u1EA1i c\u1EE7a b\u1EA1n." };
+    } else {
+      const errText = await response.text();
+      return { success: false, message: `L\u1ED7i t\u1EEB Telegram (HTTP ${response.status}): ${errText}` };
+    }
+  } catch (e) {
+    return { success: false, message: `L\u1ED7i k\u1EBFt n\u1ED1i: ${e.message}` };
+  }
+}
+export {
+  exportIgnoredReport,
+  filterAndReportVariants,
+  generateShopeeProductName,
+  prepareMediaForShopee,
+  runShopeeAutomationDemo,
+  sendTelegramNotification,
+  testTelegramNotification
+};

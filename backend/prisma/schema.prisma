@@ -1,0 +1,52 @@
+// prisma/schema.prisma
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./app.db"
+}
+
+model WatchModel {
+  id          String    @id @default(uuid())
+  name        String    @unique // VD: "735G"
+  description String?
+  basePrice   Float?
+  variants    Variant[]
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}
+
+model Variant {
+  id               String    @id @default(uuid())
+  modelId          String
+  color            String    // VD: "Đỏ", "Xanh"
+  sku              String    @unique // VD: "735G2-T8"
+  price            Float
+  shopeeProductId  String?   // ID lấy từ link Shopee (VD: 43764866809)
+  rawImage         String?   // Đường dẫn ảnh gốc trên máy
+  avatarImage      String?   // Đường dẫn ảnh đã render bằng Sharp
+  status           String    @default("DRAFT") // DRAFT, PUBLISHED, HIDDEN
+  
+  model            WatchModel @relation(fields: [modelId], references: [id], onDelete: Cascade)
+  syncTasks        SyncTask[]
+}
+
+model SyncTask {
+  id          String   @id @default(uuid())
+  variantId   String
+  action      String   // UPLOAD_AVATAR, UPDATE_INFO, UNHIDE
+  status      String   @default("PENDING") // PENDING, RUNNING, SUCCESS, FAILED
+  logs        String?  // Ghi log lỗi từ Puppeteer
+  createdAt   DateTime @default(now())
+
+  variant     Variant  @relation(fields: [variantId], references: [id], onDelete: Cascade)
+}
+
+model Setting {
+  id    String @id @default(uuid())
+  key   String @unique
+  value String
+}

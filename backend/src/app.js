@@ -8,6 +8,7 @@ import { startTelegramBot } from './services/telegram.service.js';
 import authRoutes from './routes/auth.routes.js';
 import userRoutes from './routes/user.routes.js';
 import webhookRoutes from './routes/webhook.routes.js';
+import shopeeRoutes from './routes/shopee.routes.js';
 // Worker sẽ được khởi động SAU khi scheduler dọn sạch queue
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -48,6 +49,7 @@ app.use('/api', apiRoutes);
 app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
 app.use('/webhook', webhookRoutes);
+app.use('/api/shopee', shopeeRoutes);
 // app.use('/api/drive', driveRoutes);
 // app.use('/api/publish', publishRoutes);
 

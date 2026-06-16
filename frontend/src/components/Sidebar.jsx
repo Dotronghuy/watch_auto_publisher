@@ -10,7 +10,8 @@ import {
   Upload, 
   HelpCircle, 
   LogOut,
-  MessageCircle
+  MessageCircle,
+  ShoppingBag
 } from 'lucide-react';
 import Swal from 'sweetalert2';
 import { motion } from 'framer-motion';
@@ -41,6 +42,7 @@ const Sidebar = () => {
     { name: 'Luồng công việc', path: '/workflow', icon: Workflow, permission: 'workflow' },
     { name: 'Lịch đăng', path: '/calendar', icon: Calendar, permission: 'calendar' },
     { name: 'Hộp thư (CRM)', path: '/inbox', icon: MessageCircle, permission: 'inbox' },
+    { name: 'Shopee Manager', path: '/shopee', icon: ShoppingBag, permission: 'dashboard' },
     { name: 'Dữ liệu SP', path: '/database', icon: Database, permission: 'database' },
     { name: 'Cài đặt', path: '/settings', icon: Settings, permission: 'settings' }
   ];

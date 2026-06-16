@@ -12,6 +12,7 @@ import CalendarPage from './pages/Calendar';
 import SocialConnections from './pages/SocialConnections';
 import UserManagement from './pages/UserManagement';
 import InboxCRM from './pages/InboxCRM';
+import ShopeeManager from './pages/ShopeeManager';
 
 function App() {
   return (
@@ -43,6 +44,10 @@ function App() {
 
             <Route element={<ProtectedRoute permission="inbox" />}>
               <Route path="inbox" element={<InboxCRM />} />
+            </Route>
+
+            <Route element={<ProtectedRoute permission="dashboard" />}>
+              <Route path="shopee" element={<ShopeeManager />} />
             </Route>
 
             <Route element={<ProtectedRoute permission="settings" />}>

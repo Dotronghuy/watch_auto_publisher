@@ -24,7 +24,7 @@ const getGeminiModels = () => {
   if (modelsEnv) {
     return modelsEnv.split(',').map(m => m.trim()).filter(m => m);
   }
-  return ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-flash-latest'];
+  return ['gemini-3.5-flash', 'gemini-3-flash', 'gemini-2.5-flash', 'gemini-flash-latest'];
 };
 
 const runWithModelFallback = async (content, requireJSON = false) => {
@@ -37,12 +37,12 @@ const runWithModelFallback = async (content, requireJSON = false) => {
       const result = await model.generateContent(content);
       return result;
     } catch (err) {
-      const isOverloaded = err.message.includes('503') || err.message.includes('500') || err.message.includes('429');
-      if (isOverloaded && i < models.length - 1) {
-        console.log(`🤖 Model ${modelName} đang quá tải, tự động chuyển sang ${models[i+1]}...`);
+      console.log(`⚠️ Lỗi Model ${modelName}:`, err.message);
+      if (i < models.length - 1) {
+        console.log(`🤖 Tự động chuyển sang ${models[i+1]}...`);
         continue;
       }
-      throw err; // Nếu là model cuối cùng hoặc lỗi khác, ném ra ngoài
+      throw err; // Nếu là model cuối cùng thì ném lỗi
     }
   }
 };
@@ -101,7 +101,8 @@ const runLayer3GeminiVision = async (imageUrl, messageText) => {
     }
     const customerImageBase64 = Buffer.from(buffer).toString("base64");
     
-    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash", generationConfig: { responseMimeType: "application/json" } });
+    const modelName = getGeminiModels()[0];
+    const model = genAI.getGenerativeModel({ model: modelName, generationConfig: { responseMimeType: "application/json" } });
     
     // Đọc catalog
     const catalogPath = path.join(__dirname, '../../data/catalog.json');
@@ -219,7 +220,8 @@ Chỉ trả về JSON định dạng: { "sku": "Mã SKU khớp" }. Nếu hoàn t
  */
 const runGeminiText = async (history, newMessage) => {
   try {
-    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+    const modelName = getGeminiModels()[0];
+    const model = genAI.getGenerativeModel({ model: modelName });
     const systemPrompt = `Bạn là trợ lý ảo tư vấn đồng hồ của I&W Carnival.
 Hãy trả lời lịch sự, thân thiện, dùng emoji hợp lý. Không bịa đặt thông tin.
 Dưới đây là thông tin cửa hàng:
@@ -281,10 +283,33 @@ ${getKnowledgeText()}
 
 // --- MAIN WORKFLOW ---
 
+const typingTimers = {};
+
 export const handleIncomingMessage = async (conversationId, messageText, imageUrl = null) => {
   const settings = getSettings();
   if (!settings.botEnabled) return; // Bot bị tắt toàn cục
 
+  // Hủy timer cũ nếu có tin nhắn mới liên tiếp
+  if (typingTimers[conversationId]) {
+    clearTimeout(typingTimers[conversationId].timer);
+  }
+
+  // Gộp chung nội dung và ảnh của các tin nhắn gửi sát nhau
+  const accImageUrl = imageUrl || (typingTimers[conversationId] ? typingTimers[conversationId].imageUrl : null);
+  const prevText = (typingTimers[conversationId] ? typingTimers[conversationId].text : '');
+  const accText = prevText ? prevText + '\n' + messageText : messageText;
+
+  typingTimers[conversationId] = {
+    imageUrl: accImageUrl,
+    text: accText,
+    timer: setTimeout(async () => {
+      delete typingTimers[conversationId];
+      await processConversation(conversationId, accText, accImageUrl, settings);
+    }, 4000) // Chờ 4 giây để gộp tin nhắn
+  };
+};
+
+const processConversation = async (conversationId, messageText, imageUrl, settings) => {
   try {
     const conversation = await getConversationById(conversationId);
     if (!conversation) return;
