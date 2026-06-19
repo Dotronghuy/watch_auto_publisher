@@ -1,3 +1,2 @@
-2026/06/16-12:20:04.794 120c Reusing MANIFEST C:\Users\Admin\Downloads\watch_auto_publisher-master\backend\shopee-chrome-profile\Default\Service Worker\Database/MANIFEST-000001
-2026/06/16-12:20:04.796 120c Recovering log #3
-2026/06/16-12:20:04.798 120c Reusing old log C:\Users\Admin\Downloads\watch_auto_publisher-master\backend\shopee-chrome-profile\Default\Service Worker\Database/000003.log 
+2026/06/16-23:51:59.154 55c0 Creating DB C:\Users\Admin\Downloads\watch-auto-publisher\backend\shopee-chrome-profile\Default\Service Worker\Database since it was missing.
+2026/06/16-23:51:59.160 55c0 Reusing MANIFEST C:\Users\Admin\Downloads\watch-auto-publisher\backend\shopee-chrome-profile\Default\Service Worker\Database/MANIFEST-000001

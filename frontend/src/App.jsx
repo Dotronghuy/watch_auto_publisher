@@ -13,6 +13,7 @@ import SocialConnections from './pages/SocialConnections';
 import UserManagement from './pages/UserManagement';
 import InboxCRM from './pages/InboxCRM';
 import ShopeeManager from './pages/ShopeeManager';
+import ZenwatchZalo from './pages/ZenwatchZalo';
 
 function App() {
   return (
@@ -48,6 +49,7 @@ function App() {
 
             <Route element={<ProtectedRoute permission="dashboard" />}>
               <Route path="shopee" element={<ShopeeManager />} />
+              <Route path="zenwatch/zalo" element={<ZenwatchZalo />} />
             </Route>
 
             <Route element={<ProtectedRoute permission="settings" />}>

@@ -1,0 +1,11 @@
+{
+  "groups": [
+    "test tool"
+  ],
+  "phone": "0388889385",
+  "sheetUrl": "https://docs.google.com/spreadsheets/d/16SG7sTFwAkKQ29Oqtbi3aeA2iEAJRq5l/edit",
+  "postsPerSession": 1,
+  "delayMinutes": 1,
+  "cooldownDays": 1,
+  "contentTone": "auto"
+}
