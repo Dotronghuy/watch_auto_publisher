@@ -60,7 +60,15 @@ export const startTelegramBot = () => {
       // Ignore network resets during polling, bot will auto-reconnect
       return;
     }
+    if (error.code === 'ETELEGRAM' && error.message.includes('409 Conflict')) {
+      return;
+    }
     console.error('Lỗi Polling Telegram:', error.message);
+  });
+
+  // Tắt bot duyên dáng khi có tín hiệu restart từ nodemon
+  process.once('SIGUSR2', () => {
+    if (bot) bot.stopPolling();
   });
 
   bot.on('callback_query', async (query) => {

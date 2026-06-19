@@ -98,63 +98,79 @@ async function callAIWithRotation(prompt, images = []) {
   const { GoogleGenerativeAI } = await import("@google/generative-ai");
   for (let i = 0; i < geminiKeys.length; i++) {
     const apiKey = geminiKeys[i];
-    try {
-      const ai = new GoogleGenerativeAI(apiKey);
-      const model = ai.getGenerativeModel({ model: "gemini-2.5-flash" });
-      const parts = [prompt, ...images.map((img) => ({ inlineData: { data: img.data, mimeType: img.mimeType } }))];
-      const result = await model.generateContent(parts);
-      const response = await result.response;
-      return response.text().trim();
-    } catch (error) {
-      if (error.message?.includes("429") || error.status === 429) {
-        console.warn(`[AI] Gemini Key ${i + 1} qu\xE1 t\u1EA3i, th\u1EED key ti\u1EBFp theo...`);
-        continue;
+    let retryCount = 1;
+    while (true) {
+      try {
+        const ai = new GoogleGenerativeAI(apiKey);
+        const model = ai.getGenerativeModel({ model: "gemini-2.5-flash" });
+        const parts = [prompt, ...images.map((img) => ({ inlineData: { data: img.data, mimeType: img.mimeType } }))];
+        const result = await model.generateContent(parts);
+        const response = await result.response;
+        return response.text().trim();
+      } catch (error) {
+        if (error.message?.includes("429") || error.message?.includes("503") || error.status === 429 || error.status === 503) {
+          console.warn(`[AI] Gemini Key ${i + 1} báo bận (429/503). Đang chờ 5s để thử lại lần ${retryCount}...`);
+          await new Promise(res => setTimeout(res, 5000));
+          retryCount++;
+          continue;
+        }
+        console.error(`[AI] Lỗi Gemini Key ${i + 1}:`, error.message);
+        break; // Lỗi khác (ví dụ: sai key) thì bỏ qua key này luôn
       }
-      console.error(`[AI] L\u1ED7i Gemini Key ${i + 1}:`, error.message);
     }
   }
   for (let i = 0; i < openaiKeys.length; i++) {
     const apiKey = openaiKeys[i];
-    try {
-      console.log(`[AI] \u0110ang th\u1EED s\u1EED d\u1EE5ng OpenAI (GPT-4o) l\xE0m d\u1EF1 ph\xF2ng...`);
-      const response = await fetch("https://api.openai.com/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${apiKey}`
-        },
-        body: JSON.stringify({
-          model: "gpt-4o",
-          messages: [
-            {
-              role: "user",
-              content: [
-                { type: "text", text: prompt },
-                ...images.map((img) => ({
-                  type: "image_url",
-                  image_url: { url: `data:${img.mimeType};base64,${img.data}` }
-                }))
-              ]
-            }
-          ],
-          max_tokens: 300
-        })
-      });
-      const data = await response.json();
-      if (data.choices && data.choices[0]) {
-        return data.choices[0].message.content.trim();
-      } else if (data.error) {
-        throw new Error(data.error.message);
+    let retryCount = 1;
+    while (true) {
+      try {
+        console.log(`[AI] Đang thử sử dụng OpenAI (GPT-4o) làm dự phòng...`);
+        const response = await fetch("https://api.openai.com/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${apiKey}`
+          },
+          body: JSON.stringify({
+            model: "gpt-4o",
+            messages: [
+              {
+                role: "user",
+                content: [
+                  { type: "text", text: prompt },
+                  ...images.map((img) => ({
+                    type: "image_url",
+                    image_url: { url: `data:${img.mimeType};base64,${img.data}` }
+                  }))
+                ]
+              }
+            ],
+            max_tokens: 300
+          })
+        });
+        const data = await response.json();
+        if (data.choices && data.choices[0]) {
+          return data.choices[0].message.content.trim();
+        } else if (data.error) {
+          throw new Error(data.error.message);
+        }
+      } catch (error) {
+        if (error.message?.includes("429") || error.message?.includes("503") || error.status === 429 || error.status === 503) {
+          console.warn(`[AI] OpenAI Key ${i + 1} báo bận (429/503). Đang chờ 5s để thử lại lần ${retryCount}...`);
+          await new Promise(res => setTimeout(res, 5000));
+          retryCount++;
+          continue;
+        }
+        console.error(`[AI] Lỗi OpenAI Key ${i + 1}:`, error.message);
+        break;
       }
-    } catch (error) {
-      console.error(`[AI] L\u1ED7i OpenAI Key ${i + 1}:`, error.message);
     }
   }
   throw new Error("T\u1EA5t c\u1EA3 c\xE1c API Key (Gemini & OpenAI) \u0111\u1EC1u kh\xF4ng kh\u1EA3 d\u1EE5ng ho\u1EB7c h\u1EBFt h\u1EA1n m\u1EE9c.");
 }
 async function checkColorMatchWithAI(avatarPath, targetImagePath) {
   try {
-    let fileToGenerativePart = function(filePath, mimeType) {
+    let fileToGenerativePart = function (filePath, mimeType) {
       return {
         data: Buffer.from(fs.readFileSync(filePath)).toString("base64"),
         mimeType
@@ -162,15 +178,91 @@ async function checkColorMatchWithAI(avatarPath, targetImagePath) {
     };
     const avatarPart = fileToGenerativePart(avatarPath, "image/jpeg");
     const targetPart = fileToGenerativePart(targetImagePath, "image/jpeg");
-    const prompt = "H\xE3y ki\u1EC3m tra xem hai chi\u1EBFc \u0111\u1ED3ng h\u1ED3 trong 2 b\u1EE9c \u1EA3nh n\xE0y c\xF3 ho\xE0n to\xE0n tr\xF9ng kh\u1EDBp v\u1EC1 m\xE0u s\u1EAFc (m\xE0u m\u1EB7t s\u1ED1, m\xE0u vi\u1EC1n v\u1ECF, m\xE0u d\xE2y \u0111eo) hay kh\xF4ng. B\u1ECF qua s\u1EF1 kh\xE1c bi\u1EC7t v\u1EC1 g\xF3c ch\u1EE5p, \xE1nh s\xE1ng ho\u1EB7c ph\xF4ng n\u1EC1n. Ch\u1EC9 tr\u1EA3 l\u1EDDi duy nh\u1EA5t b\u1EB1ng ch\u1EEF YES n\u1EBFu ch\xFAng ho\xE0n to\xE0n gi\u1ED1ng nhau v\u1EC1 m\xE0u s\u1EAFc, ho\u1EB7c NO n\u1EBFu c\xF3 b\u1EA5t k\u1EF3 \u0111i\u1EC3m kh\xE1c bi\u1EC7t n\xE0o.";
+    const prompt = "Hãy kiểm tra xem hai chiếc đồng hồ trong 2 bức ảnh này có CÙNG MÀU VỎ (Case Color) hay không (ví dụ: cùng là vỏ thép bạc, hoặc cùng là vỏ mạ vàng/vàng hồng). TUYỆT ĐỐI BỎ QUA sự khác biệt về màu mặt số bên trong và BỎ QUA sự khác biệt về màu dây đeo (dây có thể khác màu). Chỉ trả lời duy nhất bằng chữ YES nếu chúng có CÙNG MÀU VỎ, hoặc NO nếu màu vỏ khác nhau.";
     const text = await callAIWithRotation(prompt, [avatarPart, targetPart]);
     if (!text) return false;
     const resultText = text.toUpperCase();
     console.log(`[Media] AI Color Match k\u1EBFt qu\u1EA3: ${resultText}`);
     return resultText.includes("YES");
   } catch (e) {
-    console.error("[Media] AI Color Match l\u1ED7i:", e);
+    console.error("[Media] AI Color Match lỗi:", e);
     return false;
+  }
+}
+
+async function groupVariantsByDesignAI(targetVariant, potentialVariants, pushLog) {
+  pushLog(`[AI] Bắt đầu gom nhóm biến thể cùng vỏ bằng logic và AI cho ${targetVariant.sku}...`);
+  // Bước 1: Lọc cứng
+  const targetParts = targetVariant.sku.split('-');
+  if (targetParts.length < 2) return [targetVariant];
+  
+  const targetPrefix = targetParts[1].charAt(0); // VD: 'T' trong 'T7', hoặc 'S' trong 'S1'
+  
+  // Lọc ra các biến thể có ký tự đầu tiên sau dấu '-' giống nhau
+  const logicFiltered = potentialVariants.filter(v => {
+    const p = v.sku.split('-');
+    if (p.length < 2) return false;
+    return p[1].charAt(0).toUpperCase() === targetPrefix.toUpperCase();
+  });
+  
+  pushLog(`[AI] Lọc logic (cùng dây ${targetPrefix}): ${logicFiltered.map(v=>v.sku).join(', ')}`);
+  
+  if (logicFiltered.length <= 1) return logicFiltered;
+  
+  const allAvatars = potentialVariants.filter(v => v.isAvatar);
+  if (allAvatars.length === 1) {
+      pushLog(`[AI] Chỉ có 1 Avatar cho model này. Bỏ qua AI soi màu, gộp chung tất cả các biến thể vào 1 sản phẩm!`);
+      return logicFiltered;
+  }
+  
+  // Bước 2: Lọc mềm (AI)
+  pushLog(`[AI] Chuẩn bị gửi ${logicFiltered.length} ảnh lên AI để soi màu vỏ...`);
+  
+  try {
+    let fileToGenerativePart = function(filePath, mimeType) {
+      if (!fs.existsSync(filePath)) return null;
+      return {
+        data: Buffer.from(fs.readFileSync(filePath)).toString("base64"),
+        mimeType
+      };
+    };
+
+    const getBestImage = (v) => (v.avatarImage && fs.existsSync(v.avatarImage)) ? v.avatarImage : ((v.rawImage && fs.existsSync(v.rawImage)) ? v.rawImage : null);
+
+    const targetImg = getBestImage(targetVariant);
+    const targetPart = targetImg ? fileToGenerativePart(targetImg, "image/jpeg") : null;
+    if (!targetPart) {
+      pushLog("[AI] Biến thể gốc không có ảnh hợp lệ, bỏ qua lọc AI.");
+      return logicFiltered;
+    }
+
+    const finalGroup = [targetVariant];
+
+    for (const v of logicFiltered) {
+      if (v.sku === targetVariant.sku) continue; // Đã thêm ở trên
+      const vImg = getBestImage(v);
+      if (!vImg) {
+        pushLog(`[AI] ⚠️ Bỏ qua ${v.sku} vì không có ảnh (cả Avatar lẫn ảnh gốc).`);
+        continue;
+      }
+      
+      pushLog(`[AI] Đang soi chéo màu vỏ: ${targetVariant.sku} vs ${v.sku}...`);
+      const isMatch = await checkColorMatchWithAI(targetImg, vImg);
+      if (isMatch) {
+        pushLog(`[AI] 🟢 KHỚP MÀU VỎ! Gộp ${v.sku} vào chung nhóm với ${targetVariant.sku}`);
+        finalGroup.push(v);
+      } else {
+        pushLog(`[AI] 🔴 Lệch màu! Tách ${v.sku} ra nhóm riêng.`);
+      }
+    }
+
+    // Những mã bị lỗi không có ảnh (bị loại ở vòng duyệt part) thì mặc định loại.
+    pushLog(`[AI] Kết quả nhóm AI soi màu vỏ (cùng màu với ${targetVariant.sku}): ${finalGroup.map(v=>v.sku).join(', ')}`);
+    return finalGroup;
+
+  } catch (e) {
+    pushLog(`[AI] Lỗi quá trình lọc màu bằng AI: ${e.message}`);
+    return logicFiltered; // Nếu lỗi AI, trả về kết quả lọc logic
   }
 }
 async function prepareMediaForShopee(modelName, sku, avatarPath, onProgress) {
@@ -182,92 +274,150 @@ async function prepareMediaForShopee(modelName, sku, avatarPath, onProgress) {
     throw new Error("Thi\u1EBFu \u1EA3nh Avatar c\u1EE7a bi\u1EBFn th\u1EC3. Vui l\xF2ng t\u1EA1o Avatar tr\u01B0\u1EDBc khi Sync.");
   }
   log(`[Media] \u0110ang t\xECm ki\u1EBFm th\u01B0 m\u1EE5c g\u1ED1c cho m\xE3 ${sku} tr\xEAn Google Drive...`);
-  
-  const rootFolderId = process.env.ROOT_DRIVE_FOLDER_ID;
-  if (!rootFolderId) throw new Error("Ch\u01B0a c\u1EA5u h\xECnh ROOT_DRIVE_FOLDER_ID trong file .env");
 
-  let modelFolderId = await getFolderIdByName(modelName, rootFolderId);
-  if (!modelFolderId) {
-    const numericModelMatch = modelName.match(/^(\d+)/);
-    if (numericModelMatch) {
-      log(`[Media] Kh\xF4ng t\xECm th\u1EA5y th\u01B0 m\u1EE5c ${modelName}, th\u1EED t\xECm d\u1EF1 ph\xF2ng ${numericModelMatch[1]}`);
-      modelFolderId = await getFolderIdByName(numericModelMatch[1], rootFolderId);
+  const rootFolderId = process.env.ROOT_DRIVE_FOLDER_ID;
+  if (!rootFolderId) throw new Error("Chưa cấu hình ROOT_DRIVE_FOLDER_ID trong file .env");
+
+  const brandFolders = await getFoldersInFolder(rootFolderId);
+  let targetFolderId = null;
+
+  for (const brandFolder of brandFolders) {
+    const subFolders = await getFoldersInFolder(brandFolder.id);
+    const exactFolder = subFolders.find(f => f.name.trim().toUpperCase() === sku.toUpperCase());
+    const regex = new RegExp('(^|[^a-zA-Z0-9])' + sku.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&') + '([^a-zA-Z0-9]|$)', 'i');
+    const skuFolder = exactFolder || subFolders.find(f => regex.test(f.name));
+    if (skuFolder) {
+      targetFolderId = skuFolder.id;
+      log(`[Media] Đã tìm thấy thư mục SKU: ${skuFolder.name} (trong ${brandFolder.name})`);
+      break;
     }
   }
 
-  if (!modelFolderId) {
-    log(`[Media] C\u1EA3nh b\xE1o: Kh\xF4ng t\xECm th\u1EA5y th\u01B0 m\u1EE5c ${modelName} tr\xEAn Drive. Ch\u1EC9 s\u1EED d\u1EE5ng Avatar.`);
-    return { images: [avatarPath], video: null };
+  let images = [];
+  let targetFolderIdToUse = targetFolderId;
+  if (!targetFolderId) {
+    log(`[Media] Cảnh báo: KHÔNG TÌM THẤY thư mục Media nào cho ${sku} trên Drive. Sẽ dùng ảnh dự phòng.`);
+  } else {
+    log(`[Media] Lấy ảnh từ folder ID: ${targetFolderIdToUse}`);
+    images = await getImagesInFolder(targetFolderIdToUse);
+    if (images.length < 3) {
+      log(`[Media] Cảnh báo: Thư mục Drive có quá ít ảnh (${images.length} ảnh). Bỏ qua ảnh Drive và ưu tiên dùng ảnh Avatar của nhóm SKU!`);
+      images = [];
+    }
   }
 
-  let targetFolderId = modelFolderId;
-  const subFolders = await getFoldersInFolder(modelFolderId);
-  
-  // T\xECm th\u01B0 m\u1EE5c con mang t\xEAn SKU
-  const skuFolder = subFolders.find(f => f.name.includes(sku) || sku.includes(f.name));
-  if (skuFolder) {
-      targetFolderId = skuFolder.id;
-  } else {
-      // N\u1EBFu kh\xF4ng c\xF3 th\u01B0 m\u1EE5c SKU, t\xECm th\u01B0 m\u1EE5c con \u0111\u1EA7u ti\xEAn ch\u1EE9a "B\u1ED9 2" ho\u1EB7c "m\xE1y \u1EA3nh" (M\xF4 ph\u1ECFng AI search)
-      const bestFolder = subFolders.find(f => f.name.toLowerCase().includes("b\u1ED9 t\u1EBFt") || f.name.toLowerCase().includes("b\u1ED9 2") || f.name.toLowerCase().includes("b\u1ED9 1") || f.name.toLowerCase().includes("m\xE1y \u1EA3nh"));
-      if (bestFolder) targetFolderId = bestFolder.id;
-  }
-  
-  log(`[Media] L\u1EA5y \u1EA3nh t\u1EEB folder ID: ${targetFolderId}`);
-  const images = await getImagesInFolder(targetFolderId);
-  
   let finalImages = [avatarPath];
   let selectedFiles = shuffleArray(images).slice(0, 7);
-  
+
   for (let i = 0; i < selectedFiles.length; i++) {
-     const file = selectedFiles[i];
-     log(`[Media] \u0110ang t\u1EA3i \u1EA3nh: ${file.name}`);
-     let downloadedPath = await downloadFileFromDrive(file.id, file.name);
-     
-     const stats = fs.statSync(downloadedPath);
-     if (stats.size > 2 * 1024 * 1024) {
-         log(`[Media] \u1EA2nh l\u1EDBn h\u01A1n 2MB, \u0111ang n\xE9n v\u1EDBi Sharp...`);
-         const compressedPath = path.join(os.tmpdir(), `shopee_img_compressed_${Date.now()}_${i}.jpg`);
-         await sharp(downloadedPath).resize({ width: 1200, withoutEnlargement: true }).jpeg({ quality: 80 }).toFile(compressedPath);
-         downloadedPath = compressedPath;
-     }
-     finalImages.push(downloadedPath);
+    const file = selectedFiles[i];
+    log(`[Media] Đang tải ảnh: ${file.name}`);
+    let downloadedPath = await downloadFileFromDrive(file.id, file.name);
+
+    log(`[Media] Đang nén ảnh với Sharp để tối ưu dung lượng tải lên...`);
+    const compressedPath = path.join(os.tmpdir(), `shopee_img_compressed_${Date.now()}_${i}.jpg`);
+    await sharp(downloadedPath).resize({ width: 1200, withoutEnlargement: true }).jpeg({ quality: 80 }).toFile(compressedPath);
+    downloadedPath = compressedPath;
+
+    finalImages.push(downloadedPath);
+  }
+
+  if (images.length === 0) {
+    try {
+      const modelIdentifier = sku.split('-')[0];
+      const potentialVariants = await prisma.variant.findMany({
+        where: { sku: { startsWith: modelIdentifier } },
+        orderBy: { sku: "asc" }
+      });
+      const targetVariant = potentialVariants.find(v => v.sku === sku);
+      if (targetVariant) {
+        const groupVariants = await groupVariantsByDesignAI(targetVariant, potentialVariants, log);
+        for (const gv of groupVariants) {
+          if (gv.sku !== sku && gv.avatarImage && fs.existsSync(gv.avatarImage)) {
+            if (finalImages.length >= 9) break;
+            if (!finalImages.includes(gv.avatarImage)) {
+               finalImages.push(gv.avatarImage);
+               log(`[Media] Thêm ảnh avatar của ${gv.sku} vào thư viện do thiếu ảnh Drive.`);
+            }
+          }
+        }
+      }
+    } catch(e) {
+      log(`[Media] Lỗi khi lấy ảnh nhóm dự phòng: ${e.message}`);
+    }
   }
 
   let finalVideo = null;
-  const videos = await getVideosInFolder(targetFolderId);
-  if (videos.length === 0 && targetFolderId !== modelFolderId) {
-      const rootVideos = await getVideosInFolder(modelFolderId);
-      if (rootVideos.length > 0) videos.push(rootVideos[0]);
-  }
+  const videos = targetFolderIdToUse ? await getVideosInFolder(targetFolderIdToUse) : [];
 
   if (videos.length > 0) {
-      const vid = videos[0];
-      log(`[Video] \u0110ang t\u1EA3i video: ${vid.name}`);
-      let downloadedVidPath = await downloadFileFromDrive(vid.id, vid.name);
-      
-      const stats = fs.statSync(downloadedVidPath);
-      const sizeMB = stats.size / (1024 * 1024);
-      let musicPath = path.join(process.cwd(), "music.mp3");
-      const hasMusic = fs.existsSync(musicPath);
+    const vid = videos[0];
+    log(`[Video] \u0110ang t\u1EA3i video: ${vid.name}`);
+    let downloadedVidPath = await downloadFileFromDrive(vid.id, vid.name);
 
-      if (sizeMB > 30 || hasMusic) {
-         log(`[Video] X\u1EED l\xFD video (N\xE9n/L\u1ED3ng nh\u1EA1c)...`);
-         const compressedPath = path.join(os.tmpdir(), `processed_${Date.now()}.mp4`);
-         await new Promise((resolve, reject) => {
-             let command = ffmpeg(downloadedVidPath);
-             if (hasMusic) command = command.input(musicPath);
-             command.videoCodec("libx264").audioCodec("aac").outputOptions(hasMusic ? ["-preset fast", "-crf 28", "-pix_fmt yuv420p", "-map 0:v:0", "-map 1:a:0", "-shortest"] : ["-preset fast", "-crf 28", "-pix_fmt yuv420p"]).save(compressedPath).on("end", () => {
-                 finalVideo = compressedPath;
-                 log(`[Video] \u0110\xE3 x\u1EED l\xFD xong video th\xE0nh c\xF4ng.`);
-                 resolve(true);
-             }).on("error", (err) => {
-                 reject(err);
-             });
-         });
-      } else {
-         finalVideo = downloadedVidPath;
-      }
+    const stats = fs.statSync(downloadedVidPath);
+    const sizeMB = stats.size / (1024 * 1024);
+    let hasMusic = false;
+    let musicPath = null;
+    let targetMusicDir = path.join(process.cwd(), "music_library");
+    if (!fs.existsSync(targetMusicDir)) targetMusicDir = path.join(process.cwd(), "backend", "music_library");
+    if (fs.existsSync(targetMusicDir)) {
+       const mp3Files = fs.readdirSync(targetMusicDir).filter(f => f.endsWith('.mp3'));
+       if (mp3Files.length > 0) {
+          const randomMp3 = mp3Files[Math.floor(Math.random() * mp3Files.length)];
+          musicPath = path.join(targetMusicDir, randomMp3);
+          hasMusic = true;
+          log(`[Video] Đã chọn nhạc ngẫu nhiên: ${randomMp3}`);
+       }
+    }
+
+    let duration = 0;
+    try {
+      duration = await new Promise((resolve, reject) => {
+        ffmpeg.ffprobe(downloadedVidPath, (err, metadata) => {
+          if (err) return reject(err);
+          resolve(metadata?.format?.duration || 0);
+        });
+      });
+    } catch (e) {
+      log(`[Video] Không lấy được thời lượng video: ${e.message}`);
+    }
+
+    if (sizeMB > 30 || hasMusic || (duration > 0 && duration < 10) || duration >= 60) {
+      log(`[Video] Xử lý video (Nén/Lồng nhạc/Cắt/Làm chậm)...`);
+      const compressedPath = path.join(os.tmpdir(), `processed_${Date.now()}.mp4`);
+      await new Promise((resolve, reject) => {
+        let command = ffmpeg(downloadedVidPath);
+        if (hasMusic) command = command.input(musicPath);
+
+        let outputOpts = ["-preset fast", "-crf 28", "-pix_fmt yuv420p"];
+
+        if (duration > 0 && duration < 10) {
+           const factor = (10.1 / duration).toFixed(4);
+           outputOpts.push("-filter:v", `setpts=${factor}*PTS`);
+           log(`[Video] Video quá ngắn (${duration.toFixed(1)}s), làm chậm x${(1/factor).toFixed(2)} để đạt 10s`);
+        }
+        
+        if (duration >= 60) {
+           command = command.duration(59.5);
+           log(`[Video] Video quá dài (${duration.toFixed(1)}s), cắt ngắn xuống 59s`);
+        }
+
+        if (hasMusic) {
+           outputOpts.push("-map 0:v:0", "-map 1:a:0", "-shortest");
+        }
+        
+        command.videoCodec("libx264").audioCodec("aac").outputOptions(outputOpts).save(compressedPath).on("end", () => {
+          finalVideo = compressedPath;
+          log(`[Video] Đã xử lý xong video thành công.`);
+          resolve(true);
+        }).on("error", (err) => {
+          reject(err);
+        });
+      });
+    } else {
+      finalVideo = downloadedVidPath;
+    }
   }
 
   log(`[Ho\xE0n t\u1EA5t Media] T\xECm th\u1EA5y ${finalImages.length} \u1EA3nh v\xE0 ${finalVideo ? "c\xF3" : "kh\xF4ng c\xF3"} video.`);
@@ -302,7 +452,7 @@ async function scrapeZenwatchData(modelCode) {
     console.log(`[Scraper Cache] S\u1EED d\u1EE5ng th\xF4ng s\u1ED1 cached cho: ${cacheKey}`);
     return zenwatchCache.get(cacheKey);
   }
-  
+
   let browser;
   try {
     let searchCode = modelCode.split("-")[0].trim();
@@ -311,13 +461,47 @@ async function scrapeZenwatchData(modelCode) {
     else if (modelCode.toUpperCase().includes("-S")) searchCode += " S";
     browser = await chromium.launch({ headless: true });
     const page = await browser.newPage();
+
+    // Attempt 1: Full search code
     await page.goto(`https://zenwatch.vn/?s=${searchCode}&post_type=product`, { waitUntil: "domcontentloaded", timeout: 15e3 });
     await page.waitForTimeout(2e3);
-    const linkHrefs = await page.evaluate(() => {
+    let linkHrefs = await page.evaluate(() => {
       return Array.from(document.querySelectorAll("a")).map((a) => a.href).filter((h) => h.includes("/product/"));
     });
+
+    // Attempt 2: Remove suffix letter
+    if (linkHrefs.length === 0 && searchCode.includes(' ')) {
+       const baseCode = searchCode.split(' ')[0];
+       console.log(`[Scraper] Không tìm thấy ${searchCode}, thử tìm bằng mã không hậu tố: ${baseCode}`);
+       await page.goto(`https://zenwatch.vn/?s=${baseCode}&post_type=product`, { waitUntil: "domcontentloaded", timeout: 15e3 });
+       await page.waitForTimeout(2e3);
+       linkHrefs = await page.evaluate(() => {
+         return Array.from(document.querySelectorAll("a")).map((a) => a.href).filter((h) => h.includes("/product/"));
+       });
+       searchCode = baseCode;
+    }
+
+    // Attempt 3: Remove trailing digit
+    if (linkHrefs.length === 0) {
+       if (/\d$/.test(searchCode)) {
+           const fallbackBase = searchCode.slice(0, -1);
+           console.log(`[Scraper] Không tìm thấy ${searchCode}, thử tìm bằng mã rút gọn: ${fallbackBase}`);
+           await page.goto(`https://zenwatch.vn/?s=${fallbackBase}&post_type=product`, { waitUntil: "domcontentloaded", timeout: 15e3 });
+           await page.waitForTimeout(2e3);
+           linkHrefs = await page.evaluate(() => {
+             return Array.from(document.querySelectorAll("a")).map((a) => a.href).filter((h) => h.includes("/product/"));
+           });
+           searchCode = fallbackBase;
+       }
+    }
+
     if (linkHrefs.length > 0) {
-      await page.goto(linkHrefs[0], { waitUntil: "domcontentloaded", timeout: 15e3 });
+      let targetLink = linkHrefs[0];
+      const targetSlugFragment = searchCode.replace(/\\s+/g, '-').toLowerCase();
+      const exactMatch = linkHrefs.find(h => h.toLowerCase().includes(targetSlugFragment));
+      if (exactMatch) targetLink = exactMatch;
+
+      await page.goto(targetLink, { waitUntil: "domcontentloaded", timeout: 15e3 });
       const specs = await page.evaluate(() => {
         const data = {};
         const rows = Array.from(document.querySelectorAll("tr, .row"));
@@ -367,8 +551,8 @@ async function scrapeZenwatchData(modelCode) {
       const result = {
         waterproof: wp,
         diameter: dia,
-        gender: specs.gender || "Nam",
-        movement: specs.movement || "Automatic",
+        gender: specs.gender || "",
+        movement: specs.movement || "",
         thickness: specs.thickness || ""
       };
       zenwatchCache.set(cacheKey, result);
@@ -379,7 +563,7 @@ async function scrapeZenwatchData(modelCode) {
   } finally {
     if (browser) await browser.close();
   }
-  const defaultResult = { waterproof: "", diameter: "", gender: "Nam", movement: "Automatic", thickness: "" };
+  const defaultResult = { waterproof: "", diameter: "", gender: "", movement: "", thickness: "" };
   zenwatchCache.set(cacheKey, defaultResult);
   return defaultResult;
 }
@@ -392,49 +576,46 @@ async function generateShopeeProductName(variantId, customModelName) {
     const isFemale = gender === "N\u1EEF";
     const watchGenderText = isFemale ? "N\u1EEF" : "Nam";
     const suffixLetter = isFemale ? "L" : "G";
-    const siblings = await prisma.variant.findMany({
-      where: {
-        modelId: variant.modelId,
-        avatarImage: { not: null }
-      },
-      orderBy: {
-        sku: "asc"
-      }
-    });
-    const sortedSiblings = [
-      variant,
-      ...siblings.filter((s) => s.id !== variant.id)
-    ];
     let images = [];
-    for (const sib of sortedSiblings) {
-      if (sib.avatarImage && fs.existsSync(sib.avatarImage)) {
-        images.push({
-          data: fs.readFileSync(sib.avatarImage).toString("base64"),
-          mimeType: "image/jpeg"
-        });
-      }
+    if (variant.avatarImage && fs.existsSync(variant.avatarImage)) {
+      images.push({
+        data: fs.readFileSync(variant.avatarImage).toString("base64"),
+        mimeType: "image/jpeg"
+      });
     }
+
+    const skuSuffix = variant.sku.split('-')[1] || "";
+    let strapPromptText = "[Chất liệu dây]";
+    if (skuSuffix.includes('T')) strapPromptText = "Dây Thép";
+    else if (skuSuffix.includes('D')) strapPromptText = "Dây Da";
+    else if (skuSuffix.includes('S')) strapPromptText = "Dây Cao Su";
+
+    const zenSpecs = await scrapeZenwatchData(variant.sku);
+    let movementPromptText = "";
+    if (zenSpecs?.movement) {
+       const mLower = zenSpecs.movement.toLowerCase();
+       if (mLower.includes("cơ") || mLower.includes("automatic")) movementPromptText = ", Máy Cơ";
+       else if (mLower.includes("pin") || mLower.includes("quartz")) movementPromptText = ", Máy Pin";
+    }
+
     const prompt = `Từ mã đồng hồ "${targetModelName}", hãy tạo 1 câu đặt tên sản phẩm đồng hồ chuẩn SEO cho Shopee (Tối đa 99 ký tự). 
     Bắt buộc phải tuân theo đúng định dạng sau:
-    Đồng Hồ ${watchGenderText} I&W Carnival ${variant.model.name.replace(/[a-zA-Z]+$/, "")}${suffixLetter} Chính Hãng - [Vàng Hồng/Vàng (nếu có)], [Máy Cơ/Máy Pin], [Viền Trơn/Viền Đính Đá], [Dây + Màu dây], Kính Sapphire, BH 5 Năm
-
-    QUY TẮC BẮT BUỘC:
-    1. "Vàng Hồng" hoặc "Vàng": Nếu trong ảnh (ảnh 1) thấy viền, vỏ hoặc dây có màu vàng hồng (rose gold) thì ghi "Vàng Hồng" ngay SAU dấu gạch ngang. Nếu là màu vàng thuần thì ghi "Vàng". Nếu là thuần thép/bạc thì BỎ QUA hoàn toàn vị trí này, từ tiếp theo sau dấu gạch ngang sẽ là loại máy.
-    2. "Viền Trơn" hoặc "Viền Đính Đá": Nếu viền (bezel) có đính đá lấp lánh thì ghi "Viền Đính Đá". Nếu viền thép trơn không đính đá thì bắt buộc ghi "Viền Trơn".
-    3. Đừng dùng tính từ hoa mỹ cho màu mặt (chỉ dùng: Mặt Trắng, Mặt Đen, Mặt Xanh Biển, Mặt Đỏ,...).
-
-    QUY TẮC MÀU DÂY:
-    Tôi gửi cho bạn danh sách ${images.length} ảnh. Ảnh 1 là mục tiêu (SKU: ${variant.sku}). Các ảnh sau là mẫu anh em.
-    Hãy đối chiếu màu mặt số của Ảnh 1 với các ảnh khác:
-    - NẾU màu mặt số Ảnh 1 trùng với bất kỳ ảnh nào khác (vd: cùng mặt trắng nhưng khác màu dây): BẮT BUỘC ghi rõ màu dây (vd: Dây Da Đen, Dây Cao Su Xanh, Dây Thép Bạc).
-    - NẾU màu mặt số Ảnh 1 là độc bản (không trùng ai) hoặc chỉ có 1 ảnh duy nhất: CHỈ ghi chất liệu dây, KHÔNG ghi màu (vd: Dây Da, Dây Thép, Dây Cao Su).
-
-    Ví dụ đúng (có vàng hồng, viền trơn):
-    Đồng Hồ ${watchGenderText} I&W Carnival ${variant.model.name.replace(/[a-zA-Z]+$/, "")}${suffixLetter} Chính Hãng - Vàng Hồng, Máy Cơ, Viền Trơn, Dây Cao Su, Kính Sapphire, BH 5 Năm
-
-    Ví dụ đúng (thuần thép, có đính đá):
-    Đồng Hồ ${watchGenderText} I&W Carnival ${variant.model.name.replace(/[a-zA-Z]+$/, "")}${suffixLetter} Chính Hãng - Máy Pin, Mặt Trắng, Viền Đính Đá, Dây Da Đen, Kính Sapphire, BH 5 Năm
-
+    Đồng Hồ ${watchGenderText} I&W Carnival ${targetModelName} Chính Hãng - [Vàng Hồng/Vàng (nếu có)]${movementPromptText}, [Viền (nếu có)], ${strapPromptText}, Kính Sapphire, BH 5 Năm
+    
+    QUY TẮC BẮT BUỘC (NẾU LÀM SAI SẼ BỊ PHẠT):
+    1. "Vàng Hồng" hoặc "Vàng": Nếu trong ảnh thấy viền/vỏ/dây có màu vàng hồng (rose gold) thì ghi "Vàng Hồng". Nếu vàng thuần thì ghi "Vàng". Nếu thuần thép/bạc thì BỎ QUA hoàn toàn chữ vàng.
+    2. QUY ĐỊNH VỀ VIỀN:
+       - Nếu mã sản phẩm có chứa "G1" (hoặc L1) -> BẮT BUỘC GHI LÀ "Viền Trơn".
+       - Nếu mã sản phẩm có chứa "G2" (hoặc L2) -> BẮT BUỘC GHI LÀ "Viền Đá".
+       - Nếu mã sản phẩm chỉ có chữ "G" hoặc "L" (không có số 1,2,3): Hãy tự nhìn ảnh. Nếu có đính đá thì ghi "Viền Đá". NẾU VIỀN TRƠN THÌ BỎ QUA KHÔNG GHI CHỮ GÌ CẢ.
+    3. QUY ĐỊNH MÀU MẶT VÀ MÀU DÂY: TUYỆT ĐỐI KHÔNG mô tả màu mặt (vd không ghi Mặt Trắng, Mặt Đen). TUYỆT ĐỐI KHÔNG mô tả màu dây (vd không ghi Dây Đen, Dây Xanh).
+    
+    Ví dụ đúng (thuần thép, G1 viền trơn):
+    Đồng Hồ ${watchGenderText} I&W Carnival ${targetModelName} Chính Hãng - ${movementPromptText ? movementPromptText.replace(', ', '') + ', ' : ""}Viền Trơn, ${strapPromptText}, Kính Sapphire, BH 5 Năm
+    
+    Ví dụ đúng (vàng hồng, G chỉ có viền trơn nên bị bỏ qua):
+    Đồng Hồ ${watchGenderText} I&W Carnival ${targetModelName} Chính Hãng - Vàng Hồng${movementPromptText}, ${strapPromptText}, Kính Sapphire, BH 5 Năm
+    
     Tuyệt đối không thêm hashtag, không viết dông dài. Chỉ trả về 1 dòng duy nhất.`;
     let generatedName = await callAIWithRotation(prompt, images);
     if (generatedName) {
@@ -467,7 +648,7 @@ async function generateShopeeProductName(variantId, customModelName) {
           const dashIdx = generatedName.indexOf(" - ");
           const afterDash = generatedName.substring(dashIdx + 3);
           const beforeDash = generatedName.substring(0, dashIdx).replace(misplacedRegex, "").trim();
-          
+
           if (!afterDash.trim().toLowerCase().startsWith(plating.toLowerCase())) {
             const cleanedAfter = afterDash.replace(misplacedRegex, "").replace(/^,\s*/, "").replace(/,\s*,/g, ",").trim();
             generatedName = `${beforeDash} - ${plating}, ${cleanedAfter}`;
@@ -486,41 +667,88 @@ async function generateShopeeProductName(variantId, customModelName) {
         if (generatedName.length > 99) {
           const warrantyText = /,\s*BH\s+[\d\s]+Năm/i;
           if (warrantyText.test(generatedName)) {
-             generatedName = generatedName.replace(warrantyText, "");
+            generatedName = generatedName.replace(warrantyText, "");
           }
         }
-        
+
         // Cắt cụt triệt để nếu vẫn quá dài (phòng hờ)
         if (generatedName.length > 99) {
           generatedName = generatedName.substring(0, 99).trim().replace(/,$/, "");
         }
       }
     }
+    const fallbackName = `Đồng Hồ ${watchGenderText} I&W Carnival ${targetModelName} Chính Hãng - Kính Sapphire, BH 5 Năm`;
+    if (!generatedName) {
+      return fallbackName;
+    }
     return generatedName;
   } catch (error) {
     console.error("Error generating Shopee name:", error.message);
-    return null;
+    const targetModelNameFallback = customModelName || "I&W";
+    return `Đồng Hồ I&W Carnival ${targetModelNameFallback} Chính Hãng - Kính Sapphire, BH 5 Năm`;
   }
 }
 
 async function generateShopeeProductDescription(sku, productName, zenSpecs, avatarImagePath) {
   try {
     const aiIntro = await _generateDescriptionAI(sku, productName, zenSpecs, avatarImagePath);
-    
+
+    let displayGender = "Đang cập nhật";
+    let isFemale = false;
+    if (zenSpecs?.gender) {
+      displayGender = zenSpecs.gender;
+      isFemale = displayGender.toLowerCase().includes('nữ');
+    } else {
+      if (sku.toUpperCase().includes('L')) {
+        displayGender = "Nữ";
+        isFemale = true;
+      } else if (sku.toUpperCase().includes('G')) {
+        displayGender = "Nam";
+      }
+    }
+
     // Fallback if AI fails
-    const introText = aiIntro || `${productName} – Chiếc đồng hồ mang đậm phong thái lịch lãm dành cho quý ông yêu thích sự tinh tế và chỉn chu. Thiết kế nam tính và sang trọng, phù hợp từ công sở đến những buổi tiệc trang trọng. Lịch lãm – Tinh tế – Chuẩn phong thái.`;
+    const introText = aiIntro || (isFemale
+      ? `${productName} – Chiếc đồng hồ mang đậm phong thái thanh lịch dành cho quý cô yêu thích sự tinh tế và duyên dáng. Thiết kế nữ tính và sang trọng, phù hợp từ công sở đến những buổi tiệc trang trọng. Thanh lịch – Duyên dáng – Chuẩn phong thái.`
+      : `${productName} – Chiếc đồng hồ mang đậm phong thái lịch lãm dành cho quý ông yêu thích sự tinh tế và chỉn chu. Thiết kế nam tính và sang trọng, phù hợp từ công sở đến những buổi tiệc trang trọng. Lịch lãm – Tinh tế – Chuẩn phong thái.`);
+
+    let dayText = "Đang cập nhật";
+    let voText = "Thép không gỉ 316L (Mạ PVD cao cấp với phiên bản màu vàng)"; // Vỏ luôn fix cứng như vầy theo ý user
+    const skuSuffix = sku.split('-')[1] || "";
+    if (skuSuffix.includes('T')) {
+       dayText = "Thép không gỉ 316L (Mạ PVD cao cấp với phiên bản màu vàng)";
+    } else if (skuSuffix.includes('D')) {
+       dayText = "Dây da cao cấp";
+    } else if (skuSuffix.includes('S')) {
+       dayText = "Dây cao su cao cấp";
+    }
+
+    let displayMovement = "Đang cập nhật";
+    if (zenSpecs?.movement) {
+        const mLower = zenSpecs.movement.toLowerCase();
+        if (mLower.includes("cơ") || mLower.includes("automatic")) displayMovement = "Máy cơ Automatic";
+        else if (mLower.includes("pin") || mLower.includes("quartz") || mLower.includes("quarzt")) displayMovement = "Máy Pin / Quartz";
+        else displayMovement = zenSpecs.movement;
+    }
+
+    let displayWaterproof = "30M - 50M";
+    if (zenSpecs?.waterproof) {
+        displayWaterproof = zenSpecs.waterproof;
+    }
+
+    const modelCode = sku.split('-')[0];
 
     const specsText = `THÔNG TIN CHI TIẾT:
 Thương hiệu: I&W Carnival
-Mã sản phẩm: ${sku}
-Giới tính: ${zenSpecs?.gender || "Nam"}
-Kiểu máy: ${zenSpecs?.movement || "Cơ/Automatic"}
-Đường kính mặt: ${zenSpecs?.diameter || "41 mm"}
-Độ dày: ${zenSpecs?.thickness || "10.5 mm"}
-Chất liệu vỏ: Thép không gỉ 316L
-Chất liệu dây: Dây cao cấp
+Mã sản phẩm: ${modelCode}
+Giới tính: ${displayGender}
+Kiểu máy: ${displayMovement}
+Đường kính mặt: ${zenSpecs?.diameter || "Đang cập nhật"}
+Độ dày: ${zenSpecs?.thickness || "Đang cập nhật"}
+Chất liệu vỏ: ${voText}
+Chất liệu dây: ${dayText}
 Mặt kính: Sapphire Crystal
-Độ chịu nước: ${zenSpecs?.waterproof || "30M"}
+Độ chịu nước: ${displayWaterproof}
 Bảo hành: 5 năm`;
 
     const policyText = `CHÍNH SÁCH BẢO HÀNH:
@@ -535,7 +763,14 @@ CAM KẾT:
 ✔ Đóng gói cẩn thận, hỗ trợ đổi trả theo quy định Shopee
 ✔ Hỗ trợ tư vấn nhanh chóng trước và sau mua hàng`;
 
-    const hashtagText = `#donghonam #donghonamchinhhang #donghochinhhangnam #donghonamdayda #donghonamdaythep #donghonamdaycaosu #donghonamco #donghonamchongnuoc #iwcarnival #donghocarnival #donghoiw #donghoiwcarnival #donghocarnivalnam #donghocarnival1986`;
+    let genderFallback = "nam";
+    if (sku.toUpperCase().includes('L')) genderFallback = "nu";
+    if (zenSpecs?.gender && zenSpecs.gender.toLowerCase().includes('nữ')) genderFallback = "nu";
+
+    let hashtagText = `#donghonam #donghonamchinhhang #donghochinhhangnam #donghonamdayda #donghonamdaythep #donghonamdaycaosu #donghonamco #donghonamchongnuoc #iwcarnival #donghocarnival #donghoiw #donghoiwcarnival #donghocarnivalnam #donghocarnival1986`;
+    if (genderFallback === "nu") {
+        hashtagText = hashtagText.replace(/nam/g, 'nu');
+    }
 
     return `${introText}\n\n${specsText}\n\n${policyText}\n\n${hashtagText}`;
   } catch (error) {
@@ -548,7 +783,7 @@ async function _generateDescriptionAI(sku, productName, zenSpecs, avatarImagePat
   if (!avatarImagePath || !fs.existsSync(avatarImagePath)) {
     return null;
   }
-  
+
   const prompt = `Bạn là một chuyên gia viết mô tả sản phẩm đồng hồ chuẩn SEO cho Shopee.
 Dựa vào hình ảnh đồng hồ (ảnh Avatar) và các thông tin sau:
 - Tên sản phẩm: ${productName}
@@ -576,7 +811,7 @@ CHÚ Ý QUAN TRỌNG:
       data: avatarData.toString("base64"),
       mimeType: mimeType
     };
-    
+
     const result = await callAIWithRotation(prompt, [imagePart]);
     if (result) {
       // Dọn dẹp nếu AI lỡ sinh ra THÔNG TIN CHI TIẾT
@@ -644,7 +879,7 @@ async function runShopeeAutomationDemo(cookiesString, productName, shopeeProduct
   } catch (e) {
     log("[Zenwatch] Lỗi pre-fetch: " + e.message);
   }
-  
+
   log("[Browser] Đang tạo Mô tả sản phẩm bằng AI...");
   const avatarPath = media?.images && media.images.length > 0 ? media.images[0] : null;
   const productDescription = await generateShopeeProductDescription(sku, productName, preZenSpecs, avatarPath);
@@ -769,35 +1004,68 @@ async function runShopeeAutomationDemo(cookiesString, productName, shopeeProduct
       await new Promise((r) => setTimeout(r, 2e3));
     }
     try {
-      log("[Browser] \u0110ang upload \u1EA3nh v\xE0 video m\u1EDBi...");
-      await page.waitForSelector('input[type="file"]', { state: "attached", timeout: 15e3 }).catch(() => {
-      });
+      log("[Browser] Đang upload ảnh và video mới lên Thông tin cơ bản...");
+      
+      // Lấy tất cả các thẻ input file trên trang
+      // Thông thường:
+      // index 0: Ảnh sản phẩm (cho phép multiple)
+      // index 1: Video sản phẩm
       const fileInputs = await page.locator('input[type="file"]').all();
+
       if (fileInputs.length > 0 && media.images.length > 0) {
-        log(`[Browser] Upload ${media.images.length} \u1EA3nh...`);
+        log(`[Browser] Upload ${media.images.length} ảnh chính...`);
         await fileInputs[0].setInputFiles(media.images);
-        await page.waitForTimeout(5e3);
+        await page.waitForTimeout(5000);
+      } else {
+        log("[Browser] Cảnh báo: Không tìm thấy ô upload ảnh chính (hoặc không có ảnh).");
       }
-      if (fileInputs.length > 1 && media.video) {
-        log("[Browser] Upload Video...");
+
+      log("[Browser] Đang tìm ô Upload Video...");
+      const videoInput = page.locator('input[type="file"][accept*="video"]').first();
+      await videoInput.waitFor({ state: "attached", timeout: 8000 }).catch(() => {});
+      
+      if (await videoInput.count() > 0 && media.video) {
+        log("[Browser] Upload Video sản phẩm...");
         try {
-          await fileInputs[1].setInputFiles(media.video);
-          await page.waitForTimeout(5e3);
+          // Thử ưu tiên dùng fileChooser vì Shopee React đôi khi chặn setInputFiles trực tiếp
+          const videoArea = page.locator('.eds-upload-wrapper, .video-upload, :text("Thêm video")').filter({ hasText: /Thêm video/i }).first();
+          if (await videoArea.isVisible().catch(() => false)) {
+            log("[Browser] Tìm thấy nút Thêm video, dùng FileChooser...");
+            const [fileChooser] = await Promise.all([
+              page.waitForEvent("filechooser", { timeout: 5000 }),
+              videoArea.click({ force: true })
+            ]);
+            await fileChooser.setFiles(media.video);
+          } else {
+            log("[Browser] Không thấy nút click, fallback setInputFiles...");
+            await videoInput.setInputFiles(media.video);
+          }
+          await page.waitForTimeout(5000);
+          
           const confirmBtns = await page.locator("button").filter({ hasText: /Xác nhận|Confirm|Đồng ý/i }).all();
           for (const btn of confirmBtns) {
             if (await btn.isVisible()) {
               await btn.click({ force: true });
-              await page.waitForTimeout(1e3);
+              await page.waitForTimeout(1000);
             }
           }
         } catch (e) {
-          log("[Browser] L\u1ED7i upload video: " + e.message);
+          log("[Browser] Lỗi upload video: " + e.message);
+          // Fallback cuối cùng
+          try {
+             await videoInput.setInputFiles(media.video);
+             await page.waitForTimeout(5000);
+          } catch(err) {
+             log("[Browser] Lỗi fallback upload video: " + err.message);
+          }
         }
+      } else if (media.video) {
+        log("[Browser] Cảnh báo: Có video nhưng không tìm thấy ô upload video (thiếu input accept='video/mp4').");
       }
     } catch (e) {
-      log("[Browser] L\u1ED7i upload media: " + e.message);
+      log("[Browser] Lỗi quá trình upload media: " + e.message);
     }
-    await page.waitForTimeout(2e3);
+    await page.waitForTimeout(2000);
     log("[Browser] \u0110ang \u0111i\u1EC1n T\xEAn s\u1EA3n ph\u1EA9m...");
     const nameInputLocator = page.locator('input[placeholder*="t\xEAn s\u1EA3n ph\u1EA9m"], input[placeholder*="T\xEAn s\u1EA3n ph\u1EA9m"], input[maxlength="120"], .product-edit-form-item input').first();
     await nameInputLocator.waitFor({ state: "visible", timeout: 1e4 }).catch(() => {
@@ -822,33 +1090,6 @@ async function runShopeeAutomationDemo(cookiesString, productName, shopeeProduct
         }
       }, productName);
       log("[Browser] Đã điền xong tên sản phẩm (Fallback)!");
-    }
-
-    log("[Browser] Đang điền Mô tả sản phẩm...");
-    if (productDescription) {
-      try {
-        const descInputLocator = page.locator('textarea[placeholder*="mô tả"], textarea[placeholder*="Mô tả"], .product-edit-form-item textarea').first();
-        if (await descInputLocator.isVisible({ timeout: 5000 }).catch(() => false)) {
-          await descInputLocator.fill("");
-          await descInputLocator.fill(productDescription);
-          await page.waitForTimeout(1000);
-          log("[Browser] Đã điền xong mô tả sản phẩm bằng Playwright!");
-        } else {
-          await page.evaluate((desc) => {
-            const textareas = Array.from(document.querySelectorAll("textarea"));
-            const descInput = textareas.find((i) => i.placeholder && i.placeholder.toLowerCase().includes("mô tả"));
-            if (descInput) {
-              descInput.value = "";
-              descInput.value = desc;
-              descInput.dispatchEvent(new Event("input", { bubbles: true }));
-              descInput.dispatchEvent(new Event("change", { bubbles: true }));
-            }
-          }, productDescription);
-          log("[Browser] Đã điền xong mô tả sản phẩm (Fallback)!");
-        }
-      } catch (e) {
-        log("[Browser] Lỗi điền mô tả sản phẩm: " + e.message);
-      }
     }
 
     if (isNewProduct) {
@@ -1088,27 +1329,37 @@ async function runShopeeAutomationDemo(cookiesString, productName, shopeeProduct
         if (targetValues.length === 1 && !targetValues[0]) continue;
         for (const val of targetValues) {
           let hasTyped = false;
-          const searchInputs = page.locator(".eds-popper-container input, .shopee-popover input, .eds-select__filter input, .eds-select-dropdown input, .shopee-popper input");
-          let searchEl = null;
-          for (const input of await searchInputs.all()) {
-            if (await input.isVisible()) {
-              searchEl = input;
-            }
-          }
-          if (searchEl) {
-            await searchEl.fill("");
-            await searchEl.fill(val);
+          // Dùng page.evaluateHandle để lấy element của ô input, sau đó dùng Playwright fill để tương thích 100% với React
+          const searchHandle = await page.evaluateHandle(() => {
+             const poppers = Array.from(document.querySelectorAll('.eds-popper, .shopee-popover, .eds-select-dropdown, .shopee-popper'));
+             // Tìm popper đang hiển thị
+             const activePopper = poppers.reverse().find(p => p.getBoundingClientRect().width > 0 && p.getBoundingClientRect().height > 0 && window.getComputedStyle(p).display !== 'none');
+             
+             let inputEl = null;
+             if (activePopper) {
+                inputEl = activePopper.querySelector('input[type="text"]');
+             }
+             if (!inputEl) {
+                // Fallback tìm input bên ngoài
+                const allInputs = Array.from(document.querySelectorAll('input[placeholder*="tối thiểu 1 ký tự"], .eds-select__filter input'));
+                inputEl = allInputs.find(i => i.getBoundingClientRect().width > 0);
+             }
+             return inputEl;
+          });
+
+          const isElement = await searchHandle.evaluate(el => el !== null);
+          if (isElement) {
+            await searchHandle.click({ force: true }).catch(() => {});
+            await searchHandle.fill("");
+            await searchHandle.fill(val);
             await page.waitForTimeout(1500);
             hasTyped = true;
           } else {
             const inputInsideRow = row.locator('input[type="text"]').first();
-            if (await inputInsideRow.isVisible()) {
+            if (await inputInsideRow.isVisible().catch(() => false)) {
+              await inputInsideRow.click({ force: true });
               await inputInsideRow.fill("");
               await inputInsideRow.fill(val);
-              await page.waitForTimeout(1500);
-              hasTyped = true;
-            } else {
-              await page.keyboard.type(val);
               await page.waitForTimeout(1500);
               hasTyped = true;
             }
@@ -1157,13 +1408,59 @@ async function runShopeeAutomationDemo(cookiesString, productName, shopeeProduct
             await page.waitForTimeout(600);
             if (!attr.multi) break;
           } else {
-            log(`[Browser] Kh\xF4ng t\xECm th\u1EA5y t\xF9y ch\u1ECDn: ${val}`);
-            if (hasTyped) {
-              await page.keyboard.down("Control");
-              await page.keyboard.press("a");
-              await page.keyboard.up("Control");
-              await page.keyboard.press("Backspace");
+            let addedCustom = false;
+            try {
+              log(`[Browser] Thuộc tính "${val}" không có sẵn, thử thêm thuộc tính mới...`);
+              await page.mouse.wheel(0, 300);
               await page.waitForTimeout(500);
+
+              const addBtnLocator = page.locator('text="Thêm thuộc tính mới", text="Thêm", .eds-option-add, .eds-select-dropdown__item-add').filter({ state: 'visible' }).last();
+              if (await addBtnLocator.isVisible().catch(() => false)) {
+                try {
+                   await addBtnLocator.click({ force: true });
+                   await page.waitForTimeout(500);
+                } catch(e) {}
+              }
+              const addInput = page.locator('.eds-option-add__input input[type="text"]:visible, input[placeholder*="Nhập vào"]:visible, input[placeholder*="thuộc tính"]:visible').last();
+              if (await addInput.isVisible().catch(() => false)) {
+                await addInput.click();
+                await page.waitForTimeout(200);
+                await addInput.fill("");
+                await addInput.type(val, { delay: 100 });
+                await page.waitForTimeout(800);
+                const confirmBtn = page.locator('.eds-option-add__add-confirm-icon:visible, .icon-check:visible, button:has(svg):visible, i[class*="check"]:visible').last();
+                if (await confirmBtn.isVisible()) {
+                  await confirmBtn.click({ force: true });
+                  await page.waitForTimeout(1000);
+                  clicked = true;
+                  addedCustom = true;
+                  log(`[Browser] Đã thêm thuộc tính mới: ${val}`);
+                } else {
+                  log(`[Browser] Cảnh báo: Không tìm thấy nút Xác nhận (Check) để thêm thuộc tính mới.`);
+                  // Fallback: Try pressing Enter
+                  await addInput.press('Enter');
+                  clicked = true;
+                  addedCustom = true;
+                  log(`[Browser] Đã thử nhấn Enter để thêm thuộc tính mới: ${val}`);
+                }
+              } else {
+                log(`[Browser] Cảnh báo: Không tìm thấy ô nhập liệu để thêm thuộc tính mới.`);
+              }
+            } catch (e) {
+              log(`[Browser] Lỗi khi thêm thuộc tính mới: ${e.message}`);
+            }
+
+            if (!clicked) {
+              log(`[Browser] Không tìm thấy tùy chọn: ${val}`);
+              if (hasTyped) {
+                await page.keyboard.down("Control");
+                await page.keyboard.press("a");
+                await page.keyboard.up("Control");
+                await page.keyboard.press("Backspace");
+                await page.waitForTimeout(500);
+              }
+            } else if (!attr.multi) {
+              break;
             }
           }
         }
@@ -1176,73 +1473,34 @@ async function runShopeeAutomationDemo(cookiesString, productName, shopeeProduct
         log(`[Browser] L\u1ED7i x\u1EED l\xFD thu\u1ED9c t\xEDnh ${attr.l}: ${e.message}`);
       }
     }
+    log("[Browser] Đang điền Mô tả sản phẩm...");
+    if (productDescription) {
+      try {
+        const descInputLocator = page.locator('textarea[placeholder*="mô tả"], textarea[placeholder*="Mô tả"], .product-edit-form-item textarea').first();
+        if (await descInputLocator.isVisible({ timeout: 2000 }).catch(() => false)) {
+          await descInputLocator.fill("");
+          await descInputLocator.fill(productDescription);
+          await page.waitForTimeout(1000);
+          log("[Browser] Đã điền xong mô tả sản phẩm bằng Playwright (textarea)!");
+        } else {
+          await page.evaluate((desc) => {
+            const textareas = Array.from(document.querySelectorAll("textarea"));
+            const descInput = textareas.find((i) => i.placeholder && i.placeholder.toLowerCase().includes("mô tả"));
+            if (descInput) {
+              descInput.value = "";
+              descInput.value = desc;
+              descInput.dispatchEvent(new Event("input", { bubbles: true }));
+              descInput.dispatchEvent(new Event("change", { bubbles: true }));
+            }
+          }, productDescription);
+        }
+      } catch (e) {
+        log("[Browser] Lỗi điền mô tả fallback: " + e.message);
+      }
+    }
+
     try {
-      log("[Browser] \u0110ang t\u1EA1o v\xE0 \u0111i\u1EC1n m\xF4 t\u1EA3 s\u1EA3n ph\u1EA9m...");
-      const isFemale = (zenSpecs.gender || "").toLowerCase().includes("n\u1EEF") || (zenSpecs.gender || "").toLowerCase().includes("female") || sku.toUpperCase().includes("L") || currentVariant.model.name.toUpperCase().includes("L");
-      const genderText = isFemale ? "n\u1EEF" : "nam";
-      const genderCapText = isFemale ? "N\u1EEF" : "Nam";
-      const suffixLetter = isFemale ? "L" : "G";
-      const targetUserText = isFemale ? "ng\u01B0\u1EDDi ph\u1EE5 n\u1EEF hi\u1EC7n \u0111\u1EA1i, thanh l\u1ECBch v\xE0 quy\u1EBFn r\u0169" : "ng\u01B0\u1EDDi \u0111\xE0n \xF4ng hi\u1EC7n \u0111\u1EA1i, th\xE0nh \u0111\u1EA1t";
-      const modelCode = sku.split("-")[0].replace(/[a-zA-Z]+$/, "");
-      const modelCodesStr = `${modelCode}${suffixLetter} ${modelCode}${suffixLetter}1 ${modelCode}${suffixLetter}2 ${modelCode}${suffixLetter}3 IW${modelCode}`;
-      let loaiMayText = "b\u1ED9 m\xE1y pin (quartz)";
-      const scrapedMovement = (zenSpecs.movement || "").toLowerCase();
-      if (scrapedMovement.includes("c\u01A1") || scrapedMovement.includes("automatic")) {
-        loaiMayText = "b\u1ED9 m\xE1y c\u01A1 t\u1EF1 \u0111\u1ED9ng (automatic)";
-      }
-      let chatLieuDayText = "th\xE9p kh\xF4ng g\u1EC9 316L";
-      let chatLieuDaySpecs = "Th\xE9p kh\xF4ng g\u1EC9 316L (M\u1EA1 PVD cao c\u1EA5p v\u1EDBi phi\xEAn b\u1EA3n m\xE0u v\xE0ng)";
-      if (sku.toUpperCase().includes("-D")) {
-        chatLieuDayText = "da";
-        chatLieuDaySpecs = "D\xE2y da cao c\u1EA5p";
-      } else if (sku.toUpperCase().includes("-S")) {
-        chatLieuDayText = "cao su";
-        chatLieuDaySpecs = "D\xE2y cao su cao c\u1EA5p";
-      }
-      let descriptionText = `\u0110\u1ED3ng h\u1ED3 ${genderText} ch\xEDnh h\xE3ng I&W Carnival ${modelCodesStr} d\xE2y ${chatLieuDayText} cao c\u1EA5p, s\u1EED d\u1EE5ng ${loaiMayText} t\u1EEB c\xE1c th\u01B0\u01A1ng hi\u1EC7u Seiko - Miyota Nh\u1EADt B\u1EA3n, m\u1EB7t k\xEDnh sapphire nguy\xEAn kh\u1ED1i
-
-GI\u1EDAI THI\u1EC6U
-
-I&W CARNIVAL \u2013 \u0110\u1ED3ng H\u1ED3 \u0110eo Tay Ch\xEDnh H\xE3ng, Sang Tr\u1ECDng - \u0110\u1EB3ng C\u1EA5p
-
-I&W Carnival l\xE0 th\u01B0\u01A1ng hi\u1EC7u \u0111\u1ED3ng h\u1ED3 cao c\u1EA5p \u0111\xE3 chinh ph\u1EE5c nh\u1EEFng th\u1ECB tr\u01B0\u1EDDng kh\xF3 t\xEDnh b\u1EADc nh\u1EA5t th\u1EBF gi\u1EDBi nh\u01B0 ch\xE2u \xC2u v\xE0 ch\xE2u M\u1EF9, v\xE0 su\u1ED1t 5 n\u0103m qua \u0111\xE3 \u0111\u01B0\u1EE3c \u0111\xF4ng \u0111\u1EA3o kh\xE1ch h\xE0ng Vi\u1EC7t Nam tin d\xF9ng v\xE0 y\xEAu th\xEDch. S\u1EF1 hi\u1EC7n di\u1EC7n b\u1EC1n v\u1EEFng c\u1EE7a I&W Carnival tr\xEAn th\u1ECB tr\u01B0\u1EDDng qu\u1ED1c t\u1EBF l\u1EABn trong n\u01B0\u1EDBc ch\xEDnh l\xE0 minh ch\u1EE9ng thuy\u1EBFt ph\u1EE5c nh\u1EA5t cho ch\u1EA5t l\u01B0\u1EE3ng v\u01B0\u1EE3t tr\u1ED9i v\xE0 ti\xEAu chu\u1EA9n k\u1EF9 thu\u1EADt nghi\xEAm ng\u1EB7t m\xE0 th\u01B0\u01A1ng hi\u1EC7u lu\xF4n cam k\u1EBFt.
-
-M\u1ED7i chi\u1EBFc \u0111\u1ED3ng h\u1ED3 I&W Carnival \u0111\u1EC1u \u0111\u01B0\u1EE3c ch\u1EBF t\xE1c t\u1EC9 m\u1EC9 \u0111\u1EBFn t\u1EEBng chi ti\u1EBFt \u2013 t\u1EEB m\u1EB7t s\u1ED1 tinh x\u1EA3o, v\u1ECF \u0111\u1ED3ng h\u1ED3 l\xE0m t\u1EEB th\xE9p kh\xF4ng g\u1EC9 316L cao c\u1EA5p \u0111\u01B0\u1EE3c \u0111\xE1nh b\xF3ng ho\xE0n h\u1EA3o, b\u1EC1n b\u1EC9 v\u1EDBi th\u1EDDi gian v\xE0 th\xE2n thi\u1EC7n v\u1EDBi l\xE0n da cho \u0111\u1EBFn d\xE2y \u0111eo ho\xE0n thi\u1EC7n sang tr\u1ECDng. T\u1EA5t c\u1EA3 t\u1EA1o n\xEAn m\u1ED9t t\u1ED5ng th\u1EC3 h\xE0i ho\xE0, l\u1ECBch l\xE3m, x\u1EE9ng t\u1EA7m \u0111\u1EC3 \u0111\u1ED3ng h\xE0nh c\xF9ng b\u1EA1n trong nh\u1EEFng bu\u1ED5i g\u1EB7p g\u1EE1 quan tr\u1ECDng, s\u1EF1 ki\u1EC7n \u0111\u1EB7c bi\u1EC7t hay nh\u1EEFng kho\u1EA3nh kh\u1EAFc \u0111\xE1ng nh\u1EDB trong cu\u1ED9c s\u1ED1ng.
-
-S\u1EDF h\u1EEFu m\u1ED9t chi\u1EBFc I&W Carnival kh\xF4ng ch\u1EC9 l\xE0 \u0111\u1EA7u t\u01B0 cho phong c\xE1ch c\xE1 nh\xE2n, m\xE0 c\xF2n l\xE0 l\u1EF1a ch\u1ECDn th\u1EC3 hi\u1EC7n \u0111\u1EB3ng c\u1EA5p v\xE0 gu th\u1EA9m m\u1EF9 c\u1EE7a ${targetUserText}.
-
-CH\xCDNH S\xC1CH B\u1EA2O H\xC0NH
-Th\u1EDDi gian b\u1EA3o h\xE0nh: 5 n\u0103m
-Mi\u1EC5n ph\xED thay pin tr\u1ECDn \u0111\u1EDDi v\u1EDBi \u0111\u1ED3ng h\u1ED3 pin
-Mi\u1EC5n ph\xED \u0111i\u1EC1u ch\u1EC9nh nhanh ch\u1EADm \u0111\u1ED1i v\u1EDBi \u0111\u1ED3ng h\u1ED3 c\u01A1
-Mi\u1EC5n ph\xED x\u1EED l\xFD khi \u0111\u1ED3ng h\u1ED3 b\u1ECB v\xE0o n\u01B0\u1EDBc
-
-TH\xD4NG TIN CHI TI\u1EBET:
-Th\u01B0\u01A1ng hi\u1EC7u: I&W Carnival
-M\xE3 s\u1EA3n ph\u1EA9m: ${modelCode}
-Gi\u1EDBi t\xEDnh: ${zenSpecs.gender || genderCapText}
-Ki\u1EC3u m\xE1y: ${zenSpecs.movement || "Automatic"}
-\u0110\u01B0\u1EDDng k\xEDnh m\u1EB7t: ${zenSpecs.diameter || "\u0110ang c\u1EADp nh\u1EADt"}
-\u0110\u1ED9 d\xE0y: ${zenSpecs.thickness || "\u0110ang c\u1EADp nh\u1EADt"}
-Ch\u1EA5t li\u1EC7u v\u1ECF: Th\xE9p kh\xF4ng g\u1EC9 316L (M\u1EA1 PVD cao c\u1EA5p v\u1EDBi phi\xEAn b\u1EA3n m\xE0u v\xE0ng)
-Ch\u1EA5t li\u1EC7u d\xE2y: ${chatLieuDaySpecs}
-M\u1EB7t k\xEDnh: Sapphire Crystal (Sapphire nguy\xEAn kh\u1ED1i)
-\u0110\u1ED9 ch\u1ECBu n\u01B0\u1EDBc: ${zenSpecs.waterproof || "\u0110ang c\u1EADp nh\u1EADt"}
-B\u1EA3o h\xE0nh: 5 n\u0103m
-
-CAM K\u1EBET:
-\u2714 H\xE0ng ch\xEDnh h\xE3ng 100%
-\u2714 Ki\u1EC3m tra k\u1EF9 tr\u01B0\u1EDBc khi giao
-\u2714 \u0110\xF3ng g\xF3i c\u1EA9n th\u1EADn, h\u1ED7 tr\u1EE3 \u0111\u1ED5i tr\u1EA3 theo quy \u0111\u1ECBnh Shopee
-\u2714 H\u1ED7 tr\u1EE3 t\u01B0 v\u1EA5n nhanh ch\xF3ng tr\u01B0\u1EDBc v\xE0 sau mua h\xE0ng
-`;
-      let hashtags = "";
-      if (isFemale) {
-        hashtags = `#donghonu #donghonuchinhhang #donghochinhhangnu #donghonudayda #donghonudaythep #donghonudaycaosu #donghonuco #donghonuchongnuoc #iwcarnival #donghocarnival #donghoiw #donghoiwcarnival #donghonuaudemarspiguetroyaloak #audemarspiguetroyaloak #donghocarnivalnu #donghocarnival1986 #audemarspiguetroyaloakautomatic #audemarspiguetroyaloakdayda #audemarspiguetroyaloak #donghonupatekphilippe #patekphilippe #donghocarnivalnu #donghocarnival1986 #patekphilippeco #patekphilippenu #patekphilippeautomatic #patekphilippedayda #patekphilippenautilus #rolexdatejustco #rolexdatejustnu #rolexdatejustautomatic #rolexdatejustdayda #rolexdatejust #donghonurolexdatejust #rolexsubmariner #rolexsubmarinerautomatic #rolexsubmarinerdayda #donghonurolexsubmariner`;
-      } else {
-        hashtags = `#donghonam #donghonamchinhhang #donghochinhhangnam #donghonamdayda #donghonamdaythep #donghonamdaycaosu #donghonamco #donghonamchongnuoc #iwcarnival #donghocarnival #donghoiw #donghoiwcarnival #donghonamaudemarspiguetroyaloak #audemarspiguetroyaloak #donghocarnivalnam #donghocarnival1986 #audemarspiguetroyaloakautomatic #audemarspiguetroyaloakdayda #audemarspiguetroyaloak #donghonampatekphilippe #patekphilippe #donghocarnivalnam #donghocarnival1986 #patekphilippeco #patekphilippenam #patekphilippeautomatic #patekphilippedayda #patekphilippenautilus #rolexdatejustco #rolexdatejustnam #rolexdatejustautomatic #rolexdatejustdayda #rolexdatejust #donghonamrolexdatejust #rolexsubmariner #rolexsubmarinerautomatic #rolexsubmarinerdayda #donghonamrolexsubmariner`;
-      }
-      descriptionText += "\n" + hashtags;
+      log("[Browser] Đang kiểm tra và điền mô tả sản phẩm vào trình soạn thảo (ql-editor)...");
       const descEditor = page.locator('.ql-editor[contenteditable="true"]').last();
       if (await descEditor.isVisible({ timeout: 5e3 })) {
         await descEditor.scrollIntoViewIfNeeded();
@@ -1253,7 +1511,7 @@ CAM K\u1EBET:
         await page.keyboard.up("Control");
         await page.keyboard.press("Backspace");
         await page.waitForTimeout(500);
-        await page.keyboard.insertText(descriptionText);
+        await page.keyboard.insertText(productDescription || "");
         log("[Browser] \u0110\xE3 x\xF3a s\u1EA1ch m\xF4 t\u1EA3 c\u0169 v\xE0 \u0111i\u1EC1n m\xF4 t\u1EA3 m\u1EDBi v\xE0o Quill Editor!");
       } else {
         log("[Browser] Kh\xF4ng t\xECm th\u1EA5y \xF4 nh\u1EADp M\xF4 t\u1EA3 (ql-editor).");
@@ -1263,10 +1521,11 @@ CAM K\u1EBET:
     }
     try {
       log("[Browser] \u0110ang c\u1EA5u h\xECnh Th\xF4ng tin b\xE1n h\xE0ng & Bi\u1EBFn th\u1EC3...");
-      allVariants = await prisma.variant.findMany({
+      const potentialVariants = await prisma.variant.findMany({
         where: { modelId: currentVariant.modelId },
         orderBy: { sku: "asc" }
       });
+      allVariants = await groupVariantsByDesignAI(currentVariant, potentialVariants, log);
       if (allVariants.length > 0) {
         const salesTab = page.locator(".shopee-tabs__nav-item", { hasText: "Th\xF4ng tin b\xE1n h\xE0ng" });
         if (await salesTab.isVisible()) {
@@ -1307,7 +1566,13 @@ CAM K\u1EBET:
           });
           await page.waitForTimeout(500);
         }
-        log("[Browser] \u0110ang \u0111i\u1EC1n c\xE1c m\xE3 SKU bi\u1EBFn th\u1EC3 m\u1EDBi...");
+        log("[Browser] Đang thiết lập tên phân loại màu sắc bằng mã SKU...");
+        for (let i = 0; i < allVariants.length; i++) {
+          const v = allVariants[i];
+          v.variationName = v.sku;
+        }
+
+        log("[Browser] Đang điền các phân loại màu sắc mới...");
         for (let i = 0; i < allVariants.length; i++) {
           const v = allVariants[i];
           const inputs = await page.locator('.variation-selector-custom-len-calc-input input, input[placeholder*="Type or Select"], input[placeholder*="e.g. Red"], input[placeholder*="v\xED d\u1EE5: \u0111\u1ECF"]').all();
@@ -1317,7 +1582,7 @@ CAM K\u1EBET:
             await targetInput.focus();
             await targetInput.click({ force: true });
             await page.waitForTimeout(200);
-            await targetInput.fill(v.sku);
+            await targetInput.fill(v.variationName || v.sku);
             await page.waitForTimeout(300);
             await targetInput.press("Enter");
             await page.waitForTimeout(800);
@@ -1364,9 +1629,9 @@ CAM K\u1EBET:
             }
           }
         }
-        log("[Browser] \u0110ang \u0111i\u1EC1n b\u1EA3ng Gi\xE1 (Excel), Kho h\xE0ng (10) v\xE0 SKU ph\xE2n lo\u1EA1i...");
-        const tableLoc = page.locator(".variation-model-table-main, .shopee-table__body").first();
-        await tableLoc.locator('input:not([type="file"])').first().waitFor({ state: "visible", timeout: 2e4 }).catch(() => log("[Browser] B\u1ECF qua ch\u1EDD tableLoc v\xEC timeout"));
+        log("[Browser] Đang điền bảng Giá (Excel), Kho hàng (10) và SKU phân loại...");
+        const tableLoc = page.locator(".variation-model-table-main, .shopee-table__body, table").first();
+        await tableLoc.locator('input:not([type="file"]):not([type="hidden"])').first().waitFor({ state: "visible", timeout: 2e4 }).catch(() => log("[Browser] Bỏ qua chờ tableLoc vì timeout"));
         await page.waitForTimeout(2e3);
         for (let i = 0; i < allVariants.length; i++) {
           const v = allVariants[i];
@@ -1433,43 +1698,6 @@ CAM K\u1EBET:
     } catch (e) {
       log(`[Browser] L\u1ED7i x\u1EED l\xFD Th\xF4ng tin b\xE1n h\xE0ng: ${e.message}`);
     }
-    try {
-      log("[Browser] \u0110ang upload \u1EA3nh v\xE0 video m\u1EDBi...");
-      const basicTab = page.locator(".shopee-tabs__nav-item", { hasText: "Th\xF4ng tin c\u01A1 b\u1EA3n" });
-      if (await basicTab.isVisible()) {
-        await basicTab.click();
-        await page.waitForTimeout(1e3);
-      }
-      const fileInputs = await page.locator('input[type="file"]').all();
-      if (fileInputs.length > 0 && media.images.length > 0) {
-        log(`[Browser] Upload ${media.images.length} \u1EA3nh...`);
-        await fileInputs[0].setInputFiles(media.images);
-        await page.waitForTimeout(2e3);
-      }
-      if (fileInputs.length > 1 && media.video) {
-        log(`[Browser] Upload Video...`);
-        try {
-          await fileInputs[1].setInputFiles(media.video);
-          await page.waitForTimeout(4e3);
-          await page.evaluate(async () => {
-            const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
-            const buttons = Array.from(document.querySelectorAll("button"));
-            const confirmBtn = buttons.find((b) => b.textContent && b.textContent.toLowerCase().includes("x\xE1c nh\u1EADn"));
-            if (confirmBtn && confirmBtn.offsetParent !== null) {
-              confirmBtn.click();
-              await sleep(1e3);
-            }
-          });
-          if (fs.existsSync(media.video)) {
-            try {
-              fs.unlinkSync(media.video);
-            } catch (e) {
-            }
-          }
-        } catch (e) {
-          log(`[Browser] L\u1ED7i upload video: ${e.message}`);
-        }
-      }
       try {
         log("[Browser] \u0110ang c\u1EA5u h\xECnh V\u1EADn chuy\u1EC3n & Th\xF4ng tin kh\xE1c...");
         const shippingTab = page.locator(".shopee-tabs__nav-item", { hasText: "V\u1EADn chuy\u1EC3n" });
@@ -1506,50 +1734,60 @@ CAM K\u1EBET:
         }
         log("[Browser] \u0110ang \u0111\u1EE3i 2 gi\xE2y \u0111\u1EC3 Shopee t\u1EF1 \u0111\u1ED9ng load c\xE1c k\xEAnh v\u1EADn chuy\u1EC3n...");
         await page.waitForTimeout(2e3);
-        log("[Browser] \u0110ang c\u1EA5u h\xECnh c\xE1c k\xEAnh v\u1EADn chuy\u1EC3n (Ch\u1EC9 m\u1EDF Nhanh v\xE0 Trong Ng\xE0y)...");
+        log("[Browser] Đang cấu hình các kênh vận chuyển...");
         try {
-          const channelsToConfig = [
-            { label: "Nhanh", target: true, regex: /Nhanh/i },
-            { label: "H\u1ECFa T\u1ED1c", target: false, regex: /Hỏa Tốc|Hoa Toc/i },
-            { label: "Trong Ng\xE0y", target: true, regex: /Trong Ngày|Trong Ngay/i },
-            { label: "T\u1EF1 nh\u1EADn h\xE0ng", target: false, regex: /Tự nhận hàng/i },
-            { label: "T\u1EE7 nh\u1EADn h\xE0ng - SPX", target: false, regex: /Tủ nhận hàng|SPX/i },
-            { label: "\u0110i\u1EC3m nh\u1EADn h\xE0ng", target: false, regex: /Điểm nhận hàng|Diem nhan hang/i }
-          ];
-          for (const config of channelsToConfig) {
-            const row = page.locator("tr, div").filter({ hasText: config.regex }).first();
-            if (await row.isVisible().catch(() => false)) {
-              const switchEl = row.locator('.eds-switch, .shopee-switch, input[type="checkbox"]').first();
-              if (await switchEl.isVisible()) {
-                const isChecked = await switchEl.evaluate((el) => {
-                  const hasCheckedClass = el.className.includes("checked") || el.className.includes("active") || el.className.includes("open");
-                  const hasAriaChecked = el.getAttribute("aria-checked") === "true";
-                  const isCheckboxChecked = el.checked === true;
-                  return hasCheckedClass || hasAriaChecked || isCheckboxChecked;
-                });
-                if (isChecked !== config.target) {
-                  await switchEl.click();
+          const switches = await page.locator('.eds-switch, .shopee-switch, input[type="checkbox"]').all();
+          for (const sw of switches) {
+            if (!(await sw.isVisible().catch(()=>false))) continue;
+            
+            const rowText = await sw.evaluate(el => {
+               let parent = el.parentElement;
+               // Trèo lên các thẻ cha để tìm dòng text chứa tên kênh vận chuyển
+               for(let i=0; i<6; i++) {
+                 if(parent) {
+                   const text = parent.innerText || "";
+                   if (text.match(/Nhanh|Hỏa Tốc|Trong Ngày|Tủ nhận hàng|Điểm nhận hàng/i)) {
+                     return text.split('\n')[0].trim(); // Lấy dòng đầu tiên
+                   }
+                   parent = parent.parentElement;
+                 }
+               }
+               return "";
+            });
+
+            if (!rowText) continue;
+            
+            let targetState = null;
+            if (rowText.match(/^Nhanh/i)) targetState = true;
+            else if (rowText.match(/^Hỏa Tốc/i)) targetState = true;
+            else if (rowText.match(/^Trong Ngày/i)) targetState = true;
+            else if (rowText.match(/^Tủ nhận hàng/i) || rowText.match(/^Điểm nhận hàng/i)) targetState = false;
+
+            if (targetState !== null) {
+               const isOpen = await sw.evaluate(el => el.classList.contains('eds-switch--open') || el.classList.contains('checked') || el.classList.contains('active') || el.checked === true);
+               
+               if (isOpen !== targetState) {
+                  await sw.scrollIntoViewIfNeeded();
+                  await sw.click({ force: true });
                   await page.waitForTimeout(800);
-                  log(`[Browser] \u0110\xE3 chuy\u1EC3n tr\u1EA1ng th\xE1i k\xEAnh "${config.label}" th\xE0nh ${config.target ? "B\u1EACT" : "T\u1EAET"}`);
-                } else {
-                  log(`[Browser] K\xEAnh "${config.label}" \u0111\xE3 \u1EDF tr\u1EA1ng th\xE1i ${config.target ? "B\u1EACT" : "T\u1EAET"} s\u1EB5n.`);
-                }
-              }
+                  log(`[Browser] Đã ${targetState ? "BẬT" : "TẮT"} kênh vận chuyển: ${rowText}`);
+               }
             }
           }
         } catch (e) {
-          log(`[Browser] C\u1EA3nh b\xE1o: L\u1ED7i khi c\u1EA5u h\xECnh c\xE1c k\xEAnh v\u1EADn chuy\u1EC3n: ${e.message}`);
+          log(`[Browser] Cảnh báo: Lỗi khi cấu hình các kênh vận chuyển: ${e.message}`);
         }
         const otherInfoTab = page.locator(".shopee-tabs__nav-item", { hasText: "Th\xF4ng tin kh\xE1c" });
         if (await otherInfoTab.isVisible()) {
           await otherInfoTab.click();
           await page.waitForTimeout(1e3);
         }
-        log(`[Browser] \u0110ang \u0111i\u1EC1n SKU s\u1EA3n ph\u1EA9m: ${sku}`);
-        const parentSkuInput = page.locator('[data-product-edit-field-unique-id="parentSku"] input, .parent-sku input').first();
-        if (await parentSkuInput.isVisible()) {
+        const globalSku = sku.replace(/\d+$/, "");
+        log(`[Browser] Đang điền SKU sản phẩm: ${globalSku}`);
+        const parentSkuInput = page.locator('[data-product-edit-field-unique-id="parentSku"] input, .parent-sku input, input[placeholder="SKU"]').first();
+        if (await parentSkuInput.isVisible({ timeout: 2000 }).catch(() => false)) {
           await parentSkuInput.fill("");
-          await parentSkuInput.fill(sku);
+          await parentSkuInput.fill(globalSku);
           await page.waitForTimeout(500);
         }
         log("[Browser] \u0110ang b\u1EA5m n\xFAt L\u01B0u / Hi\u1EC3n th\u1ECB...");
@@ -1628,7 +1866,7 @@ CAM K\u1EBET:
                     }
                   } catch (popupErr) {
                   }
-                  const foundId = await page.evaluate((targetSku) => {
+                  const foundId = await page.evaluate(({ targetSku, attemptIndex }) => {
                     const skuElements = Array.from(document.querySelectorAll('.product-sku, [class*="product-sku"], .product-sku-text'));
                     for (const el of skuElements) {
                       const text = el.textContent || "";
@@ -1655,8 +1893,22 @@ CAM K\u1EBET:
                         }
                       }
                     }
+                    if (attemptIndex >= 4) {
+                      const link = document.querySelector('a[href*="/portal/product/"]');
+                      if (link) {
+                        const href = link.getAttribute("href") || "";
+                        const match = href.match(/\/portal\/product\/(\d+)/);
+                        if (match && match[1]) return match[1];
+                      }
+                      const itemIdEl = document.querySelector('.item-id, [class*="item-id"], [class*="product-id"]');
+                      if (itemIdEl) {
+                        const itemIdText = itemIdEl.textContent || "";
+                        const match = itemIdText.match(/ID Sản phẩm:\s*(\d+)/i) || itemIdText.match(/ID:\s*(\d+)/i) || itemIdText.match(/(\d+)/);
+                        if (match && match[1]) return match[1];
+                      }
+                    }
                     return null;
-                  }, currentVariant.sku);
+                  }, { targetSku: currentVariant.sku, attemptIndex: attempt });
                   if (foundId) {
                     newShopeeId = foundId;
                     log(`[Browser] \u{1F389} \u0110\xE3 t\xECm th\u1EA5y Shopee Product ID m\u1EDBi: ${newShopeeId}`);
@@ -1670,11 +1922,12 @@ CAM K\u1EBET:
               }
               if (newShopeeId) {
                 finalShopeeId = newShopeeId;
-                await prisma.variant.update({
-                  where: { id: currentVariant.id },
+                const variantIds = allVariants.map(v => v.id);
+                await prisma.variant.updateMany({
+                  where: { id: { in: variantIds } },
                   data: { shopeeProductId: newShopeeId }
                 });
-                log(`[Browser] \u2705 \u0110\xE3 c\u1EADp nh\u1EADt Shopee Product ID (${newShopeeId}) v\xE0o DB cho SKU ${currentVariant.sku}`);
+                log(`[Browser] ✅ Đã cập nhật Shopee Product ID (${newShopeeId}) vào DB cho ${allVariants.length} SKU thuộc nhóm: ${allVariants.map(v=>v.sku).join(', ')}`);
               } else {
                 log(`[Browser] \u26A0\uFE0F Kh\xF4ng th\u1EC3 t\u1EF1 \u0111\u1ED9ng t\xECm th\u1EA5y Shopee Product ID m\u1EDBi sau 6 l\u1EA7n th\u1EED. B\u1EA1n c\xF3 th\u1EC3 c\u1EA7n \u0111i\u1EC1n th\u1EE7 c\xF4ng.`);
               }
@@ -1698,9 +1951,7 @@ CAM K\u1EBET:
         log(`[Browser] L\u1ED7i x\u1EED l\xFD V\u1EADn chuy\u1EC3n & Ho\xE0n t\u1EA5t: ${e.message}`);
       }
       log(`[Ho\xE0n t\u1EA5t] Qu\xE1 tr\xECnh Sync Shopee \u0111\xE3 ch\u1EA1y xong! B\u1EA1n h\xE3y ki\u1EC3m tra l\u1EA1i tr\xEAn tr\xECnh duy\u1EC7t.`);
-    } catch (e) {
-      log("[Browser] L\u1ED7i t\u1EF1 \u0111\u1ED9ng upload media.");
-    }
+
   } catch (e) {
     log(`[L\u1ED7i Browser] ${e.message}`);
     try {
@@ -1801,7 +2052,97 @@ async function testTelegramNotification(botToken, chatId) {
     return { success: false, message: `L\u1ED7i k\u1EBFt n\u1ED1i: ${e.message}` };
   }
 }
+async function startFullAutoSyncBackground(prioritySku = null) {
+  const pushLog = (msg) => {
+    global.autoSyncLogs = global.autoSyncLogs || [];
+    global.autoSyncLogs.push(`[${new Date().toLocaleTimeString()}] ${msg}`);
+  };
+
+  try {
+    pushLog("🚀 Bắt đầu tiến trình Full Auto Sync Background...");
+    global.shouldStopAutoSync = false;
+
+    const cookiesSetting = await prisma.setting.findUnique({ where: { key: 'shopee_cookies' } });
+    pushLog("DEBUG: Đã lấy xong cookies");
+    if (!cookiesSetting || !cookiesSetting.value) {
+      pushLog("❌ LỖI: Chưa cấu hình Cookies Shopee!");
+      return;
+    }
+
+    const whereClause = { isAvatar: true };
+    if (prioritySku) whereClause.sku = { startsWith: prioritySku };
+
+    pushLog(`DEBUG: Đang query variants với where: ${JSON.stringify(whereClause)}`);
+    const avtVariants = await prisma.variant.findMany({
+      where: whereClause,
+      include: { model: true }
+    });
+    pushLog(`DEBUG: Đã lấy xong variants`);
+
+    pushLog(`🔍 Tìm thấy ${avtVariants.length} nhóm biến thể (AVT) cần xử lý.`);
+
+    let processedAvts = 0;
+    for (let i = 0; i < avtVariants.length; i++) {
+      if (global.shouldStopAutoSync) {
+        pushLog("🛑 Tiến trình đã bị DỪNG theo yêu cầu của user.");
+        break;
+      }
+      const avt = avtVariants[i];
+      const model = avt.model;
+
+      pushLog(`--------------------------------------------------`);
+      pushLog(`⏳ Bắt đầu xử lý Nhóm AVT ${i + 1}/${avtVariants.length}: ${avt.sku}...`);
+
+      if (avt.shopeeProductId) {
+        pushLog(`⏭️ Đã có Shopee ID (${avt.shopeeProductId}). Bỏ qua cập nhật cho nhóm ${avt.sku}!`);
+        processedAvts++;
+        continue;
+      }
+
+      let retries = 0;
+      let success = false;
+      while (!success && retries < 10) {
+        try {
+          let avatarPath = "";
+          if (avt.avatarImage && fs.existsSync(avt.avatarImage)) {
+            avatarPath = avt.avatarImage;
+          } else {
+            pushLog(`❌ LỖI: Chưa generate Avatar cho biến thể AVT ${avt.sku}! Hãy chạy Tạo logo.`);
+            break;
+          }
+
+          pushLog(`⏳ Đang tải/kiểm tra dữ liệu Media từ Google Drive cho ${avt.sku} (Lần thử ${retries + 1})...`);
+          const media = await prepareMediaForShopee(model.name, avt.sku, avatarPath, pushLog);
+
+          pushLog(`⏳ Đang mở trình duyệt đăng bài Shopee cho nhóm ${avt.sku}...`);
+          const productName = await generateShopeeProductName(avt.id, model.name);
+
+          await runShopeeAutomationDemo(cookiesSetting.value, productName, avt.shopeeProductId || "", media, avt.id, pushLog);
+
+          pushLog(`✅ Nhóm AVT ${avt.sku} đã đồng bộ xong!`);
+          processedAvts++;
+          success = true;
+        } catch (err) {
+          retries++;
+          pushLog(`❌ Lỗi khi xử lý AVT ${avt.sku} (Lần ${retries}/10): ${err.message}`);
+          if (retries < 10) {
+            pushLog(`🔄 Hệ thống sẽ tự động refresh và thử lại sau 5 giây...`);
+            await new Promise(res => setTimeout(res, 5000));
+          } else {
+            pushLog(`⚠️ Đã thử 10 lần vẫn lỗi. Bỏ qua AVT ${avt.sku}.`);
+          }
+        }
+      }
+    }
+    pushLog(`🎉 HOÀN TẤT Full Auto Sync. Đã xử lý thành công ${processedAvts}/${avtVariants.length} nhóm AVT.`);
+  } catch (err) {
+    pushLog(`❌ LỖI NGHIÊM TRỌNG: ${err.message}`);
+  }
+}
+
+
 export {
+  startFullAutoSyncBackground,
   exportIgnoredReport,
   filterAndReportVariants,
   generateShopeeProductName,

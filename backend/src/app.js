@@ -24,7 +24,7 @@ app.use(express.json());
 
 // Bỏ qua các lỗi đứt kết nối mạng rác để không làm bẩn Terminal
 process.on('uncaughtException', (err) => {
-  if (err.code === 'ECONNRESET' || err.message.includes('ECONNRESET')) {
+  if (err && (err.code === 'ECONNRESET' || (err.message && err.message.includes('ECONNRESET')))) {
     // Ignore
     return;
   }

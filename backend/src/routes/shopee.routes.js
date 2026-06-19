@@ -8,7 +8,9 @@ import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 chromium.use(StealthPlugin());
 
 import { prisma } from '../services/shopee/db.js';
-import { prepareMediaForShopee, generateShopeeProductName, runShopeeAutomationDemo } from '../services/shopee/shopeeSync.service.js';
+import { prepareMediaForShopee, generateShopeeProductName, runShopeeAutomationDemo, startFullAutoSyncBackground } from '../services/shopee/shopeeSync.service.js';
+
+global.autoSyncLogs = [];
 
 const router = express.Router();
 if (!fs.existsSync('uploads')) fs.mkdirSync('uploads');
@@ -256,11 +258,12 @@ router.post('/import-sapo-excel', upload.single('file'), async (req, res) => {
       }
 
       const price = row[4] ? Number(String(row[4]).replace(/[^0-9]/g, '')) : 0;
+      const isAvatar = (row[5] && String(row[5]).trim() === '1') ? true : false;
 
       await prisma.variant.upsert({
         where: { sku: sku },
-        update: { rawImage: localImagePath || undefined, price: price },
-        create: { modelId: model.id, color: sku, sku: sku, price: price, rawImage: localImagePath }
+        update: { rawImage: localImagePath || undefined, price: price, isAvatar: isAvatar },
+        create: { modelId: model.id, color: sku, sku: sku, price: price, rawImage: localImagePath, isAvatar: isAvatar }
       });
       count++;
     }
@@ -363,8 +366,11 @@ router.post('/sync-shopee/:variantId', async (req, res) => {
           return res.json({ success: false, message: 'Chưa generate Avatar cho biến thể này!' });
       }
 
+      // Luôn lấy ảnh đúng của biến thể đang Sync, không lấy của biến thể Avatar mặc định
+      const sourceSku = variant.sku;
+
       // Prepare media
-      const media = await prepareMediaForShopee(variant.model?.name, variant.sku, avatarPath, (msg) => console.log(msg));
+      const media = await prepareMediaForShopee(variant.model?.name, sourceSku, avatarPath, (msg) => console.log(msg));
 
       // Mở trình duyệt chạy Auto
       await runShopeeAutomationDemo(cookiesSetting.value, productName, variant.shopeeProductId || '', media, variant.id, (msg) => console.log(msg));
@@ -377,7 +383,36 @@ router.post('/sync-shopee/:variantId', async (req, res) => {
   });
 
 router.post('/run-full-auto-sync', async (req, res) => {
-  res.json({ success: true, total: 0 });
+  if (global.isAutoSyncRunning) {
+    return res.json({ success: false, message: 'Tiến trình Auto Sync đang chạy, vui lòng đợi hoàn tất hoặc khởi động lại server!' });
+  }
+
+  const { prioritySku } = req.body || {};
+  global.isAutoSyncRunning = true;
+  // Trả về ngay để frontend không bị timeout
+  res.json({ success: true, message: 'Đã bắt đầu tiến trình chạy ngầm!' });
+  
+  // Gọi hàm chạy ngầm (không dùng await để nó chạy độc lập)
+  startFullAutoSyncBackground(prioritySku).then(() => {
+    global.isAutoSyncRunning = false;
+  }).catch(err => {
+    global.isAutoSyncRunning = false;
+    console.error('Lỗi Background Full Auto Sync:', err);
+    global.autoSyncLogs.push(`[SYSTEM] Lỗi nghiêm trọng: ${err.message}`);
+  });
+});
+
+router.post('/stop-auto-sync', (req, res) => {
+  global.shouldStopAutoSync = true;
+  global.autoSyncLogs.push('[SYSTEM] 🛑 Đã nhận lệnh DỪNG, tiến trình sẽ thoát ngay khi hoàn tất chu kỳ hiện tại!');
+  res.json({ success: true, message: 'Đã gửi lệnh dừng!' });
+});
+
+router.get('/auto-sync-logs', (req, res) => {
+  // Trả về các log hiện tại và reset (lấy log mới nhất)
+  const logs = [...(global.autoSyncLogs || [])];
+  global.autoSyncLogs = []; // Dọn bộ nhớ sau khi client đã lấy
+  res.json({ success: true, logs });
 });
 
 router.post('/shopee-login', async (req, res) => {

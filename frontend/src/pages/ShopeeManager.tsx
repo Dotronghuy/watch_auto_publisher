@@ -52,7 +52,9 @@ function App() {
   }
 
   const [geminiApiKey, setGeminiApiKey] = useState('')
+  const [showGeminiKey, setShowGeminiKey] = useState(false)
   const [openaiApiKey, setOpenaiApiKey] = useState('')
+  const [showOpenaiKey, setShowOpenaiKey] = useState(false)
   const [googleSheetUrl, setGoogleSheetUrl] = useState('')
   const [isMatchingAi, setIsMatchingAi] = useState(false)
   const [hasShopeeCookies, setHasShopeeCookies] = useState(false)
@@ -66,6 +68,7 @@ function App() {
   const [isBulkProcessing, setIsBulkProcessing] = useState(false)
   const [imagePool, setImagePool] = useState<string[]>([])
   const [isAutoSyncing, setIsAutoSyncing] = useState(false)
+  const [priorityModel, setPriorityModel] = useState('')
   const [autoSyncLog, setAutoSyncLog] = useState<string[]>([])
   const logContainerRef = useRef<HTMLDivElement>(null)
 
@@ -84,11 +87,19 @@ function App() {
       setSapoProgress(data)
     })
 
-    // Đăng ký nhận thông báo tiến trình Sync Shopee
-    api.onSyncProgress((msg: string) => {
-      setNotification(`🚀 ${msg}`)
-      setAutoSyncLog(prev => [...prev.slice(-200), msg]) // giữ tối đa 200 dòng
-    })
+    // Poll logs chạy ngầm từ backend
+    const logInterval = setInterval(async () => {
+      try {
+        const res = await api.getAutoSyncLogs();
+        if (res.success && res.logs && res.logs.length > 0) {
+          setAutoSyncLog(prev => [...prev, ...res.logs].slice(-500)); // Hiển thị 500 dòng mới nhất
+        }
+      } catch (err) {
+        console.error("Lỗi poll logs:", err);
+      }
+    }, 1500);
+
+    return () => clearInterval(logInterval);
   }, [])
 
   const handleUpdateVariant = async (id: string) => {
@@ -330,18 +341,31 @@ function App() {
       alert('Vui lòng đăng nhập Shopee trước! (Vào mục Cài đặt Khung/Logo)');
       return;
     }
+
     if (!window.confirm('⚠️ Bạn sắp chạy tự động Sync TOÀN BỘ sản phẩm có Shopee ID.\n\nTool sẽ tự tạo Avatar và đăng/cập nhật từng sản phẩm một.\n\nBảo đảm bạn đã sẵn sàng!')) return;
+    
     setIsAutoSyncing(true);
     setAutoSyncLog(['🚀 Đã khởi động Full Auto Sync...']);
     setActiveTab('sync'); // Chuyển sang tab Sync để hiển thị log trực tiếp
-    const result = await api.runFullAutoSync();
+    const result = await api.runFullAutoSync(priorityModel.trim());
     if (result.success) {
-      setNotification(`🎉 Hoàn tất! Đã sync ${result.total} sản phẩm.`);
+      setNotification(`🎉 ${result.message}`);
     } else {
       alert('Lỗi Auto Sync: ' + result.message);
       setNotification('');
+      setIsAutoSyncing(false);
     }
-    setIsAutoSyncing(false);
+  }
+
+  const handleStopAutoSync = async () => {
+    if (!window.confirm('🛑 Bạn có chắc chắn muốn DỪNG tiến trình Auto Sync hiện tại?')) return;
+    const result = await api.stopAutoSync();
+    if (result.success) {
+      setNotification(`🛑 ${result.message}`);
+      setIsAutoSyncing(false);
+    } else {
+      alert('Lỗi dừng Auto Sync: ' + result.message);
+    }
   }
 
   const handleSyncShopee = async (variantId: string) => {
@@ -559,7 +583,9 @@ function App() {
               <div key={v.id} className="bg-[#12141C] border border-[#2D3349]/60 rounded-xl p-4 flex flex-col sm:flex-row gap-4 items-center hover:border-[#00F5FF]/50 transition-colors">
                 <div className="flex-1 w-full min-w-0">
                   <div className="font-bold text-white text-sm truncate">{v.color}</div>
-                  <div className="text-[10px] text-[#94A3B8] font-mono mt-1 truncate">SKU: {v.sku}</div>
+                  <div className="text-[10px] text-[#94A3B8] font-mono mt-1 truncate">
+                    SKU: {v.sku} {v.isAvatar && <span className="text-[#00F5FF] font-bold ml-1" title="Ảnh đại diện (AVT) cho bộ">* (AVT)</span>}
+                  </div>
                 </div>
                 
                 <div className="flex items-center gap-6 shrink-0">
@@ -904,13 +930,17 @@ function App() {
                   <div className="flex gap-2 mb-4">
                     <div className="flex-1 bg-[#0B0F19] border border-[#2D3349] rounded-xl flex items-center px-4">
                        <input 
-                         type="password" 
+                         type={showGeminiKey ? "text" : "password"} 
                          value={geminiApiKey} 
                          onChange={(e) => setGeminiApiKey(e.target.value)} 
                          className="bg-transparent border-none outline-none text-white text-sm w-full font-mono placeholder-[#2D3349]"
                          placeholder="AIzaSyA..."
                        />
-                       <span className="text-[#94A3B8] cursor-pointer">👁</span>
+                       <span 
+                         className="text-[#94A3B8] cursor-pointer hover:text-white transition-colors select-none" 
+                         onClick={() => setShowGeminiKey(!showGeminiKey)}
+                         title={showGeminiKey ? 'Ẩn Key' : 'Hiện Key'}
+                       >{showGeminiKey ? '🙈' : '👁'}</span>
                     </div>
                     <button onClick={handleSaveGeminiKey} className="bg-[#FF4D8D] hover:bg-[#FF669D] text-white font-bold px-6 py-3 rounded-xl transition-all shadow-[0_0_15px_rgba(255,77,141,0.3)]">
                       Lưu Key
@@ -928,7 +958,7 @@ function App() {
                   
                   <div className="flex gap-2">
                     <input 
-                      type="password" 
+                      type={showOpenaiKey ? "text" : "password"} 
                       value={openaiApiKey} 
                       onChange={(e) => setOpenaiApiKey(e.target.value)} 
                       className="flex-1 bg-[#0B0F19] border border-[#2D3349] rounded-xl px-4 text-sm text-white font-mono placeholder-[#2D3349]"
@@ -983,9 +1013,21 @@ function App() {
                     <div className={`absolute top-0.5 w-3 h-3 bg-white rounded-full transition-all ${isAutoSyncing ? 'right-0.5' : 'left-0.5'}`}></div>
                   </div>
                 </div>
+                <input 
+                  type="text" 
+                  value={priorityModel} 
+                  onChange={(e) => setPriorityModel(e.target.value)} 
+                  placeholder="Nhập tên Model ưu tiên chạy trước (VD: 751G)" 
+                  className="bg-[#12141C] border border-[#2D3349]/60 rounded-xl px-3 py-2 text-sm text-white placeholder:text-[#515C67] w-64 focus:outline-none focus:border-[#00F5FF]/50"
+                />
                 <button onClick={handleFullAutoSync} disabled={isAutoSyncing} className={`border px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2 transition-colors ${isAutoSyncing ? 'bg-[#2D3349]/50 text-[#515C67] border-[#2D3349]/30 cursor-not-allowed' : 'bg-green-500/10 text-green-500 border-green-500/30 hover:bg-green-500/20'}`}>
                   <span>⚡</span> {isAutoSyncing ? 'Running...' : 'Run Auto'}
                 </button>
+                {isAutoSyncing && (
+                  <button onClick={handleStopAutoSync} className="bg-red-500/10 text-red-500 border border-red-500/30 hover:bg-red-500/20 px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2 transition-colors">
+                    <span>🛑</span> Stop
+                  </button>
+                )}
                 <button onClick={() => setAutoSyncLog([])} className="bg-[#12141C] text-[#94A3B8] hover:text-white border border-[#2D3349]/60 hover:bg-[#2D3349] px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2 transition-colors">
                   <span>🗑</span> Clear
                 </button>

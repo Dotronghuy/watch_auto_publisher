@@ -54,7 +54,13 @@ const Dashboard = () => {
 
   useEffect(() => {
     // Lấy danh sách tài khoản 1 lần
-    fetch('/api/accounts').then(r => r.json()).then(data => setAccounts(data || [])).catch(() => {});
+    fetch('/api/accounts')
+      .then(r => r.json())
+      .then(data => {
+        if (Array.isArray(data)) setAccounts(data);
+        else setAccounts([]);
+      })
+      .catch(() => setAccounts([]));
   }, []);
 
   useEffect(() => {
@@ -69,9 +75,10 @@ const Dashboard = () => {
         const statsData = await statsRes.json();
         const settingsData = await settingsRes.json();
         const engagementData = await engagementRes.json();
-        setStats(statsData);
-        setSettings(settingsData);
-        if (engagementData.today) setEngagement(engagementData.today);
+        
+        if (!statsData.error) setStats(statsData);
+        if (!settingsData.error) setSettings(settingsData);
+        if (!engagementData.error && engagementData.today) setEngagement(engagementData.today);
       } catch (err) { console.error(err); }
     };
     fetchAll();
@@ -183,7 +190,7 @@ const Dashboard = () => {
             <div className="engagement-meta">
               <select className="eng-account-select" value={selectedAccount} onChange={e => setSelectedAccount(e.target.value)}>
                 <option value="">Tất cả tài khoản</option>
-                {accounts.filter(a => a.isActive).map(acc => (
+                {Array.isArray(accounts) && accounts.filter(a => a.isActive).map(acc => (
                   <option key={acc.id} value={acc.id}>{acc.name}</option>
                 ))}
               </select>

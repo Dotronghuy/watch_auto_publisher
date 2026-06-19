@@ -104,9 +104,15 @@ const apiClient = {
   generateAvatar: async (variantId: string) => (await fetch(`/api/shopee/generate-avatar/${variantId}`, { method: 'POST' })).json(),
   autoMatchImagesAi: async () => (await fetch('/api/shopee/auto-match-images-ai', { method: 'POST' })).json(),
   shopeeLogin: async () => (await fetch('/api/shopee/shopee-login', { method: 'POST' })).json(),
-  runFullAutoSync: async () => (await fetch('/api/shopee/run-full-auto-sync', { method: 'POST' })).json(),
+  runFullAutoSync: async (prioritySku?: string) => (await fetch('/api/shopee/run-full-auto-sync', { 
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ prioritySku })
+  })).json(),
+  stopAutoSync: async () => (await fetch('/api/shopee/stop-auto-sync', { method: 'POST' })).json(),
   syncShopee: async (variantId: string) => (await fetch(`/api/shopee/sync-shopee/${variantId}`, { method: 'POST' })).json(),
   testTelegramNotification: async () => ({ success: true, message: 'Web: Test Telegram' }),
+  getAutoSyncLogs: async () => (await fetch('/api/shopee/auto-sync-logs')).json(),
 
   onSapoProgress: (callback: any) => {},
   onSyncProgress: (callback: any) => {}

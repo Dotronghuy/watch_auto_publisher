@@ -34,48 +34,68 @@ export const getFolderIdByName = async (folderName, parentId) => {
   }
 };
 
-// Hàm lấy danh sách ảnh trong 1 thư mục
+// Hàm lấy danh sách ảnh trong 1 thư mục (đã nâng cấp đệ quy để vào các thư mục con như Anh_AVT, Anh_Tu_Chup, v.v.)
 export const getImagesInFolder = async (folderId) => {
   try {
-    let allFiles = [];
-    let pageToken = null;
-    do {
-      const res = await drive.files.list({
-        q: `'${folderId}' in parents and mimeType contains 'image/' and trashed=false`,
-        fields: 'nextPageToken, files(id, name, mimeType, size)',
-        orderBy: 'createdTime desc', // Mới nhất lên đầu
-        pageSize: 1000,
-        pageToken: pageToken
-      });
-      allFiles = allFiles.concat(res.data.files);
-      pageToken = res.data.nextPageToken;
-    } while (pageToken);
-    return allFiles;
+    let allImages = [];
+    const fetchRecursive = async (fId) => {
+      let pageToken = null;
+      do {
+        const res = await drive.files.list({
+          q: `'${fId}' in parents and trashed=false`,
+          fields: 'nextPageToken, files(id, name, mimeType, size)',
+          orderBy: 'createdTime desc',
+          pageSize: 1000,
+          pageToken: pageToken
+        });
+        
+        for (const file of res.data.files) {
+          if (file.mimeType === 'application/vnd.google-apps.folder') {
+            await fetchRecursive(file.id);
+          } else if (file.mimeType.startsWith('image/')) {
+            allImages.push(file);
+          }
+        }
+        pageToken = res.data.nextPageToken;
+      } while (pageToken);
+    };
+    await fetchRecursive(folderId);
+    return allImages;
   } catch (error) {
-    console.error('Lỗi khi lấy danh sách ảnh:', error.message);
+    console.error('Lỗi khi lấy danh sách ảnh đệ quy:', error.message);
     throw error;
   }
 };
 
-// Hàm lấy danh sách video trong 1 thư mục
+// Hàm lấy danh sách video trong 1 thư mục (đệ quy)
 export const getVideosInFolder = async (folderId) => {
   try {
-    let allFiles = [];
-    let pageToken = null;
-    do {
-      const res = await drive.files.list({
-        q: `'${folderId}' in parents and (mimeType contains 'video/') and trashed=false`,
-        fields: 'nextPageToken, files(id, name, mimeType, size)',
-        orderBy: 'createdTime desc', 
-        pageSize: 1000,
-        pageToken: pageToken
-      });
-      allFiles = allFiles.concat(res.data.files);
-      pageToken = res.data.nextPageToken;
-    } while (pageToken);
-    return allFiles;
+    let allVideos = [];
+    const fetchRecursive = async (fId) => {
+      let pageToken = null;
+      do {
+        const res = await drive.files.list({
+          q: `'${fId}' in parents and trashed=false`,
+          fields: 'nextPageToken, files(id, name, mimeType, size)',
+          orderBy: 'createdTime desc',
+          pageSize: 1000,
+          pageToken: pageToken
+        });
+        
+        for (const file of res.data.files) {
+          if (file.mimeType === 'application/vnd.google-apps.folder') {
+            await fetchRecursive(file.id);
+          } else if (file.mimeType.startsWith('video/')) {
+            allVideos.push(file);
+          }
+        }
+        pageToken = res.data.nextPageToken;
+      } while (pageToken);
+    };
+    await fetchRecursive(folderId);
+    return allVideos;
   } catch (error) {
-    console.error('Lỗi khi lấy danh sách video:', error.message);
+    console.error('Lỗi khi lấy danh sách video đệ quy:', error.message);
     throw error;
   }
 };
