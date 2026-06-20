@@ -143,12 +143,13 @@ async function runZaloTask(signal) {
     log('📥 Đang tải dữ liệu Google Sheet...', 'info');
     const match = sheetUrl.match(/\/d\/([a-zA-Z0-9-_]+)/);
     if (!match) throw new Error('Link Google Sheet không hợp lệ!');
-    const exportUrl = `https://docs.google.com/spreadsheets/d/${match[1]}/export?format=xlsx`;
+    // Dùng CSV thay vì xlsx để tránh crash (xlsx 37MB vs CSV 39KB)
+    const exportUrl = `https://docs.google.com/spreadsheets/d/${match[1]}/export?format=csv`;
 
     const response = await fetch(exportUrl);
     if (!response.ok) throw new Error('Không thể tải Google Sheet');
-    const buffer = await response.arrayBuffer();
-    const workbook = xlsx.read(buffer, { type: 'buffer' });
+    const csvText = await response.text();
+    const workbook = xlsx.read(csvText, { type: 'string' });
 
     const sheetData = [];
     for (const sheetName of workbook.SheetNames) {
@@ -243,16 +244,7 @@ async function runZaloTask(signal) {
     const skuFolders = await getFoldersInFolder(iwFolder.id);
     log(`✅ Tìm thấy ${skuFolders.length} thư mục SKU trên Drive`, 'success');
 
-    // ====== BƯỚC 5: Mở Browser + Đăng bài ======
-    log('🤖 Khởi động trình duyệt Zalo...', 'info');
-    const userDataDir = path.join(__dirname, '../../zalo_profile');
-    if (!fs.existsSync(userDataDir)) fs.mkdirSync(userDataDir, { recursive: true });
-    browser = await chromium.launchPersistentContext(userDataDir, {
-      headless: false,
-      args: ['--disable-notifications'],
-      viewport: { width: 1280, height: 800 }
-    });
-
+    // ====== BƯỚC 6: Đăng bài (Zalo browser chỉ mở khi cần) ======
     let postsDone = 0;
 
     while (postsDone < postsPerSession) {
@@ -264,18 +256,19 @@ async function runZaloTask(signal) {
         break;
       }
 
-      // Tìm SKU folder trên Drive
-      const baseCode = (product.id.match(/^(\d+[a-zA-Z]?)/) || [])[1] || product.id.split('-')[0];
+      // Tìm folder trên Drive khớp ĐÚNG tên mã SKU (VD: "735G2-D2")
       const skuFolder = skuFolders.find(f =>
-        f.name.toUpperCase().includes(baseCode.toUpperCase())
+        f.name.toUpperCase() === product.id.toUpperCase()
+      ) || skuFolders.find(f =>
+        f.name.toUpperCase().includes(product.id.toUpperCase())
       );
 
       if (!skuFolder) {
-        log(`⚠️ Không tìm thấy folder Drive cho ${product.id}, bỏ qua...`, 'warning');
+        log(`⚠️ Không tìm thấy folder [${product.id}] trên Drive, bỏ qua...`, 'warning');
         continue;
       }
 
-      // Tìm ảnh: Random chọn 1 folder (Anh_Hang HOẶC Anh_Tu_Chup), lấy HẾT ảnh
+      // Tìm ảnh: CHỈ lấy từ Anh_Hang hoặc Anh_Tu_Chup
       const subFolders = await getFoldersInFolder(skuFolder.id);
       let images = [];
 
@@ -291,22 +284,25 @@ async function runZaloTask(signal) {
         }
       }
 
-      if (candidateFolders.length > 0) {
-        // Random chọn 1 folder
-        const chosen = candidateFolders[Math.floor(Math.random() * candidateFolders.length)];
-        images = chosen.images;
-        log(`📸 Random chọn [${chosen.folder.name}] → ${images.length} ảnh (lấy hết)`, 'info');
-      } else {
-        // Fallback: quét toàn bộ thư mục SKU
-        images = await getImagesInFolder(skuFolder.id);
-      }
-
-      if (images.length === 0) {
-        log(`⚠️ Không có ảnh cho ${product.id} trên Drive, bỏ qua`, 'warning');
+      // KHÔNG fallback - chỉ dùng Anh_Hang hoặc Anh_Tu_Chup
+      if (candidateFolders.length === 0) {
+        log(`⚠️ ${product.id} không có ảnh trong cả Anh_Hang lẫn Anh_Tu_Chup, bỏ qua`, 'warning');
         continue;
       }
 
-      // Lấy TẤT CẢ ảnh (không giới hạn)
+      // Random chọn 1 folder, lấy HẾT ảnh (vì mỗi folder SKU đã tách riêng biến thể)
+      const chosen = candidateFolders[Math.floor(Math.random() * candidateFolders.length)];
+      
+      // Sắp xếp ảnh theo số thứ tự (_01, _02, _03...)
+      chosen.images.sort((a, b) => {
+        const numA = parseInt((a.name.match(/_(\d+)\.\w+$/) || [, '999'])[1]);
+        const numB = parseInt((b.name.match(/_(\d+)\.\w+$/) || [, '999'])[1]);
+        return numA - numB;
+      });
+      
+      images = chosen.images;
+      log(`📸 Folder [${skuFolder.name}] → [${chosen.folder.name}] → ${images.length} ảnh (sắp xếp _01→)`, 'info');
+
       const selected = [...images];
 
       log(`\n🚀 [BÀI ${postsDone + 1}/${postsPerSession}] Mã: ${product.id} | Nhóm ${product.priority} | ${selected.length} ảnh`, 'highlight');
@@ -323,9 +319,21 @@ async function runZaloTask(signal) {
         localPaths.push(localPath);
       }
 
-      // Tạo content bằng AI (truyền priority để phân biệt pre-order vs bình thường)
-      log('🤖 AI đang viết bài bán hàng...', 'info');
+      // Tạo content bằng AI TRƯỚC - gửi ảnh _01 (đầu tiên sau sort) cho Gemini
+      log('🤖 AI đang viết bài bán hàng... (gửi ảnh _01 cho Gemini)', 'info');
       const postContent = await generateZaloContentSmart(product, localPaths[0], phone, contentTone, skuFolder.name, product.priority);
+
+      // Mở Zalo browser (lazy init - chỉ mở 1 lần, SAU khi Gemini xong)
+      if (!browser) {
+        log('🤖 Khởi động trình duyệt Zalo...', 'info');
+        const userDataDir = path.join(__dirname, '../../zalo_profile');
+        if (!fs.existsSync(userDataDir)) fs.mkdirSync(userDataDir, { recursive: true });
+        browser = await chromium.launchPersistentContext(userDataDir, {
+          headless: false,
+          args: ['--disable-notifications'],
+          viewport: { width: 1280, height: 800 }
+        });
+      }
 
       // Đăng lên tất cả các nhóm
       const page = await browser.newPage();
@@ -385,6 +393,12 @@ async function runZaloTask(signal) {
         try { if (fs.existsSync(p)) fs.unlinkSync(p); } catch (e) {}
       }
 
+      // Tắt hoàn toàn trình duyệt Zalo trong lúc nghỉ ngơi để giải phóng RAM
+      if (browser) {
+        try { await browser.close(); } catch (e) {}
+        browser = null;
+      }
+
       // Delay giữa các bài
       if (postsDone < postsPerSession && !signal.aborted) {
         const jitter = Math.floor(Math.random() * 60000) - 30000; // ±30s
@@ -407,8 +421,11 @@ async function runZaloTask(signal) {
     }
   } finally {
     if (browser) {
+      log('🔒 Đang tắt trình duyệt Zalo...', 'info');
       try { await browser.close(); } catch (e) {}
+      browser = null;
     }
+    log('✅ Chiến dịch đã kết thúc, tất cả trình duyệt đã đóng.', 'success');
     isZaloRunning = false;
   }
 }
@@ -419,10 +436,15 @@ async function generateZaloContentSmart(product, imagePath, phone, toneKey, skuN
   try {
     // Lấy thông số SP từ Google Sheets (nếu có)
     let specsText = '';
+    let giaCTV = '';
     try {
       const productInfo = await getProductInfoBySku(skuName || product.id);
       if (productInfo) {
         specsText = Object.entries(productInfo).map(([k, v]) => `${k}: ${v}`).join('\n');
+        // Ưu tiên lấy Giá CTV từ Google Sheet Products (cột T)
+        if (productInfo['Giá CTV']) {
+          giaCTV = String(productInfo['Giá CTV']).replace(/\D/g, '');
+        }
       }
     } catch (e) { /* ignore */ }
 
@@ -432,9 +454,14 @@ async function generateZaloContentSmart(product, imagePath, phone, toneKey, skuN
     if (/\dG$|G\d|\dG\d/.test(skuUp)) gender = 'Nam';
     else if (/\dL$|L\d|\dL\d/.test(skuUp)) gender = 'Nữ';
 
-    // Format giá
-    let priceK = String(product.priceRaw).replace(/\D/g, '');
-    priceK = priceK ? Math.floor(parseInt(priceK) / 1000) + 'k' : 'Liên hệ';
+    // Format giá: Ưu tiên Giá CTV từ Products Sheet, fallback về priceRaw từ Sheet cũ
+    let priceK;
+    if (giaCTV && parseInt(giaCTV) > 0) {
+      priceK = Math.floor(parseInt(giaCTV) / 1000) + 'k';
+    } else {
+      let rawPrice = String(product.priceRaw).replace(/\D/g, '');
+      priceK = rawPrice ? Math.floor(parseInt(rawPrice) / 1000) + 'k' : 'Liên hệ';
+    }
 
     log(`   🎨 Giới tính: ${gender} | Giá CTV: ${priceK} | Nhóm: ${priority}`, 'info');
 
@@ -448,11 +475,11 @@ Sản phẩm này CHƯA CÓ SẴN và KHÔNG CÓ THÔNG SỐ KỸ THUẬT. Viế
 
 Nhìn ảnh và viết bài theo format:
 
-[emoji hot] I&W CARNIVAL ${product.id} – [TIÊU ĐỀ HẤP DẪN, VIẾT HOA]
-[emoji] SẮP VỀ HÀNG – NHẬN ĐẶT TRƯỚC!
-[emoji] [Mô tả vẻ đẹp/thiết kế dựa trên NHÌN ẢNH – màu sắc, kiểu dáng, cảm nhận chung]
-[emoji] [Mô tả thêm 1 điểm ấn tượng khi nhìn ảnh – chất liệu, mặt số, phong cách]
-[emoji] Đặt hàng sớm để nhận giá ưu đãi!
+(1 emoji cháy nổ/hot) I&W CARNIVAL ${product.id} – [TIÊU ĐỀ HẤP DẪN, VIẾT HOA]
+(1 emoji) SẮP VỀ HÀNG – NHẬN ĐẶT TRƯỚC!
+(1 emoji) [Mô tả vẻ đẹp/thiết kế dựa trên NHÌN ẢNH – màu sắc, kiểu dáng, cảm nhận chung]
+(1 emoji) [Mô tả thêm 1 điểm ấn tượng khi nhìn ảnh – chất liệu, mặt số, phong cách]
+(1 emoji) Đặt hàng sớm để nhận giá ưu đãi!
 
 Giới tính: ${gender}
 
@@ -460,7 +487,8 @@ QUY TẮC QUAN TRỌNG:
 - TUYỆT ĐỐI KHÔNG bịa thông số (size, độ dày, bộ máy, chống nước) vì sản phẩm chưa có thông tin
 - Chỉ mô tả những gì NHÌN THẤY trong ảnh (màu mặt số, kiểu dây, phong cách tổng thể)
 - Tạo cảm giác KHAN HIẾM, SỐ LƯỢNG CÓ HẠN, FOMO
-- Dùng EMOJI ĐA DẠNG, SÁNG TẠO
+- Ở mỗi dòng, BẮT BUỘC chèn 1 emoji sinh động, đa dạng và phù hợp ngữ cảnh. KHÔNG lặp lại emoji.
+- KHÔNG in ra chữ "emoji"
 - KHÔNG viết hashtag, KHÔNG đề cập giá
 - CHỈ TRẢ VỀ NỘI DUNG, KHÔNG GIẢI THÍCH`;
     } else {
@@ -473,20 +501,22 @@ QUY TẮC QUAN TRỌNG:
 
 Nhìn ảnh sản phẩm và viết bài đăng theo ĐÚNG FORMAT sau (giữ nguyên cấu trúc):
 
-[Emoji đồng hồ] I&W CARNIVAL ${product.id} [TỰ ĐỘNG/AUTOMATIC nếu có] – [TIÊU ĐỀ NGẮN GỌN, SÚC TÍCH, VIẾT HOA] [emoji]
-[emoji] Điểm nổi bật:
-[emoji tick] Bộ máy: [tên bộ máy nếu biết, hoặc nhìn ảnh đoán]
-[emoji tick] Size mặt: [đường kính mm] – Độ dày: [mm]  
-[emoji tick] Chất liệu vỏ/dây: [thép không gỉ/da/...]
-[emoji tick] Mặt kính: [Sapphire/Mineral/...]
-[emoji tick] Chống nước: [ATM/mét]
-[emoji tick] Thiết kế: [mô tả ngắn 1 dòng về phong cách]
+(1 emoji đồng hồ) I&W CARNIVAL ${product.id} [TỰ ĐỘNG/AUTOMATIC nếu có] – [TIÊU ĐỀ NGẮN GỌN, SÚC TÍCH, VIẾT HOA] (1 emoji sao)
+(1 emoji nổi bật) Điểm nổi bật:
+(1 emoji) Bộ máy: [tên bộ máy nếu biết, hoặc nhìn ảnh đoán]
+(1 emoji) Size mặt: [đường kính mm] – Độ dày: [mm]  
+(1 emoji) Chất liệu vỏ/dây: [thép không gỉ/da/...]
+(1 emoji) Mặt kính: [Sapphire/Mineral/...]
+(1 emoji) Chống nước: [ATM/mét]
+(1 emoji) Thiết kế: [mô tả ngắn 1 dòng về phong cách]
 
 ${specsText ? `THÔNG SỐ TỪ HỆ THỐNG:\n${specsText}` : 'TỰ NHÌN ẢNH phân tích thông số.'}
 Giới tính: ${gender}
 
 QUY TẮC:
-- Dùng EMOJI ĐA DẠNG, SÁNG TẠO (KHÔNG lặp lại emoji, mỗi dòng 1 emoji khác nhau)
+- BẮT BUỘC PHẢI VIẾT ĐỦ 6 GẠCH ĐẦU DÒNG THÔNG SỐ (Bộ máy, Size mặt, Chất liệu, Mặt kính, Chống nước, Thiết kế), tuyệt đối không được thiếu dòng nào. Dựa vào thông số từ hệ thống để điền, nếu không có thì nhìn ảnh tự đoán.
+- Thay các đoạn "(1 emoji...)" bằng 1 EMOJI THẬT sự sáng tạo, đa dạng, không lặp lại.
+- Tuyệt đối KHÔNG in ra chữ "(1 emoji)" trong bài viết.
 - KHÔNG viết hashtag
 - KHÔNG đề cập giá
 - VIẾT ĐÚNG theo giới tính: ${gender === 'Nữ' ? 'nữ tính (thanh lịch, tôn da, nhẹ nhàng, quý phái)' : 'nam tính (lịch lãm, phong độ, mạnh mẽ, sang trọng)'}
@@ -497,18 +527,21 @@ QUY TẮC:
 
 Nhìn ảnh và viết bài đăng theo style sau:
 
-[emoji] I&W Carnival ${product.id} - [Câu mô tả ngắn hấp dẫn, viết hoa chữ cái đầu]
-[emoji] [Nhận xét về mặt kính/chất liệu kính - Sapphire, vẻ đẹp mặt số]
-[emoji] [Nhận xét về bộ máy - Cơ/Automatic/Quartz, trải nghiệm]
-[emoji] [Nhận xét về vỏ/dây - thép 316L, da, titanium...]
-[emoji] [Thông số: Size mm, độ dày mm]
-[emoji] [Nhận xét về dây đeo - kim loại, da, cao su]
+(1 emoji sang trọng) I&W Carnival ${product.id} - [Câu mô tả ngắn hấp dẫn, viết hoa chữ cái đầu]
+(1 emoji) [Mô tả chi tiết mặt kính, chất liệu kính (VD: Sapphire nguyên khối...)]
+(1 emoji) [Mô tả chi tiết bộ máy (VD: Automatic tự động vận hành êm ái...)]
+(1 emoji) [Mô tả vỏ/dây (VD: Vỏ thép 316L không gỉ mạ PVD...)]
+(1 emoji) [Ghi thông số Size mặt (mm) và độ dày (mm)]
+(1 emoji) [Mô tả dây đeo (VD: Dây da cao cấp/dây kim loại đúc đặc...)]
+(1 emoji) [Ghi thông số chịu nước (VD: Chống nước 5ATM/50M...)]
 
 ${specsText ? `THÔNG SỐ TỪ HỆ THỐNG:\n${specsText}` : 'TỰ NHÌN ẢNH phân tích thông số.'}
 Giới tính: ${gender}
 
 QUY TẮC:
-- Mỗi dòng bắt đầu bằng dấu * và 1 EMOJI KHÁC NHAU (tự sáng tạo, đa dạng, không lặp)
+- BẮT BUỘC PHẢI CÓ ĐẦY ĐỦ TẤT CẢ 6 DÒNG THÔNG SỐ TRÊN, tuyệt đối không được gộp, không được bớt. Phải nhìn thông số từ hệ thống để chèn vào.
+- Thay các đoạn "(1 emoji...)" bằng 1 EMOJI THẬT sự đa dạng, liên quan đến nội dung dòng đó.
+- Tuyệt đối KHÔNG in ra chữ "(1 emoji)" trong bài viết.
 - Viết tự nhiên, cuốn hút, có cảm xúc, KHÔNG khô khan liệt kê
 - KHÔNG viết hashtag, KHÔNG đề cập giá
 - ${gender === 'Nữ' ? 'Dùng từ nữ tính: thanh lịch, tôn da, nhẹ nhàng' : 'Dùng từ nam tính: lịch lãm, phong độ, sang trọng'}
@@ -533,13 +566,85 @@ QUY TẮC:
       await geminiPage.goto('https://gemini.google.com/app', { waitUntil: 'domcontentloaded', timeout: 30000 });
       await geminiPage.waitForTimeout(3000);
 
-      // Upload ảnh (nếu có)
+      // Upload ảnh sản phẩm lên Gemini (UI mới: click "+" → "Files")
       if (imagePath && fs.existsSync(imagePath)) {
         log('   📤 Upload ảnh sản phẩm lên Gemini...', 'info');
-        const fileInputs = await geminiPage.$$('input[type="file"]');
-        if (fileInputs.length > 0) {
-          await fileInputs[fileInputs.length - 1].setInputFiles([imagePath]);
-          await geminiPage.waitForTimeout(3000);
+        let imgUploaded = false;
+
+        // Cách 1: Tìm input[type=file] ẩn (UI cũ)
+        try {
+          const fileInputs = await geminiPage.$$('input[type="file"]');
+          if (fileInputs.length > 0) {
+            await fileInputs[fileInputs.length - 1].setInputFiles([imagePath]);
+            await geminiPage.waitForTimeout(3000);
+            // Kiểm tra xem có thumbnail ảnh xuất hiện không
+            const hasPreview = await geminiPage.$('img[class*="preview"], img[class*="thumbnail"], [class*="attachment"], [class*="chip"]');
+            if (hasPreview) {
+              imgUploaded = true;
+              log('   ✅ Upload ảnh qua input[file] thành công', 'info');
+            }
+          }
+        } catch (e) {}
+
+        // Cách 2: Click nút "+" mở popup menu → click "Files" (UI mới Gemini 2025+)
+        if (!imgUploaded) {
+          try {
+            log('   🔍 Thử upload qua menu "+" của Gemini...', 'info');
+            // Tìm nút "+" (thường là nút đầu tiên gần ô nhập)
+            const plusBtnSelectors = [
+              'button[aria-label*="Add"]',
+              'button[aria-label*="Thêm"]',
+              'button[aria-label*="attachment"]',
+              'button[aria-label*="more"]',
+              'button[aria-label*="More"]',
+              '.input-area-container button',
+            ];
+
+            let menuOpened = false;
+            for (const sel of plusBtnSelectors) {
+              try {
+                const btns = await geminiPage.$$(sel);
+                for (const btn of btns) {
+                  if (await btn.isVisible()) {
+                    await btn.click();
+                    await geminiPage.waitForTimeout(1500);
+                    // Kiểm tra popup menu có mở không (tìm text "Files")
+                    const filesText = await geminiPage.$('text=Files');
+                    if (filesText) {
+                      menuOpened = true;
+                      break;
+                    }
+                    // Đóng popup nếu không đúng
+                    await geminiPage.keyboard.press('Escape');
+                    await geminiPage.waitForTimeout(300);
+                  }
+                }
+                if (menuOpened) break;
+              } catch (e) {}
+            }
+
+            if (menuOpened) {
+              // Click "Files" trong popup
+              const [fileChooser] = await Promise.all([
+                geminiPage.waitForEvent('filechooser', { timeout: 8000 }),
+                geminiPage.locator('text=Files').first().click()
+              ]);
+              await fileChooser.setFiles([imagePath]);
+              await geminiPage.waitForTimeout(4000);
+              imgUploaded = true;
+              log('   ✅ Upload ảnh qua menu Files thành công!', 'info');
+            }
+          } catch (e) {
+            log(`   ⚠️ Menu Files lỗi: ${e.message}`, 'warning');
+            // Đóng popup nếu đang mở
+            try { await geminiPage.keyboard.press('Escape'); } catch (e2) {}
+          }
+        }
+
+        if (!imgUploaded) {
+          log('   ⚠️ Không upload được ảnh, AI sẽ viết dựa trên thông số', 'warning');
+          try { await geminiPage.keyboard.press('Escape'); } catch (e) {}
+          await geminiPage.waitForTimeout(500);
         }
       }
 
@@ -583,25 +688,23 @@ QUY TẮC:
       // Chờ response
       log('   ⏳ Chờ Gemini viết content...', 'info');
       let aiDesc = null;
+      let lastAiDesc = null;
+      let sameTextCount = 0;
 
-      for (let attempt = 0; attempt < 40; attempt++) {
-        await geminiPage.waitForTimeout(3000);
-
-        // Kiểm tra đang stream hay đã xong
-        const isStreaming = await geminiPage.$('mat-spinner, .loading-indicator, [data-test-id="stop-button"]');
-        if (isStreaming && attempt < 35) continue;
+      for (let attempt = 0; attempt < 60; attempt++) {
+        await geminiPage.waitForTimeout(2000);
 
         // Lấy text response mới nhất
         try {
           aiDesc = await geminiPage.evaluate(() => {
-            // Gemini hiển thị response trong message-content hoặc model-response
+            // Lấy tất cả các block trả lời
             const responseEls = document.querySelectorAll(
               'message-content .markdown, model-response .markdown, .response-container .markdown, .model-response-text'
             );
             if (responseEls.length > 0) {
               return responseEls[responseEls.length - 1].innerText;
             }
-            // Fallback: tìm div có class chứa "response" hoặc "answer"
+            // Fallback
             const fallbackEls = document.querySelectorAll('[class*="response"] p, [class*="answer"] p');
             if (fallbackEls.length > 0) {
               return Array.from(fallbackEls).map(el => el.innerText).join('\n');
@@ -610,7 +713,19 @@ QUY TẮC:
           });
         } catch (e) {}
 
-        if (aiDesc && aiDesc.trim().length > 20) break;
+        // Kiểm tra logic dừng: text phải > 50 ký tự và KHÔNG thay đổi trong 5 lần lặp (tức ~10 giây)
+        if (aiDesc && aiDesc.trim().length > 50) {
+          if (aiDesc === lastAiDesc) {
+            sameTextCount++;
+            if (sameTextCount >= 5) {
+              // 10 giây không có text mới -> Chắc chắn Gemini đã viết xong
+              break;
+            }
+          } else {
+            sameTextCount = 0;
+            lastAiDesc = aiDesc;
+          }
+        }
       }
 
       await geminiCtx.close();
