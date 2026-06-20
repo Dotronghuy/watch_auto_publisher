@@ -10,6 +10,7 @@ import userRoutes from './routes/user.routes.js';
 import webhookRoutes from './routes/webhook.routes.js';
 import shopeeRoutes from './routes/shopee.routes.js';
 import zenwatchRoutes from './routes/zenwatch.routes.js';
+import bannerRoutes from './routes/banner.routes.js';
 // Worker sẽ được khởi động SAU khi scheduler dọn sạch queue
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -52,6 +53,7 @@ app.use('/api/users', userRoutes);
 app.use('/webhook', webhookRoutes);
 app.use('/api/shopee', shopeeRoutes);
 app.use('/api/zenwatch', zenwatchRoutes);
+app.use('/api/banner', bannerRoutes);
 // app.use('/api/drive', driveRoutes);
 // app.use('/api/publish', publishRoutes);
 
@@ -73,13 +75,14 @@ startTelegramBot();
 app.listen(PORT, async () => {
   console.log(`🚀 Server is running on http://localhost:${PORT}`);
 
-  // 1. Scheduler dọn sạch Redis trước
-  await startScheduler();
-
-  // 2. Chỉ sau khi scheduler đã dọn sạch xong mới khởi động Worker
-  // Tránh Worker pick up job stalled cũ từ phiên trước
-  await import('./workers/publish.worker.js');
-  console.log('✅ Worker đã khởi động sau khi Scheduler dọn sạch queue.');
+  // 1 & 2. Khởi động Scheduler & Worker (Bọc try-catch để bypass lỗi Redis Upstash Limit)
+  try {
+    await startScheduler();
+    await import('./workers/publish.worker.js');
+    console.log('✅ Worker đã khởi động sau khi Scheduler dọn sạch queue.');
+  } catch (error) {
+    console.error('⚠️ KHÔNG THỂ KẾT NỐI REDIS (Hoặc hết Limit Upstash). Các tính năng Queue đăng bài sẽ tạm ngưng. App vẫn tiếp tục chạy.', error.message);
+  }
 
   // 3. Khởi động Background Job để tracking Metrics
   setInterval(async () => {

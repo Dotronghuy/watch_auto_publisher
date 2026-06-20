@@ -1,0 +1,22 @@
+2026/06/20-14:21:54.118 3cd0 Reusing MANIFEST C:\Users\Admin\Downloads\watch_auto_publisher-master\backend\zalo_profile\Default\Local Storage\leveldb/MANIFEST-000001
+2026/06/20-14:21:54.122 3cd0 Recovering log #16
+2026/06/20-14:21:54.123 3cd0 Level-0 table #19: started
+2026/06/20-14:21:54.126 3cd0 Level-0 table #19: 43196 bytes OK
+2026/06/20-14:21:54.127 3cd0 Recovering log #18
+2026/06/20-14:21:54.128 3cd0 Reusing old log C:\Users\Admin\Downloads\watch_auto_publisher-master\backend\zalo_profile\Default\Local Storage\leveldb/000018.log 
+2026/06/20-14:21:54.129 3cd0 Delete type=0 #16
+2026/06/20-14:21:54.130 721c Compacting 4@0 + 1@1 files
+2026/06/20-14:21:54.135 721c Generated table #20@0: 323 keys, 106107 bytes
+2026/06/20-14:21:54.135 721c Compacted 4@0 + 1@1 files => 106107 bytes
+2026/06/20-14:21:54.135 721c compacted to: files[ 0 1 0 0 0 0 0 ]
+2026/06/20-14:21:54.136 721c Delete type=2 #11
+2026/06/20-14:21:54.136 721c Delete type=2 #13
+2026/06/20-14:21:54.136 721c Delete type=2 #15
+2026/06/20-14:21:54.136 721c Delete type=2 #17
+2026/06/20-14:21:54.136 721c Delete type=2 #19
+2026/06/20-14:22:54.143 3cd0 Level-0 table #22: started
+2026/06/20-14:22:54.147 3cd0 Level-0 table #22: 73007 bytes OK
+2026/06/20-14:22:54.148 3cd0 Delete type=0 #18
+2026/06/20-14:23:54.227 721c Level-0 table #24: started
+2026/06/20-14:23:54.236 721c Level-0 table #24: 37071 bytes OK
+2026/06/20-14:23:54.237 721c Delete type=0 #21

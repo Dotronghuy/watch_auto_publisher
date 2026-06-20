@@ -50,3 +50,9 @@ model Setting {
   key   String @unique
   value String
 }
+
+model ZaloPostHistory {
+  id        String   @id @default(uuid())
+  productId String   @unique
+  postedAt  DateTime @default(now())
+}

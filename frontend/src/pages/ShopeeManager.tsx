@@ -11,6 +11,7 @@ const safeFileUrl = (filePath: string) => {
 
 function App() {
   const [activeTab, setActiveTab] = useState<'dashboard' | 'sync' | 'products' | 'settings'>('products')
+  const [bannerBgTime, setBannerBgTime] = useState(Date.now())
   const [viewMode, setViewMode] = useState<'list' | 'grid'>('list')
   const [models, setModels] = useState<any[]>([])
   const [showInput, setShowInput] = useState(false)
@@ -196,6 +197,45 @@ function App() {
       setNotification('')
     }
     setIsBulkProcessing(false)
+  }
+
+  const handleGenerateCollectionBanners = async () => {
+    // Fix cứng chỉ test trên Model 55886G (Hoặc 5586G) theo yêu cầu của Sếp
+    const targetModels = models.filter(m => m.name.includes('55886G') || m.name.includes('5586G'));
+    
+    if (targetModels.length === 0) {
+       alert('Không tìm thấy Model nào có mã 55886G hoặc 5586G trong danh sách hiện tại để test!');
+       return;
+    }
+    
+    const modelIds = targetModels.map(m => m.id);
+    
+    if (!window.confirm(`Xác nhận test tạo Banner Bộ Sưu Tập cho mã ${targetModels[0].name}?`)) return;
+
+    setIsBulkProcessing(true);
+    setNotification(`⏳ Đang chạy AI tách nền và sinh Banner cho ${targetModels.length} Models...`);
+    
+    try {
+      const result = await api.generateCollectionBanners(modelIds);
+      if (result.success) {
+        let successCount = 0;
+        result.results.forEach((r: any) => {
+          if (r.success) successCount++;
+        });
+        setNotification(`✅ Hoàn tất! Tạo thành công ${successCount}/${targetModels.length} Banners.`);
+        alert(`Đã hoàn tất!\nThành công: ${successCount}\nLỗi/Bỏ qua: ${targetModels.length - successCount}\nCác ảnh Banner được lưu trong thư mục: backend/temp_images/`);
+      } else {
+        console.error('Server response:', result);
+        alert('Lỗi tạo Banner: ' + (result.message || JSON.stringify(result) || 'Lỗi không xác định'));
+        setNotification('');
+      }
+    } catch (err: any) {
+      console.error('Client error:', err);
+      alert('Lỗi kết nối / Client Error: ' + err.message);
+      setNotification('');
+    }
+    
+    setIsBulkProcessing(false);
   }
 
   const loadSettings = async () => {
@@ -793,6 +833,7 @@ function App() {
                   </div>
                   <div>
                     <h3 className="text-xl font-bold text-white">SAPO File Import</h3>
+                    <p className="text-[11px] text-[#94A3B8] mt-1">Nhập dữ liệu sản phẩm từ file Excel xuất từ SAPO (Tên SP, SKU, Ảnh, Giá)</p>
                   </div>
                 </div>
 
@@ -811,6 +852,7 @@ function App() {
                   </div>
                   <div>
                     <h3 className="text-xl font-bold text-white">Shopee File Import</h3>
+                    <p className="text-[11px] text-[#94A3B8] mt-1">Nhập Shopee Product ID từ file Excel xuất từ Shopee Seller Center</p>
                   </div>
                 </div>
 
@@ -949,6 +991,49 @@ function App() {
                   <a href="#" className="text-[10px] text-[#00F5FF] hover:underline flex items-center gap-1">
                     <span>⚡</span> Nhấn vào đây để đăng ký nhận API Key miễn phí từ Google AI Studio
                   </a>
+                </div>
+
+                <div className="bg-[#12141C] border border-[#2D3349]/60 rounded-3xl p-6">
+                  <h3 className="text-xs font-bold uppercase tracking-widest text-[#94A3B8] flex items-center gap-2 mb-4">
+                    <span className="text-[#00F5FF]">🎨</span> BANNER BACKGROUND (1254x1254)
+                  </h3>
+                  
+                  <div className="border border-dashed border-[#2D3349] rounded-xl bg-[#0B0F19]/50 w-full h-32 flex items-center justify-center p-2 mb-4 relative overflow-hidden group">
+                     <img src={`/api/shopee/serve-local-file?path=${encodeURIComponent('assets/banner_template/Background.jpg')}&t=${bannerBgTime}`} className="max-w-full max-h-full object-contain group-hover:scale-105 transition-transform duration-500" onError={(e) => { e.currentTarget.style.display = 'none'; e.currentTarget.nextElementSibling!.classList.remove('hidden'); }} />
+                     <div className="text-[#515C67] text-xs font-bold uppercase tracking-widest hidden flex-col items-center gap-2">
+                       <span className="text-2xl">🖼️</span> Chưa có nền mẫu
+                     </div>
+                  </div>
+
+                  <div className="flex gap-2">
+                    <button onClick={() => {
+                      const input = document.createElement('input');
+                      input.type = 'file';
+                      input.accept = 'image/*';
+                      input.onchange = async (e: any) => {
+                        const file = e.target.files[0];
+                        if (!file) return;
+                        setNotification('⏳ Đang upload Background Banner...');
+                        const formData = new FormData();
+                        formData.append('file', file);
+                        const res = await fetch('/api/banner/upload-template', { method: 'POST', body: formData });
+                        if(res.ok) {
+                          setBannerBgTime(Date.now());
+                          setNotification('✅ Đã lưu Background Banner thành công!');
+                        } else {
+                          const err = await res.json();
+                          alert('Upload thất bại: ' + (err.message || 'Lỗi không xác định'));
+                        }
+                        setTimeout(() => setNotification(''), 3000);
+                      };
+                      input.click();
+                    }} className="w-full bg-gradient-to-r from-[#00F5FF] to-[#00BFFF] hover:opacity-90 text-black font-bold px-6 py-3 rounded-xl transition-all shadow-[0_0_15px_rgba(0,245,255,0.3)]">
+                      Upload File Nền Banner
+                    </button>
+                  </div>
+                  <div className="text-[10px] text-[#94A3B8] mt-3">
+                    Ảnh Background này sẽ được dùng chung cho tất cả Banner khi bạn bấm "Generate Banners".
+                  </div>
                 </div>
 
                 <div className="bg-[#12141C] border border-[#2D3349]/60 rounded-3xl p-6">
@@ -1102,12 +1187,21 @@ function App() {
               <div>
                 <h1 className="text-3xl font-bold text-white tracking-tight">Model Directory</h1>
               </div>
-              <button 
-                onClick={() => setShowInput(!showInput)}
-                className="bg-[#FF4D8D] hover:bg-[#FF669D] text-white px-6 py-2.5 rounded-xl font-bold text-sm transition-colors flex items-center gap-2 shrink-0 shadow-[0_0_20px_rgba(255,77,141,0.2)]"
-              >
-                <span className="text-lg">+</span> Add Model
-              </button>
+              <div className="flex items-center gap-3 shrink-0 flex-wrap">
+                <button 
+                  onClick={handleGenerateCollectionBanners}
+                  disabled={isBulkProcessing || models.length === 0}
+                  className="bg-gradient-to-r from-[#00F5FF] to-[#00BFFF] hover:opacity-90 disabled:opacity-50 text-black px-6 py-2.5 rounded-xl font-bold text-sm transition-all shadow-[0_0_20px_rgba(0,245,255,0.2)] flex items-center gap-2"
+                >
+                  <span className="text-lg">📸</span> Generate Banners
+                </button>
+                <button 
+                  onClick={() => setShowInput(!showInput)}
+                  className="bg-[#FF4D8D] hover:bg-[#FF669D] text-white px-6 py-2.5 rounded-xl font-bold text-sm transition-colors flex items-center gap-2 shadow-[0_0_20px_rgba(255,77,141,0.2)]"
+                >
+                  <span className="text-lg">+</span> Add Model
+                </button>
+              </div>
             </div>
 
             {showInput && (

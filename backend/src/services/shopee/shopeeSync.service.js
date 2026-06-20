@@ -1611,17 +1611,51 @@ async function runShopeeAutomationDemo(cookiesString, productName, shopeeProduct
                 }
               }
             }
-            if (v.avatarImage && fs.existsSync(v.avatarImage)) {
+            let avatarToUpload = v.avatarImage;
+            // Tự động tạo Avatar nếu chưa có nhưng có ảnh gốc
+            if ((!avatarToUpload || !fs.existsSync(avatarToUpload)) && v.rawImage && fs.existsSync(v.rawImage)) {
+              log(`[Browser] 🔧 Tự động tạo Avatar cho SKU con ${v.sku}...`);
+              try {
+                const watermarkSetting = await prisma.setting.findUnique({ where: { key: 'watermark_path' } });
+                if (watermarkSetting && watermarkSetting.value && fs.existsSync(watermarkSetting.value)) {
+                  const sX = await prisma.setting.findUnique({ where: { key: 'watermark_x' } });
+                  const sY = await prisma.setting.findUnique({ where: { key: 'watermark_y' } });
+                  const sScale = await prisma.setting.findUnique({ where: { key: 'watermark_scale' } });
+                  const wx2 = sX ? parseFloat(sX.value) : 50;
+                  const wy2 = sY ? parseFloat(sY.value) : 50;
+                  const wS2 = sScale ? parseFloat(sScale.value) : 30;
+                  const lwPx = Math.round(800 * (wS2 / 100));
+                  const wBuf = await sharp(watermarkSetting.value).resize({ width: lwPx }).toBuffer();
+                  const wMeta = await sharp(wBuf).metadata();
+                  const lPx = Math.round(800 * (wx2 / 100));
+                  const tPx = Math.round(800 * (wy2 / 100));
+                  const sL = Math.max(0, Math.min(800 - wMeta.width, lPx));
+                  const sT = Math.max(0, Math.min(800 - wMeta.height, tPx));
+                  const outPath = path.resolve(`uploads/avatar_${v.id}_${Date.now()}.jpg`);
+                  await sharp(v.rawImage)
+                    .resize(800, 800, { fit: 'contain', background: { r: 255, g: 255, b: 255, alpha: 1 } })
+                    .composite([{ input: wBuf, top: sT, left: sL }])
+                    .jpeg({ quality: 90 })
+                    .toFile(outPath);
+                  await prisma.variant.update({ where: { id: v.id }, data: { avatarImage: outPath } });
+                  avatarToUpload = outPath;
+                  log(`[Browser] ✅ Đã tạo Avatar cho ${v.sku}!`);
+                }
+              } catch (genErr) {
+                log(`[Browser] ⚠️ Không thể tạo Avatar cho ${v.sku}: ${genErr.message}`);
+              }
+            }
+            if (avatarToUpload && fs.existsSync(avatarToUpload)) {
               log(`[Browser] Upload Avatar: ${v.sku}`);
               const uploadBtn = imageCell.locator('input[type="file"]');
               if (await uploadBtn.count() > 0) {
-                await uploadBtn.first().setInputFiles(v.avatarImage);
+                await uploadBtn.first().setInputFiles(avatarToUpload);
               } else {
                 const [fileChooser] = await Promise.all([
                   page.waitForEvent("filechooser"),
                   imageCell.click({ force: true })
                 ]);
-                await fileChooser.setFiles(v.avatarImage);
+                await fileChooser.setFiles(avatarToUpload);
               }
               await imageCell.locator("img").first().waitFor({ state: "visible", timeout: 15e3 }).catch(() => {
               });
@@ -2106,8 +2140,46 @@ async function startFullAutoSyncBackground(prioritySku = null) {
           let avatarPath = "";
           if (avt.avatarImage && fs.existsSync(avt.avatarImage)) {
             avatarPath = avt.avatarImage;
+          } else if (avt.rawImage && fs.existsSync(avt.rawImage)) {
+            // Tự động tạo Avatar nếu có ảnh gốc nhưng chưa ghép Logo
+            pushLog(`🔧 Chưa có Avatar cho ${avt.sku}, đang tự động tạo từ ảnh gốc + Logo...`);
+            try {
+              const watermarkSetting = await prisma.setting.findUnique({ where: { key: 'watermark_path' } });
+              if (!watermarkSetting || !watermarkSetting.value || !fs.existsSync(watermarkSetting.value)) {
+                pushLog(`❌ LỖI: Chưa cấu hình Logo (Watermark)! Hãy vào Config để chọn file Logo trước.`);
+                break;
+              }
+              const settingX = await prisma.setting.findUnique({ where: { key: 'watermark_x' } });
+              const settingY = await prisma.setting.findUnique({ where: { key: 'watermark_y' } });
+              const settingScale = await prisma.setting.findUnique({ where: { key: 'watermark_scale' } });
+              const wx = settingX ? parseFloat(settingX.value) : 50;
+              const wy = settingY ? parseFloat(settingY.value) : 50;
+              const wScale = settingScale ? parseFloat(settingScale.value) : 30;
+
+              const logoWidthPx = Math.round(800 * (wScale / 100));
+              const watermarkBuffer = await sharp(watermarkSetting.value).resize({ width: logoWidthPx }).toBuffer();
+              const watermarkMeta = await sharp(watermarkBuffer).metadata();
+              const leftPx = Math.round(800 * (wx / 100));
+              const topPx = Math.round(800 * (wy / 100));
+              const safeLeft = Math.max(0, Math.min(800 - watermarkMeta.width, leftPx));
+              const safeTop = Math.max(0, Math.min(800 - watermarkMeta.height, topPx));
+
+              const outputPath = path.resolve(`uploads/avatar_${avt.id}_${Date.now()}.jpg`);
+              await sharp(avt.rawImage)
+                .resize(800, 800, { fit: 'contain', background: { r: 255, g: 255, b: 255, alpha: 1 } })
+                .composite([{ input: watermarkBuffer, top: safeTop, left: safeLeft }])
+                .jpeg({ quality: 90 })
+                .toFile(outputPath);
+
+              await prisma.variant.update({ where: { id: avt.id }, data: { avatarImage: outputPath } });
+              avatarPath = outputPath;
+              pushLog(`✅ Đã tự động tạo Avatar cho ${avt.sku} thành công!`);
+            } catch (genErr) {
+              pushLog(`❌ LỖI tạo Avatar tự động cho ${avt.sku}: ${genErr.message}`);
+              break;
+            }
           } else {
-            pushLog(`❌ LỖI: Chưa generate Avatar cho biến thể AVT ${avt.sku}! Hãy chạy Tạo logo.`);
+            pushLog(`❌ LỖI: Biến thể AVT ${avt.sku} không có cả ảnh gốc lẫn Avatar! Hãy nhập lại ảnh từ Sapo.`);
             break;
           }
 

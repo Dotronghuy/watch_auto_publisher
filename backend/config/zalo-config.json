@@ -1,11 +1,13 @@
 {
   "groups": [
-    "test tool"
+    "I&W Carnival - Kết Nối Đối Tác Đại Lý",
+    "ZENWATCH TỔNG KHO ĐH I&W CARNIVAL, LOBINNI, KASSAW",
+    "ZENWATCH - BUÔN SỈ CTV ĐỒNG HỒ CHÍNH HÃNG"
   ],
-  "phone": "0388889385",
+  "phone": "0989 186 365 - 0989 248 505",
   "sheetUrl": "https://docs.google.com/spreadsheets/d/16SG7sTFwAkKQ29Oqtbi3aeA2iEAJRq5l/edit",
-  "postsPerSession": 1,
-  "delayMinutes": 1,
+  "postsPerSession": 5,
+  "delayMinutes": 120,
   "cooldownDays": 1,
   "contentTone": "auto"
 }

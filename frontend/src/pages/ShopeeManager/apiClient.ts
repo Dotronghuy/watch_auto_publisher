@@ -9,6 +9,7 @@ const apiClient = {
   getMissingShopeeVariants: async () => (await fetch('/api/shopee/variants/missing')).json(),
   getSetting: async (key: string) => { const r = await fetch(`/api/shopee/settings/${key}`); const d = await r.json(); return d.value; },
   saveSetting: async (key: string, value: string) => (await fetch('/api/shopee/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key, value }) })).json(),
+  generateCollectionBanners: async (modelIds: string[]) => (await fetch('/api/banner/generate-collection', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ modelIds }) })).json(),
   
   // Thay thế các hàm gọi Electron File Dialog bằng Web File Input và FormData Upload
   selectImage: async () => {
@@ -81,7 +82,22 @@ const apiClient = {
     });
   },
   updateShopeeIdsFromFile: async () => ({ success: false, message: 'Tính năng không hỗ trợ' }),
-  importShopeeIdsCustomExcel: async () => ({ success: false, message: 'Tính năng không hỗ trợ' }),
+  importShopeeIdsCustomExcel: async () => {
+    return new Promise((resolve) => {
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = '.xlsx, .xls';
+      input.onchange = async (e: any) => {
+        const file = e.target.files[0];
+        if (!file) return resolve({ success: false, message: 'Đã hủy chọn file.' });
+        const formData = new FormData();
+        formData.append('file', file);
+        const res = await fetch('/api/shopee/import-shopee-excel', { method: 'POST', body: formData });
+        resolve(await res.json());
+      };
+      input.click();
+    });
+  },
   selectFile: async () => {
     return new Promise((resolve) => {
       const input = document.createElement('input');
@@ -113,6 +129,12 @@ const apiClient = {
   syncShopee: async (variantId: string) => (await fetch(`/api/shopee/sync-shopee/${variantId}`, { method: 'POST' })).json(),
   testTelegramNotification: async () => ({ success: true, message: 'Web: Test Telegram' }),
   getAutoSyncLogs: async () => (await fetch('/api/shopee/auto-sync-logs')).json(),
+
+  generateCollectionBanners: async (modelIds: string[]) => (await fetch('/api/banner/generate-collection', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ modelIds })
+  })).json(),
 
   onSapoProgress: (callback: any) => {},
   onSyncProgress: (callback: any) => {}

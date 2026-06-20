@@ -24,6 +24,7 @@ export default function ZenwatchZalo() {
   const fetchStatus = useCallback(async () => {
     try {
       const res = await fetch('/api/zenwatch/zalo/status');
+      if (!res.ok) return;
       const data = await res.json();
       setStatus(data);
     } catch (e) {}
@@ -32,6 +33,7 @@ export default function ZenwatchZalo() {
   const fetchConfig = useCallback(async () => {
     try {
       const res = await fetch('/api/zenwatch/zalo/config');
+      if (!res.ok) return;
       const data = await res.json();
       setConfig(data);
       setConfigLoaded(true);
@@ -41,6 +43,7 @@ export default function ZenwatchZalo() {
   const fetchHistory = useCallback(async () => {
     try {
       const res = await fetch('/api/zenwatch/zalo/history?limit=10');
+      if (!res.ok) return;
       const data = await res.json();
       setHistory(data);
     } catch (e) {}
@@ -178,15 +181,15 @@ export default function ZenwatchZalo() {
   };
 
   // ── Filtered logs ──
-  const filteredLogs = status.logs.filter(l => {
+  const filteredLogs = (status.logs || []).filter(l => {
     if (logFilter === 'all') return true;
     if (logFilter === 'success') return l.type === 'success' || l.type === 'highlight';
     if (logFilter === 'error') return l.type === 'error' || l.type === 'warning';
     return true;
   });
 
-  // ── Stats ──
-  const todayCount = history.items.filter(i => {
+  const safeHistoryItems = Array.isArray(history?.items) ? history.items : [];
+  const todayCount = safeHistoryItems.filter(i => {
     const d = new Date(i.postedAt);
     const now = new Date();
     return d.toDateString() === now.toDateString();
@@ -319,7 +322,7 @@ export default function ZenwatchZalo() {
                   <tr><th>Mã SP</th><th>Thời gian</th><th></th></tr>
                 </thead>
                 <tbody>
-                  {history.items.slice(0, 8).map(item => (
+                  {safeHistoryItems.slice(0, 8).map(item => (
                     <tr key={item.id}>
                       <td style={{ fontWeight: 500 }}>{item.productId}</td>
                       <td>{new Date(item.postedAt).toLocaleString('vi-VN')}</td>

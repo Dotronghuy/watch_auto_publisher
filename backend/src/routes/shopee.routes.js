@@ -498,4 +498,104 @@ router.post('/shopee-login', async (req, res) => {
   }
 });
 
+router.post('/import-shopee-excel', upload.single('file'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ success: false, message: 'Chưa chọn file' });
+  try {
+    const _xlsx = await import('xlsx');
+    const xlsx = _xlsx.default || _xlsx;
+    const workbook = xlsx.readFile(req.file.path);
+    const sheetName = workbook.SheetNames[0];
+    const data = xlsx.utils.sheet_to_json(workbook.Sheets[sheetName], { header: 1 });
+
+    let updatedCount = 0;
+    let skippedCount = 0;
+
+    // Auto-detect format dựa trên header row
+    const header = data[0] || [];
+    let shopeeIdCol = -1;
+    let skuCol = -1;
+    let startRow = 1; // Bỏ qua header
+
+    for (let c = 0; c < header.length; c++) {
+      const h = String(header[c] || '').trim().toLowerCase();
+      if (h.includes('id sản phẩm') || h.includes('product id') || h === 'id') shopeeIdCol = c;
+      if (h.includes('sku phân loại') || h.includes('sku') || h.includes('mã sku')) skuCol = c;
+    }
+
+    // Nếu không tìm thấy header, thử detect format dựa trên dữ liệu thực
+    if (shopeeIdCol === -1 && skuCol === -1) {
+      // Quét 200 dòng đầu để tìm format thật (vì có thể nhiều dòng đầu trống)
+      let detected = false;
+      for (let probe = 0; probe < Math.min(200, data.length); probe++) {
+        const row = data[probe] || [];
+        const colB = String(row[1] || '').trim();
+        const colC = String(row[2] || '').trim();
+        // Format Google Sheet log: cột B = Shopee ID (số dài), cột C = SKU (chứa "-")
+        if (/^\d{5,}$/.test(colB) && colC.includes('-')) {
+          shopeeIdCol = 1;
+          skuCol = 2;
+          startRow = 0;
+          detected = true;
+          break;
+        }
+      }
+      if (!detected) {
+        // Fallback: Format Shopee Seller Center (cột A = ID, cột F = SKU)
+        shopeeIdCol = 0;
+        skuCol = 5;
+      }
+    }
+
+    let currentShopeeId = '';
+
+    for (let i = startRow; i < data.length; i++) {
+      const row = data[i];
+      if (!row || row.length === 0) continue;
+
+      const rawId = row[shopeeIdCol] ? String(row[shopeeIdCol]).trim() : '';
+      if (rawId && /^\d+$/.test(rawId)) currentShopeeId = rawId;
+
+      const sku = row[skuCol] ? String(row[skuCol]).trim() : '';
+      if (!sku || !currentShopeeId) continue;
+
+      // Tìm variant chính xác theo SKU
+      const variant = await prisma.variant.findFirst({
+        where: { sku: sku }
+      });
+
+      if (variant) {
+        await prisma.variant.update({
+          where: { id: variant.id },
+          data: { shopeeProductId: currentShopeeId }
+        });
+        updatedCount++;
+      } else {
+        // Thử tìm theo base model name (VD: "737G2-S1" -> tìm tất cả "737G2-*")
+        const baseName = sku.includes('-') ? sku.split('-')[0].trim() : sku;
+        const variants = await prisma.variant.findMany({
+          where: { sku: { startsWith: baseName + '-' } }
+        });
+        for (const v of variants) {
+          if (!v.shopeeProductId) { // Chỉ cập nhật nếu chưa có
+            await prisma.variant.update({
+              where: { id: v.id },
+              data: { shopeeProductId: currentShopeeId }
+            });
+            updatedCount++;
+          }
+        }
+        if (variants.length === 0) skippedCount++;
+      }
+    }
+
+    res.json({ 
+      success: true, 
+      message: `Đã cập nhật Shopee ID cho ${updatedCount} SKU. Bỏ qua ${skippedCount} SKU không tìm thấy.`,
+      count: updatedCount
+    });
+  } catch (err) {
+    res.json({ success: false, message: err.message });
+  }
+});
+
 export default router;

@@ -1,11 +1,5 @@
 {
-  "timeSlots": [
-    "09:30",
-    "11:00",
-    "14:00",
-    "16:00",
-    "17:00"
-  ],
+  "timeSlots": [],
   "igDelay": 10,
   "delayUnit": "minutes",
   "mode": "real",
@@ -17,7 +11,7 @@
   "sdApiUrl": "http://127.0.0.1:8188",
   "googleSheetId": "1tWg6zzAw6F9_2vlvOFfPy_2tV88xFGPB-4f5NvbwS_M",
   "aiTasks": {
-    "fbChatUrl": "6a31736b-6f54-83ec-ab46-fd68c5c11a35",
+    "fbChatUrl": "6a35fb8b-3dfc-83ec-b7eb-e49ac6ff70e9",
     "igChatUrl": "6a3172de-0f04-83ec-a85f-7a2812209208"
   },
   "botPauseHours": 2,

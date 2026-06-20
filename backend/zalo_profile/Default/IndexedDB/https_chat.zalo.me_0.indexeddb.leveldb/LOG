@@ -1,0 +1,21 @@
+2026/06/20-14:21:58.193 7450 Reusing MANIFEST C:\Users\Admin\Downloads\watch_auto_publisher-master\backend\zalo_profile\Default\IndexedDB\https_chat.zalo.me_0.indexeddb.leveldb/MANIFEST-000001
+2026/06/20-14:21:58.193 7450 Recovering log #7
+2026/06/20-14:21:58.212 7450 Reusing old log C:\Users\Admin\Downloads\watch_auto_publisher-master\backend\zalo_profile\Default\IndexedDB\https_chat.zalo.me_0.indexeddb.leveldb/000007.log 
+2026/06/20-14:21:59.995 990 Level-0 table #12: started
+2026/06/20-14:22:00.008 990 Level-0 table #12: 1806160 bytes OK
+2026/06/20-14:22:00.009 990 Delete type=0 #7
+2026/06/20-14:22:00.010 990 Compacting 1@1 + 1@2 files
+2026/06/20-14:22:00.025 990 Generated table #13@1: 12716 keys, 1573848 bytes
+2026/06/20-14:22:00.025 990 Compacted 1@1 + 1@2 files => 1573848 bytes
+2026/06/20-14:22:00.026 990 compacted to: files[ 0 0 1 0 0 0 0 ]
+2026/06/20-14:22:54.405 7208 Level-0 table #15: started
+2026/06/20-14:22:54.431 7208 Level-0 table #15: 1627235 bytes OK
+2026/06/20-14:22:54.432 7208 Delete type=2 #9
+2026/06/20-14:22:54.432 7208 Delete type=0 #11
+2026/06/20-14:22:54.433 7208 Delete type=2 #12
+2026/06/20-14:22:56.768 7208 Compacting 1@1 + 1@2 files
+2026/06/20-14:22:56.805 7208 Generated table #16@1: 18733 keys, 2145221 bytes
+2026/06/20-14:22:56.805 7208 Compacted 1@1 + 1@2 files => 2145221 bytes
+2026/06/20-14:22:56.805 7208 compacted to: files[ 0 0 1 0 0 0 0 ]
+2026/06/20-14:22:56.805 7208 Delete type=2 #13
+2026/06/20-14:22:56.805 7208 Delete type=2 #15
