@@ -1,9 +1,0 @@
-2026/06/20-12:36:39.581 4a20 Reusing MANIFEST C:\Users\Admin\Downloads\watch_auto_publisher-master\backend\zalo_profile\Default\Local Storage\leveldb/MANIFEST-000001
-2026/06/20-12:36:39.585 4a20 Recovering log #14
-2026/06/20-12:36:39.585 4a20 Level-0 table #17: started
-2026/06/20-12:36:39.588 4a20 Level-0 table #17: 41236 bytes OK
-2026/06/20-12:36:39.588 4a20 Recovering log #16
-2026/06/20-12:36:39.590 4a20 Reusing old log C:\Users\Admin\Downloads\watch_auto_publisher-master\backend\zalo_profile\Default\Local Storage\leveldb/000016.log 
-2026/06/20-12:36:39.591 4a20 Delete type=0 #14
-2026/06/20-12:37:16.276 4a20 Level-0 table #19: started
-2026/06/20-12:37:16.282 4a20 Level-0 table #19: 43196 bytes OK
