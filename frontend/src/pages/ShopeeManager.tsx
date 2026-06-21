@@ -30,6 +30,12 @@ function App() {
   const [showMissingModal, setShowMissingModal] = useState(false)
   const [missingVariants, setMissingVariants] = useState<any[]>([])
 
+  // Banner Modal
+  const [showBannerModal, setShowBannerModal] = useState(false)
+  const [bannerSelectedIds, setBannerSelectedIds] = useState<Set<string>>(new Set())
+  const [bannerSearch, setBannerSearch] = useState('')
+  const [bannerGenerating, setBannerGenerating] = useState(false)
+
   const [watermarkPath, setWatermarkPath] = useState('')
   const [watermarkX, setWatermarkX] = useState(50)
   const [watermarkY, setWatermarkY] = useState(50)
@@ -199,43 +205,83 @@ function App() {
     setIsBulkProcessing(false)
   }
 
-  const handleGenerateCollectionBanners = async () => {
-    // Fix cứng chỉ test trên Model 55886G (Hoặc 5586G) theo yêu cầu của Sếp
-    const targetModels = models.filter(m => m.name.includes('55886G') || m.name.includes('5586G'));
-    
-    if (targetModels.length === 0) {
-       alert('Không tìm thấy Model nào có mã 55886G hoặc 5586G trong danh sách hiện tại để test!');
-       return;
-    }
-    
-    const modelIds = targetModels.map(m => m.id);
-    
-    if (!window.confirm(`Xác nhận test tạo Banner Bộ Sưu Tập cho mã ${targetModels[0].name}?`)) return;
+  const handleOpenBannerModal = () => {
+    setBannerSelectedIds(new Set())
+    setBannerSearch('')
+    setShowBannerModal(true)
+  }
 
+  const handleToggleBannerModel = (id: string) => {
+    setBannerSelectedIds(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  const handleSelectAllBanner = (filtered: any[]) => {
+    const allSelected = filtered.every(m => bannerSelectedIds.has(m.id))
+    if (allSelected) {
+      // Bỏ chọn tất cả filtered
+      setBannerSelectedIds(prev => {
+        const next = new Set(prev)
+        filtered.forEach(m => next.delete(m.id))
+        return next
+      })
+    } else {
+      setBannerSelectedIds(prev => {
+        const next = new Set(prev)
+        filtered.forEach(m => next.add(m.id))
+        return next
+      })
+    }
+  }
+
+  const handleConfirmGenerateBanners = async () => {
+    // Nếu không chọn model nào → chạy tất cả
+    const targetModels = bannerSelectedIds.size > 0
+      ? models.filter(m => bannerSelectedIds.has(m.id))
+      : models;
+
+    if (targetModels.length === 0) {
+      setNotification('⚠️ Không có model nào để tạo banner!');
+      setTimeout(() => setNotification(''), 3000);
+      return;
+    }
+
+    const modelIds = targetModels.map(m => m.id);
+    setBannerGenerating(true);
+    setShowBannerModal(false);
     setIsBulkProcessing(true);
     setNotification(`⏳ Đang chạy AI tách nền và sinh Banner cho ${targetModels.length} Models...`);
-    
+
     try {
       const result = await api.generateCollectionBanners(modelIds);
       if (result.success) {
         let successCount = 0;
+        const details: string[] = [];
         result.results.forEach((r: any) => {
-          if (r.success) successCount++;
+          if (r.success) {
+            successCount++;
+            details.push(`✅ ${r.modelName}: ${r.layout || 'OK'}`);
+          } else {
+            details.push(`❌ ${r.modelName}: ${r.message}`);
+          }
         });
         setNotification(`✅ Hoàn tất! Tạo thành công ${successCount}/${targetModels.length} Banners.`);
-        alert(`Đã hoàn tất!\nThành công: ${successCount}\nLỗi/Bỏ qua: ${targetModels.length - successCount}\nCác ảnh Banner được lưu trong thư mục: backend/temp_images/`);
       } else {
         console.error('Server response:', result);
-        alert('Lỗi tạo Banner: ' + (result.message || JSON.stringify(result) || 'Lỗi không xác định'));
-        setNotification('');
+        setNotification('❌ Lỗi tạo Banner: ' + (result.message || 'Lỗi không xác định'));
       }
     } catch (err: any) {
       console.error('Client error:', err);
-      alert('Lỗi kết nối / Client Error: ' + err.message);
-      setNotification('');
+      setNotification('❌ Lỗi kết nối: ' + err.message);
     }
-    
+
     setIsBulkProcessing(false);
+    setBannerGenerating(false);
+    setTimeout(() => setNotification(''), 8000);
   }
 
   const loadSettings = async () => {
@@ -1189,12 +1235,124 @@ function App() {
               </div>
               <div className="flex items-center gap-3 shrink-0 flex-wrap">
                 <button 
-                  onClick={handleGenerateCollectionBanners}
+                  onClick={handleOpenBannerModal}
                   disabled={isBulkProcessing || models.length === 0}
                   className="bg-gradient-to-r from-[#00F5FF] to-[#00BFFF] hover:opacity-90 disabled:opacity-50 text-black px-6 py-2.5 rounded-xl font-bold text-sm transition-all shadow-[0_0_20px_rgba(0,245,255,0.2)] flex items-center gap-2"
                 >
                   <span className="text-lg">📸</span> Generate Banners
                 </button>
+
+                {/* Banner Modal */}
+                {showBannerModal && (
+                  <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[100] flex justify-center items-center p-4" onClick={() => setShowBannerModal(false)}>
+                    <div className="bg-[#12141C] border border-[#2D3349] rounded-2xl w-full max-w-lg max-h-[80vh] flex flex-col shadow-2xl animate-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()}>
+                      {/* Header */}
+                      <div className="p-5 border-b border-[#2D3349] flex justify-between items-center bg-[#0B0F19] rounded-t-2xl">
+                        <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                          📸 Generate Banners
+                        </h3>
+                        <button onClick={() => setShowBannerModal(false)} className="text-[#94A3B8] hover:text-white text-xl">×</button>
+                      </div>
+
+                      {/* Search */}
+                      <div className="p-4 border-b border-[#2D3349]/50">
+                        <input
+                          type="text"
+                          placeholder="🔍 Tìm kiếm model..."
+                          value={bannerSearch}
+                          onChange={e => setBannerSearch(e.target.value)}
+                          className="w-full bg-[#0B0F19] border border-[#2D3349] rounded-xl px-4 py-2.5 text-white text-sm outline-none focus:border-[#00F5FF]/50 placeholder-[#515C67]"
+                        />
+                        <p className="text-[11px] text-[#515C67] mt-2">
+                          💡 Không chọn model nào = tạo banner cho <span className="text-[#00F5FF]">tất cả {models.length} models</span>
+                        </p>
+                      </div>
+
+                      {/* Model List */}
+                      <div className="flex-1 overflow-y-auto p-3 space-y-1 custom-scrollbar">
+                        {(() => {
+                          const filtered = models.filter(m =>
+                            m.name.toLowerCase().includes(bannerSearch.toLowerCase())
+                          );
+                          const allSelected = filtered.length > 0 && filtered.every(m => bannerSelectedIds.has(m.id));
+                          return (
+                            <>
+                              {/* Select All */}
+                              <button
+                                onClick={() => handleSelectAllBanner(filtered)}
+                                className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-bold transition-all border mb-2 ${
+                                  allSelected
+                                    ? 'bg-[#00F5FF]/10 border-[#00F5FF]/30 text-[#00F5FF]'
+                                    : 'bg-[#0B0F19] border-[#2D3349]/50 text-[#94A3B8] hover:border-[#00F5FF]/30'
+                                }`}
+                              >
+                                <div className={`w-5 h-5 rounded-md border-2 flex items-center justify-center transition-all ${
+                                  allSelected ? 'bg-[#00F5FF] border-[#00F5FF]' : 'border-[#515C67]'
+                                }`}>
+                                  {allSelected && <span className="text-black text-xs font-bold">✓</span>}
+                                </div>
+                                Chọn tất cả ({filtered.length})
+                              </button>
+
+                              {filtered.map(m => {
+                                const isSelected = bannerSelectedIds.has(m.id);
+                                const variantCount = m.variants?.length || 0;
+                                const bannerCount = m.variants?.filter((v: any) => v.bannerPosition)?.length || 0;
+                                return (
+                                  <button
+                                    key={m.id}
+                                    onClick={() => handleToggleBannerModel(m.id)}
+                                    className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm transition-all border ${
+                                      isSelected
+                                        ? 'bg-[#00F5FF]/10 border-[#00F5FF]/30 text-white'
+                                        : 'bg-[#0B0F19]/50 border-transparent text-[#94A3B8] hover:bg-[#0B0F19] hover:border-[#2D3349]/50'
+                                    }`}
+                                  >
+                                    <div className={`w-5 h-5 rounded-md border-2 flex items-center justify-center shrink-0 transition-all ${
+                                      isSelected ? 'bg-[#00F5FF] border-[#00F5FF]' : 'border-[#515C67]'
+                                    }`}>
+                                      {isSelected && <span className="text-black text-xs font-bold">✓</span>}
+                                    </div>
+                                    <span className="font-bold truncate">{m.name}</span>
+                                    <span className="ml-auto text-[10px] text-[#515C67] shrink-0">
+                                      {variantCount} SKU
+                                      {bannerCount > 0 && <span className="text-[#00F5FF] ml-1">• {bannerCount} AVT</span>}
+                                    </span>
+                                  </button>
+                                );
+                              })}
+
+                              {filtered.length === 0 && (
+                                <div className="text-center text-[#515C67] text-sm py-8">Không tìm thấy model nào</div>
+                              )}
+                            </>
+                          );
+                        })()}
+                      </div>
+
+                      {/* Footer */}
+                      <div className="p-4 border-t border-[#2D3349] flex items-center justify-between bg-[#0B0F19] rounded-b-2xl">
+                        <span className="text-xs text-[#515C67]">
+                          {bannerSelectedIds.size > 0
+                            ? `Đã chọn ${bannerSelectedIds.size} model`
+                            : `Sẽ chạy tất cả ${models.length} models`}
+                        </span>
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => setShowBannerModal(false)}
+                            className="px-5 py-2 rounded-xl text-sm font-bold text-[#94A3B8] hover:text-white border border-[#2D3349] hover:border-[#515C67] transition-all"
+                          >Hủy</button>
+                          <button
+                            onClick={handleConfirmGenerateBanners}
+                            className="px-5 py-2 rounded-xl text-sm font-bold bg-gradient-to-r from-[#00F5FF] to-[#00BFFF] text-black hover:opacity-90 transition-all shadow-[0_0_15px_rgba(0,245,255,0.2)] flex items-center gap-2"
+                          >
+                            📸 Tạo Banner {bannerSelectedIds.size > 0 ? `(${bannerSelectedIds.size})` : '(Tất cả)'}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
                 <button 
                   onClick={() => setShowInput(!showInput)}
                   className="bg-[#FF4D8D] hover:bg-[#FF669D] text-white px-6 py-2.5 rounded-xl font-bold text-sm transition-colors flex items-center gap-2 shadow-[0_0_20px_rgba(255,77,141,0.2)]"

@@ -258,12 +258,18 @@ router.post('/import-sapo-excel', upload.single('file'), async (req, res) => {
       }
 
       const price = row[4] ? Number(String(row[4]).replace(/[^0-9]/g, '')) : 0;
-      const isAvatar = (row[5] && String(row[5]).trim() === '1') ? true : false;
+      // Cột F (row[5]): Vị trí banner — 1=Giữa(AVT chính), 2=Trái, 3=Phải
+      const rawBannerPos = row[5] ? parseInt(String(row[5]).trim()) : null;
+      const bannerPosition = [1, 2, 3].includes(rawBannerPos) ? rawBannerPos : null;
+
+      const updateData = { price: price };
+      if (localImagePath) updateData.rawImage = localImagePath;
+      if (bannerPosition !== null) updateData.bannerPosition = bannerPosition;
 
       await prisma.variant.upsert({
         where: { sku: sku },
-        update: { rawImage: localImagePath || undefined, price: price, isAvatar: isAvatar },
-        create: { modelId: model.id, color: sku, sku: sku, price: price, rawImage: localImagePath, isAvatar: isAvatar }
+        update: updateData,
+        create: { modelId: model.id, color: sku, sku: sku, price: price, rawImage: localImagePath, bannerPosition: bannerPosition }
       });
       count++;
     }

@@ -24,44 +24,55 @@ export const generateBannersForModels = async (req, res) => {
         continue;
       }
 
-      // 2. Lọc ra các variants có ảnh gốc (rawImage)
+      // 2. Lọc ra các variants có ảnh gốc (rawImage) và có bannerPosition
       const validVariants = model.variants.filter(v => v.rawImage && fs.existsSync(v.rawImage));
       
-      // Tìm các biến thể T1, T2, T3
-      const variantT1 = validVariants.find(v => v.sku.includes('T1'));
-      const variantT2 = validVariants.find(v => v.sku.includes('T2'));
-      const variantT3 = validVariants.find(v => v.sku.includes('T3'));
+      // Tìm theo bannerPosition (1=Giữa, 2=Trái, 3=Phải)
+      const centerVar = validVariants.find(v => v.bannerPosition === 1);
+      const leftVar   = validVariants.find(v => v.bannerPosition === 2);
+      const rightVar  = validVariants.find(v => v.bannerPosition === 3);
 
-      if (!variantT1 || !variantT2 || !variantT3) {
-        // Fallback: nếu không có đủ T1, T2, T3 thì lấy 3 cái đầu tiên có ảnh
-        if (validVariants.length < 3) {
+      // Fallback: nếu không có bannerPosition, thử tìm theo SKU (T1, T2, T3)
+      const fallbackCenter = centerVar || validVariants.find(v => v.sku.includes('-T1'));
+      const fallbackLeft   = leftVar   || validVariants.find(v => v.sku.includes('-T2'));
+      const fallbackRight  = rightVar  || validVariants.find(v => v.sku.includes('-T3'));
+
+      // Xây dựng object ảnh theo vị trí có sẵn
+      const bannerImages = {};
+      if (fallbackCenter) bannerImages.center = fallbackCenter.rawImage;
+      if (fallbackLeft)   bannerImages.left   = fallbackLeft.rawImage;
+      if (fallbackRight)  bannerImages.right  = fallbackRight.rawImage;
+
+      // Kiểm tra: ít nhất phải có ảnh giữa (AVT chính)
+      if (!bannerImages.center) {
+        // Thử lấy bất kỳ ảnh nào có sẵn làm center
+        if (validVariants.length > 0) {
+          bannerImages.center = validVariants[0].rawImage;
+        } else {
           results.push({ 
             modelId, 
             modelName: model.name,
             success: false, 
-            message: `Model này chỉ có ${validVariants.length} ảnh hợp lệ, cần ít nhất 3 ảnh để tạo banner.` 
+            message: `Model này không có ảnh nào hợp lệ hoặc chưa đánh dấu vị trí banner.` 
           });
           continue;
         }
-        validVariants.sort((a, b) => a.sku.localeCompare(b.sku));
-        const selectedVariants = validVariants.slice(0, 3);
-        var imagePaths = selectedVariants.map(v => v.rawImage);
-      } else {
-        // Có đủ T1, T2, T3 -> Xếp đúng thứ tự: Trái(T1), Giữa(T2), Phải(T3)
-        var imagePaths = [variantT1.rawImage, variantT2.rawImage, variantT3.rawImage];
       }
-      
-      // Tên mã sẽ lấy model.name (ví dụ 19069-A1)
+
+      const imageCount = Object.keys(bannerImages).length;
+      console.log(`[Banner] Model ${model.name}: ${imageCount} ảnh banner (${Object.keys(bannerImages).join(', ')})`);
+
       const skuText = model.name;
 
       try {
-        // 3. Gọi service tạo banner
-        const bannerPath = await generateCollectionBanner(imagePaths, skuText);
+        // 3. Gọi service tạo banner với số lượng ảnh linh hoạt
+        const bannerPath = await generateCollectionBanner(bannerImages, skuText);
         results.push({
           modelId,
           modelName: model.name,
           success: true,
-          bannerPath
+          bannerPath,
+          layout: `${imageCount} đồng hồ`
         });
       } catch (err) {
         results.push({
