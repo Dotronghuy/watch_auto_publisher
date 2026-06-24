@@ -9,11 +9,60 @@ datasource db {
   url      = "file:./app.db"
 }
 
+model Shop {
+  id            String   @id @default(uuid())
+  name          String
+  publishMode   String   @default("GROUPED") // GROUPED, STANDALONE
+  
+  users         User[]
+  products      WatchModel[]
+  templates     TemplateConfig[]
+  shopeeAccount ShopeeAccount?
+
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+model User {
+  id          String   @id @default(uuid())
+  username    String   @unique
+  password    String
+  role        String   @default("user")
+  permissions String?  // JSON string
+  
+  shopId      String?
+  shop        Shop?    @relation(fields: [shopId], references: [id], onDelete: SetNull)
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model TemplateConfig {
+  id              String   @id @default(uuid())
+  shopId          String
+  nameTemplate    String   @default("[Mã {{sku}}] {{product_name}} chính hãng")
+  descTemplate    String   @default("Sản phẩm {{product_name}} hiện đang có sẵn...")
+  
+  shop            Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+}
+
+model ShopeeAccount {
+  id              String   @id @default(uuid())
+  shopId          String   @unique
+  cookieData      String?  
+  
+  shop            Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+}
+
 model WatchModel {
   id          String    @id @default(uuid())
   name        String    @unique // VD: "735G"
   description String?
   basePrice   Float?
+  
+  shopId      String?
+  shop        Shop?     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
   variants    Variant[]
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
@@ -47,9 +96,10 @@ model SyncTask {
 }
 
 model Setting {
-  id    String @id @default(uuid())
-  key   String @unique
-  value String
+  id      String  @id @default(uuid())
+  key     String  @unique
+  value   String
+  shopId  String?
 }
 
 model ZaloPostHistory {

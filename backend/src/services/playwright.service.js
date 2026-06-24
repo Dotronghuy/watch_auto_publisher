@@ -4,11 +4,46 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { liveLog } from '../utils/liveLog.js';
+import { PrismaClient } from '@prisma/client';
 
+const prisma = new PrismaClient();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 chromium.use(stealth());
+
+// ─── GEMINI API FALLBACK (Dùng khi toggle BẬT, thay thế Playwright) ───
+async function callGeminiAPIDirectly(prompt, images = []) {
+  const geminiSetting = await prisma.setting.findUnique({ where: { key: 'gemini_api_key' } });
+  const geminiKeys = (geminiSetting?.value || '').split(',').map(k => k.trim()).filter(k => k !== '');
+  if (geminiKeys.length === 0) throw new Error('Không có Gemini API Key nào được cấu hình!');
+  
+  const { GoogleGenerativeAI } = await import('@google/generative-ai');
+  
+  for (let i = 0; i < geminiKeys.length; i++) {
+    let retryCount = 1;
+    while (true) {
+      try {
+        const ai = new GoogleGenerativeAI(geminiKeys[i]);
+        const model = ai.getGenerativeModel({ model: 'gemini-2.5-flash' });
+        const parts = [prompt, ...images.map(img => ({ inlineData: { data: img.data, mimeType: img.mimeType } }))];
+        const result = await model.generateContent(parts);
+        return result.response.text().trim();
+      } catch (error) {
+        if (error.message?.includes('429') || error.message?.includes('503')) {
+          console.warn(`[API Fallback] Gemini Key ${i + 1} bận. Retry ${retryCount}/3...`);
+          await new Promise(r => setTimeout(r, 5000));
+          retryCount++;
+          if (retryCount > 3) break;
+          continue;
+        }
+        console.error(`[API Fallback] Lỗi Gemini Key ${i + 1}:`, error.message);
+        break;
+      }
+    }
+  }
+  throw new Error('Tất cả Gemini API Key đều không khả dụng.');
+}
 
 const getRandomSampleImageLocal = () => {
     try {
@@ -53,6 +88,17 @@ const updateAiTaskUrl = (type, url) => {
 };
 
 export const generateBackgroundOnChatGPT = async (imagePath, promptsArray, abortSignal = null, sampleImagePath = null, isNewSession = true, extraWatchImages = []) => {
+    // ── Toggle Check: Tạo Ảnh AI ──
+    // BẬT (true) = Bỏ qua Playwright, dùng ảnh gốc (vì Gemini API không sinh ảnh được)
+    // TẮT (false/default) = Giữ Playwright ChatGPT Plus như cũ
+    try {
+      const allowImage = await prisma.setting.findUnique({ where: { key: 'gemini_allow_image' } });
+      if (allowImage && allowImage.value === 'true') {
+        console.log('[Toggle] ✅ Tạo Ảnh AI chuyển sang chế độ API → Bỏ qua Playwright, trả về ảnh gốc.');
+        return imagePath ? [imagePath] : [];
+      }
+    } catch (e) { /* ignore, proceed with Playwright */ }
+
     console.log('\n--- BẮT ĐẦU TIẾN TRÌNH PLAYWRIGHT ---');
     const userDataDir = path.join(__dirname, '../../chrome_data_chatgpt');
     
@@ -375,6 +421,25 @@ CRITICAL RULES:
 };
 
 export const generateContentOnChatGPT = async (prompt, type, imagePath = null) => {
+    // ── Toggle Check: Viết Content bằng API thay vì Playwright ──
+    try {
+      const allowContent = await prisma.setting.findUnique({ where: { key: 'gemini_allow_content' } });
+      if (allowContent && allowContent.value === 'true') {
+        console.log('[Toggle] ✅ Viết Content MXH bằng Gemini API (thay Playwright)...');
+        let images = [];
+        if (imagePath && fs.existsSync(imagePath)) {
+          const base64Data = fs.readFileSync(imagePath, { encoding: 'base64' });
+          const mimeType = imagePath.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg';
+          images.push({ data: base64Data, mimeType });
+        }
+        const result = await callGeminiAPIDirectly(prompt, images);
+        console.log('[Toggle] ✅ Đã nhận content từ Gemini API thành công!');
+        return result;
+      }
+    } catch (e) {
+      console.warn('[Toggle] ⚠️ Lỗi gọi Gemini API, fallback về Playwright:', e.message);
+    }
+
     console.log('\n--- BẮT ĐẦU TIẾN TRÌNH PLAYWRIGHT (CHATGPT TEXT) ---');
     const userDataDir = path.join(__dirname, '../../chrome_data_chatgpt');
     

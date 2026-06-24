@@ -11,11 +11,11 @@
   "sdApiUrl": "http://127.0.0.1:8188",
   "googleSheetId": "1tWg6zzAw6F9_2vlvOFfPy_2tV88xFGPB-4f5NvbwS_M",
   "aiTasks": {
-    "fbChatUrl": "6a35fb8b-3dfc-83ec-b7eb-e49ac6ff70e9",
+    "fbChatUrl": "6a38a84a-5e24-83ec-becd-6c11be8e7fad",
     "igChatUrl": "6a3172de-0f04-83ec-a85f-7a2812209208"
   },
   "botPauseHours": 2,
   "botDelayMin": "10",
   "botDelayMax": "15",
-  "botEnabled": true
+  "botEnabled": false
 }

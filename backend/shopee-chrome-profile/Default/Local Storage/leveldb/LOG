@@ -1,3 +1,5 @@
-2026/06/16-23:52:11.420 18c0 Reusing MANIFEST C:\Users\Admin\Downloads\watch-auto-publisher\backend\shopee-chrome-profile\Default\Local Storage\leveldb/MANIFEST-000001
-2026/06/16-23:52:11.427 18c0 Recovering log #19
-2026/06/16-23:52:11.430 18c0 Reusing old log C:\Users\Admin\Downloads\watch-auto-publisher\backend\shopee-chrome-profile\Default\Local Storage\leveldb/000019.log 
+2026/06/22-15:16:51.239 4378 Reusing MANIFEST C:\Users\Admin\Downloads\watch_auto_publisher-master\backend\shopee-chrome-profile\Default\Local Storage\leveldb/MANIFEST-000001
+2026/06/22-15:16:51.243 4378 Recovering log #21
+2026/06/22-15:16:51.244 4378 Reusing old log C:\Users\Admin\Downloads\watch_auto_publisher-master\backend\shopee-chrome-profile\Default\Local Storage\leveldb/000021.log 
+2026/06/22-15:17:13.429 4378 Level-0 table #23: started
+2026/06/22-15:17:13.434 4378 Level-0 table #23: 54597 bytes OK

@@ -9,6 +9,9 @@ const apiClient = {
   getMissingShopeeVariants: async () => (await fetch('/api/shopee/variants/missing')).json(),
   getSetting: async (key: string) => { const r = await fetch(`/api/shopee/settings/${key}`); const d = await r.json(); return d.value; },
   saveSetting: async (key: string, value: string) => (await fetch('/api/shopee/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key, value }) })).json(),
+  saveEnvSetting: async (key: string, value: string) => (await fetch('/api/shopee/settings/env', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key, value }) })).json(),
+  getTemplateConfig: async () => (await fetch('/api/shopee/templates')).json(),
+  saveTemplateConfig: async (nameTemplate: string, descTemplate: string) => (await fetch('/api/shopee/templates', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ nameTemplate, descTemplate }) })).json(),
   generateCollectionBanners: async (modelIds: string[]) => (await fetch('/api/banner/generate-collection', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ modelIds }) })).json(),
   
   // Thay thế các hàm gọi Electron File Dialog bằng Web File Input và FormData Upload
@@ -120,11 +123,7 @@ const apiClient = {
   generateAvatar: async (variantId: string) => (await fetch(`/api/shopee/generate-avatar/${variantId}`, { method: 'POST' })).json(),
   autoMatchImagesAi: async () => (await fetch('/api/shopee/auto-match-images-ai', { method: 'POST' })).json(),
   shopeeLogin: async () => (await fetch('/api/shopee/shopee-login', { method: 'POST' })).json(),
-  runFullAutoSync: async (prioritySku?: string) => (await fetch('/api/shopee/run-full-auto-sync', { 
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ prioritySku })
-  })).json(),
+  runFullAutoSync: async (prioritySku?: string, publishMode?: string) => (await fetch('/api/shopee/run-full-auto-sync', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prioritySku, publishMode }) })).json(),
   stopAutoSync: async () => (await fetch('/api/shopee/stop-auto-sync', { method: 'POST' })).json(),
   syncShopee: async (variantId: string) => (await fetch(`/api/shopee/sync-shopee/${variantId}`, { method: 'POST' })).json(),
   testTelegramNotification: async () => ({ success: true, message: 'Web: Test Telegram' }),

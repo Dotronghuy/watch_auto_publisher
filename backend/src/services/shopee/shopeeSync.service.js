@@ -190,6 +190,75 @@ async function checkColorMatchWithAI(avatarPath, targetImagePath) {
   }
 }
 
+const AI_COLOR_CACHE_FILE = path.join(process.cwd(), "ai_color_cache.json");
+let aiColorCache = {};
+if (fs.existsSync(AI_COLOR_CACHE_FILE)) {
+  try {
+    aiColorCache = JSON.parse(fs.readFileSync(AI_COLOR_CACHE_FILE, "utf-8"));
+  } catch (e) {}
+}
+
+function saveAiColorCache() {
+  fs.writeFileSync(AI_COLOR_CACHE_FILE, JSON.stringify(aiColorCache, null, 2), "utf-8");
+}
+
+function getCacheKey(skuA, skuB) {
+  return [skuA, skuB].sort().join('|');
+}
+
+function deduceMatch(skuA, skuB) {
+  const sameEdges = {};
+  const diffEdges = [];
+  
+  for (const key in aiColorCache) {
+    const parts = key.split('|');
+    if (parts.length === 2) {
+      const isMatch = aiColorCache[key];
+      const u = parts[0];
+      const v = parts[1];
+      if (isMatch) {
+         if (!sameEdges[u]) sameEdges[u] = [];
+         if (!sameEdges[v]) sameEdges[v] = [];
+         sameEdges[u].push(v);
+         sameEdges[v].push(u);
+      } else {
+         diffEdges.push([u, v]);
+      }
+    }
+  }
+
+  const getComponent = (startNode) => {
+    const comp = new Set();
+    const queue = [startNode];
+    comp.add(startNode);
+    while(queue.length > 0) {
+      const curr = queue.shift();
+      if (sameEdges[curr]) {
+        for (const neighbor of sameEdges[curr]) {
+          if (!comp.has(neighbor)) {
+            comp.add(neighbor);
+            queue.push(neighbor);
+          }
+        }
+      }
+    }
+    return comp;
+  };
+
+  const compA = getComponent(skuA);
+  if (compA.has(skuB)) return true;
+
+  const compB = getComponent(skuB);
+  
+  for (const [u, v] of diffEdges) {
+    if ((compA.has(u) && compB.has(v)) || (compA.has(v) && compB.has(u))) {
+      return false;
+    }
+  }
+
+  return null;
+}
+
 async function groupVariantsByDesignAI(targetVariant, potentialVariants, pushLog) {
   pushLog(`[AI] Bắt đầu gom nhóm biến thể cùng vỏ bằng logic và AI cho ${targetVariant.sku}...`);
   // Bước 1: Lọc cứng
@@ -209,7 +278,7 @@ async function groupVariantsByDesignAI(targetVariant, potentialVariants, pushLog
   
   if (logicFiltered.length <= 1) return logicFiltered;
   
-  const allAvatars = potentialVariants.filter(v => v.isAvatar);
+  const allAvatars = potentialVariants.filter(v => v.bannerPosition === 1);
   if (allAvatars.length === 1) {
       pushLog(`[AI] Chỉ có 1 Avatar cho model này. Bỏ qua AI soi màu, gộp chung tất cả các biến thể vào 1 sản phẩm!`);
       return logicFiltered;
@@ -246,13 +315,26 @@ async function groupVariantsByDesignAI(targetVariant, potentialVariants, pushLog
         continue;
       }
       
-      pushLog(`[AI] Đang soi chéo màu vỏ: ${targetVariant.sku} vs ${v.sku}...`);
-      const isMatch = await checkColorMatchWithAI(targetImg, vImg);
-      if (isMatch) {
-        pushLog(`[AI] 🟢 KHỚP MÀU VỎ! Gộp ${v.sku} vào chung nhóm với ${targetVariant.sku}`);
-        finalGroup.push(v);
+      const deduced = deduceMatch(targetVariant.sku, v.sku);
+      if (deduced === true) {
+         pushLog(`[AI] 🟢 KHỚP MÀU VỎ (từ Cache): Gộp ${v.sku} vào chung nhóm với ${targetVariant.sku}`);
+         finalGroup.push(v);
+      } else if (deduced === false) {
+         pushLog(`[AI] 🔴 Lệch màu (từ Cache): Tách ${v.sku} ra nhóm riêng.`);
       } else {
-        pushLog(`[AI] 🔴 Lệch màu! Tách ${v.sku} ra nhóm riêng.`);
+         pushLog(`[AI] Đang soi chéo màu vỏ: ${targetVariant.sku} vs ${v.sku}...`);
+         const isMatch = await checkColorMatchWithAI(targetImg, vImg);
+         
+         const cKey = getCacheKey(targetVariant.sku, v.sku);
+         aiColorCache[cKey] = isMatch;
+         saveAiColorCache();
+         
+         if (isMatch) {
+           pushLog(`[AI] 🟢 KHỚP MÀU VỎ! Gộp ${v.sku} vào chung nhóm với ${targetVariant.sku}`);
+           finalGroup.push(v);
+         } else {
+           pushLog(`[AI] 🔴 Lệch màu! Tách ${v.sku} ra nhóm riêng.`);
+         }
       }
     }
 
@@ -569,7 +651,10 @@ async function scrapeZenwatchData(modelCode) {
 }
 async function generateShopeeProductName(variantId, customModelName) {
   try {
-    let variant = await prisma.variant.findUnique({ where: { id: variantId }, include: { model: true } });
+    let variant = await prisma.variant.findUnique({ 
+      where: { id: variantId }, 
+      include: { model: { include: { shop: { include: { templates: true } } } } } 
+    });
     if (!variant) throw new Error("Variant not found");
     let targetModelName = customModelName || variant.model.name;
     const gender = await getProductGender(variant);
@@ -598,9 +683,37 @@ async function generateShopeeProductName(variantId, customModelName) {
        else if (mLower.includes("pin") || mLower.includes("quartz")) movementPromptText = ", Máy Pin";
     }
 
-    const prompt = `Từ mã đồng hồ "${targetModelName}", hãy tạo 1 câu đặt tên sản phẩm đồng hồ chuẩn SEO cho Shopee (Tối đa 99 ký tự). 
+    const warrantySetting = await prisma.setting.findUnique({ where: { key: 'shopee_warranty_period' } });
+    const warrantyPeriod = warrantySetting?.value || '5 năm';
+
+    let prompt = '';
+    let customTemplate = variant?.model?.shop?.templates?.[0]?.nameTemplate;
+    if (!customTemplate) {
+      const globalConfig = await prisma.templateConfig.findFirst();
+      if (globalConfig) customTemplate = globalConfig.nameTemplate;
+    }
+    
+    // Nếu dùng mẫu Vua Đồng Hồ, ta bỏ qua template clone để dùng đúng logic hardcode
+    if (customTemplate && customTemplate.includes('[VUA ĐỒNG HỒ]')) {
+      customTemplate = null; 
+    }
+    
+    if (customTemplate && customTemplate.trim() !== '') {
+      customTemplate = customTemplate.replace(/\[Mã\]/gi, variant.sku);
+      prompt = `Bạn là một chuyên gia viết tiêu đề sản phẩm chuẩn SEO cho Shopee.
+Hãy viết tên sản phẩm cho chiếc đồng hồ (Mã: ${variant.sku}, Tên: ${targetModelName}, Giới tính: ${watchGenderText}, Chất liệu dây: ${strapPromptText}${movementPromptText}, BH: ${warrantyPeriod}).
+BẮT BUỘC phải viết DỰA TRÊN form mẫu sau đây, giữ nguyên cấu trúc/văn phong nhưng thay đổi thông tin (màu sắc/mã/giới tính) cho đúng với hình ảnh và mã sản phẩm hiện tại:
+
+--- BẢN MẪU THAM KHẢO ---
+${customTemplate}
+------------------------
+
+CHÚ Ý QUAN TRỌNG NHẤT: Bắt buộc phải thay thế mã cũ trong bản mẫu bằng ĐÚNG NGUYÊN VĂN mã mới là "${variant.sku}". TUYỆT ĐỐI KHÔNG được tự ý rút gọn mã (ví dụ không được rút gọn ${variant.sku} thành ${targetModelName}).
+Chỉ trả về 1 dòng duy nhất là tên sản phẩm (Tối đa 99 ký tự), không thêm hashtag, không viết dông dài.`;
+    } else {
+      prompt = `Từ mã đồng hồ "${targetModelName}", hãy tạo 1 câu đặt tên sản phẩm đồng hồ chuẩn SEO cho Shopee (Tối đa 99 ký tự). 
     Bắt buộc phải tuân theo đúng định dạng sau:
-    Đồng Hồ ${watchGenderText} I&W Carnival ${targetModelName} Chính Hãng - [Vàng Hồng/Vàng (nếu có)]${movementPromptText}, [Viền (nếu có)], ${strapPromptText}, Kính Sapphire, BH 5 Năm
+    Đồng Hồ ${watchGenderText} I&W Carnival ${targetModelName} Chính Hãng - [Vàng Hồng/Vàng (nếu có)]${movementPromptText}, [Viền (nếu có)], ${strapPromptText}, Kính Sapphire, BH ${warrantyPeriod}
     
     QUY TẮC BẮT BUỘC (NẾU LÀM SAI SẼ BỊ PHẠT):
     1. "Vàng Hồng" hoặc "Vàng": Nếu trong ảnh thấy viền/vỏ/dây có màu vàng hồng (rose gold) thì ghi "Vàng Hồng". Nếu vàng thuần thì ghi "Vàng". Nếu thuần thép/bạc thì BỎ QUA hoàn toàn chữ vàng.
@@ -611,14 +724,18 @@ async function generateShopeeProductName(variantId, customModelName) {
     3. QUY ĐỊNH MÀU MẶT VÀ MÀU DÂY: TUYỆT ĐỐI KHÔNG mô tả màu mặt (vd không ghi Mặt Trắng, Mặt Đen). TUYỆT ĐỐI KHÔNG mô tả màu dây (vd không ghi Dây Đen, Dây Xanh).
     
     Ví dụ đúng (thuần thép, G1 viền trơn):
-    Đồng Hồ ${watchGenderText} I&W Carnival ${targetModelName} Chính Hãng - ${movementPromptText ? movementPromptText.replace(', ', '') + ', ' : ""}Viền Trơn, ${strapPromptText}, Kính Sapphire, BH 5 Năm
+    Đồng Hồ ${watchGenderText} I&W Carnival ${targetModelName} Chính Hãng - ${movementPromptText ? movementPromptText.replace(', ', '') + ', ' : ""}Viền Trơn, ${strapPromptText}, Kính Sapphire, BH ${warrantyPeriod}
     
     Ví dụ đúng (vàng hồng, G chỉ có viền trơn nên bị bỏ qua):
-    Đồng Hồ ${watchGenderText} I&W Carnival ${targetModelName} Chính Hãng - Vàng Hồng${movementPromptText}, ${strapPromptText}, Kính Sapphire, BH 5 Năm
+    Đồng Hồ ${watchGenderText} I&W Carnival ${targetModelName} Chính Hãng - Vàng Hồng${movementPromptText}, ${strapPromptText}, Kính Sapphire, BH ${warrantyPeriod}
     
     Tuyệt đối không thêm hashtag, không viết dông dài. Chỉ trả về 1 dòng duy nhất.`;
+    }
     let generatedName = await callAIWithRotation(prompt, images);
     if (generatedName) {
+      if (!generatedName.includes(variant.sku) && generatedName.includes(targetModelName)) {
+        generatedName = generatedName.replace(targetModelName, variant.sku);
+      }
       generatedName = generatedName.replace(/Xanh Lam/gi, "Xanh Bi\u1EC3n").replace(/Xanh ngọc/gi, "Xanh Tiffany").replace(/Xanh Mint/gi, "Xanh Tiffany").replace(/xanh lam/gi, "xanh bi\u1EC3n").replace(/xanh ngọc/gi, "xanh Tiffany").replace(/xanh mint/gi, "xanh Tiffany").replace(/Màu bạc/gi, "M\xE0u x\xE1m").replace(/Mặt bạc/gi, "M\u1EB7t x\xE1m").replace(/màu bạc/gi, "m\xE0u x\xE1m").replace(/mặt bạc/gi, "m\u1EB7t x\xE1m").replace(/Màu Trắng Bạc/gi, "M\xE0u Tr\u1EAFng").replace(/Mặt Trắng Bạc/gi, "M\u1EB7t Tr\u1EAFng").replace(/Mặt Màu Trắng Bạc/gi, "M\u1EB7t M\xE0u Tr\u1EAFng").replace(/màu trắng bạc/gi, "m\xE0u tr\u1EAFng").replace(/mặt trắng bạc/gi, "m\u1EB7t tr\u1EAFng").replace(/-\s*Pin/gi, "- M\xE1y Pin").replace(/,\s*Pin/gi, ", M\xE1y Pin").replace(/-\s*Cơ/gi, "- M\xE1y C\u01A1").replace(/,\s*Cơ/gi, ", M\xE1y C\u01A1").replace(/Máy\s+Máy\s+Pin/gi, "M\xE1y Pin").replace(/Máy\s+Máy\s+Cơ/gi, "M\xE1y C\u01A1").replace(/,\s*Sapphire/gi, ", K\xEDnh Sapphire").replace(/Kính\s+Kính\s+Sapphire/gi, "K\xEDnh Sapphire");
       const adjectives = [
         "l\u1EA5p l\xE1nh",
@@ -689,8 +806,64 @@ async function generateShopeeProductName(variantId, customModelName) {
   }
 }
 
-async function generateShopeeProductDescription(sku, productName, zenSpecs, avatarImagePath) {
+async function generateShopeeProductDescription(sku, productName, zenSpecs, avatarImagePath, variantId) {
   try {
+    let customTemplate = null;
+    if (variantId) {
+      try {
+        const variant = await prisma.variant.findUnique({
+          where: { id: variantId },
+          include: { model: { include: { shop: { include: { templates: true } } } } }
+        });
+        if (variant?.model?.shop?.templates?.[0]?.descTemplate) {
+          customTemplate = variant.model.shop.templates[0].descTemplate;
+        }
+        if (!customTemplate) {
+          const globalConfig = await prisma.templateConfig.findFirst();
+          if (globalConfig) customTemplate = globalConfig.descTemplate;
+        }
+      } catch (err) {
+        console.error("Lỗi lấy template:", err.message);
+      }
+    }
+
+    const isVuaDongHo = !customTemplate || customTemplate.includes('[VUA ĐỒNG HỒ]');
+
+    if (!isVuaDongHo) {
+      if (!avatarImagePath || !fs.existsSync(avatarImagePath)) return customTemplate || '';
+
+      const allowShopee = await prisma.setting.findUnique({ where: { key: 'gemini_allow_shopee' } });
+      if (allowShopee && allowShopee.value === 'false') {
+        console.log("[Shopee AI] ❌ Tính năng AI cho Shopee bị tắt. Bỏ qua bước xào nấu Template.");
+        return customTemplate || '';
+      }
+
+      const prompt = `Bạn là chuyên gia clone mô tả sản phẩm Shopee.
+Nhiệm vụ của bạn là COPY Y NGUYÊN FORM MẪU DƯỚI ĐÂY, giữ lại TẤT CẢ các phần (thông tin chi tiết, bảo hành, cam kết, hashtag...). 
+Chỉ ĐIỀN/THAY ĐỔI các thông số cho khớp với thông tin và hình ảnh của sản phẩm mới. Tuyệt đối không xóa bớt các mục của Form Mẫu.
+
+Thông tin sản phẩm mới:
+- Tên SP: ${productName}
+- SKU: ${sku}
+- Thông số kỹ thuật tham khảo: ${JSON.stringify(zenSpecs || {})}
+
+YÊU CẦU ĐẶC BIỆT:
+1. Các thông số "Mã sản phẩm", "Giới tính", "Đường kính mặt", "Độ dày", "Chất liệu dây" phải lấy từ thông số kỹ thuật tham khảo ở trên. Nếu không có thông tin, hãy ghi là "Đang cập nhật".
+2. Phần "Đặc điểm nổi bật" bắt buộc KHỐNG CHẾ ĐÚNG 3 GẠCH ĐẦU DÒNG (3 dòng) giống hệt cấu trúc của bản mẫu. Không viết dông dài.
+
+--- BẢN MẪU CẦN CLONE Y HỆT ---
+${customTemplate}
+------------------------
+
+CHÚ Ý: TRẢ VỀ TOÀN BỘ VĂN BẢN ĐÃ ĐIỀN XONG. KHÔNG BỚT BẤT KỲ MỤC NÀO (GỒM CẢ THÔNG TIN CHI TIẾT, BẢO HÀNH, CAM KẾT, HASHTAG...). KHÔNG DÙNG DẤU NHÁY HAY CÂU MỞ ĐẦU THỪA.`;
+
+      const avatarData = fs.readFileSync(avatarImagePath);
+      const mimeType = avatarImagePath.toLowerCase().endsWith(".png") ? "image/png" : "image/jpeg";
+      const result = await callAIWithRotation(prompt, [{ data: avatarData.toString("base64"), mimeType }]);
+      return result ? result.trim() : customTemplate;
+    }
+
+    // --- LOGIC MẶC ĐỊNH CHO VUA ĐỒNG HỒ ---
     const aiIntro = await _generateDescriptionAI(sku, productName, zenSpecs, avatarImagePath);
 
     let displayGender = "Đang cập nhật";
@@ -699,29 +872,20 @@ async function generateShopeeProductDescription(sku, productName, zenSpecs, avat
       displayGender = zenSpecs.gender;
       isFemale = displayGender.toLowerCase().includes('nữ');
     } else {
-      if (sku.toUpperCase().includes('L')) {
-        displayGender = "Nữ";
-        isFemale = true;
-      } else if (sku.toUpperCase().includes('G')) {
-        displayGender = "Nam";
-      }
+      if (sku.toUpperCase().includes('L')) { displayGender = "Nữ"; isFemale = true; } 
+      else if (sku.toUpperCase().includes('G')) { displayGender = "Nam"; }
     }
 
-    // Fallback if AI fails
     const introText = aiIntro || (isFemale
       ? `${productName} – Chiếc đồng hồ mang đậm phong thái thanh lịch dành cho quý cô yêu thích sự tinh tế và duyên dáng. Thiết kế nữ tính và sang trọng, phù hợp từ công sở đến những buổi tiệc trang trọng. Thanh lịch – Duyên dáng – Chuẩn phong thái.`
       : `${productName} – Chiếc đồng hồ mang đậm phong thái lịch lãm dành cho quý ông yêu thích sự tinh tế và chỉn chu. Thiết kế nam tính và sang trọng, phù hợp từ công sở đến những buổi tiệc trang trọng. Lịch lãm – Tinh tế – Chuẩn phong thái.`);
 
     let dayText = "Đang cập nhật";
-    let voText = "Thép không gỉ 316L (Mạ PVD cao cấp với phiên bản màu vàng)"; // Vỏ luôn fix cứng như vầy theo ý user
+    let voText = "Thép không gỉ 316L (Mạ PVD cao cấp với phiên bản màu vàng)";
     const skuSuffix = sku.split('-')[1] || "";
-    if (skuSuffix.includes('T')) {
-       dayText = "Thép không gỉ 316L (Mạ PVD cao cấp với phiên bản màu vàng)";
-    } else if (skuSuffix.includes('D')) {
-       dayText = "Dây da cao cấp";
-    } else if (skuSuffix.includes('S')) {
-       dayText = "Dây cao su cao cấp";
-    }
+    if (skuSuffix.includes('T')) dayText = "Thép không gỉ 316L (Mạ PVD cao cấp với phiên bản màu vàng)";
+    else if (skuSuffix.includes('D')) dayText = "Dây da cao cấp";
+    else if (skuSuffix.includes('S')) dayText = "Dây cao su cao cấp";
 
     let displayMovement = "Đang cập nhật";
     if (zenSpecs?.movement) {
@@ -732,11 +896,12 @@ async function generateShopeeProductDescription(sku, productName, zenSpecs, avat
     }
 
     let displayWaterproof = "30M - 50M";
-    if (zenSpecs?.waterproof) {
-        displayWaterproof = zenSpecs.waterproof;
-    }
+    if (zenSpecs?.waterproof) displayWaterproof = zenSpecs.waterproof;
 
     const modelCode = sku.split('-')[0];
+
+    const warrantySetting = await prisma.setting.findUnique({ where: { key: 'shopee_warranty_period' } });
+    const warrantyPeriod = warrantySetting?.value || '5 năm';
 
     const specsText = `THÔNG TIN CHI TIẾT:
 Thương hiệu: I&W Carnival
@@ -749,10 +914,10 @@ Chất liệu vỏ: ${voText}
 Chất liệu dây: ${dayText}
 Mặt kính: Sapphire Crystal
 Độ chịu nước: ${displayWaterproof}
-Bảo hành: 5 năm`;
+Bảo hành: ${warrantyPeriod}`;
 
     const policyText = `CHÍNH SÁCH BẢO HÀNH:
-Thời gian bảo hành: 5 năm
+Thời gian bảo hành: ${warrantyPeriod}
 Miễn phí thay pin trọn đời với đồng hồ pin
 Miễn phí điều chỉnh nhanh chậm đối với đồng hồ cơ
 Miễn phí xử lý khi đồng hồ bị vào nước
@@ -764,13 +929,10 @@ CAM KẾT:
 ✔ Hỗ trợ tư vấn nhanh chóng trước và sau mua hàng`;
 
     let genderFallback = "nam";
-    if (sku.toUpperCase().includes('L')) genderFallback = "nu";
-    if (zenSpecs?.gender && zenSpecs.gender.toLowerCase().includes('nữ')) genderFallback = "nu";
+    if (sku.toUpperCase().includes('L') || (zenSpecs?.gender && zenSpecs.gender.toLowerCase().includes('nữ'))) genderFallback = "nu";
 
     let hashtagText = `#donghonam #donghonamchinhhang #donghochinhhangnam #donghonamdayda #donghonamdaythep #donghonamdaycaosu #donghonamco #donghonamchongnuoc #iwcarnival #donghocarnival #donghoiw #donghoiwcarnival #donghocarnivalnam #donghocarnival1986`;
-    if (genderFallback === "nu") {
-        hashtagText = hashtagText.replace(/nam/g, 'nu');
-    }
+    if (genderFallback === "nu") hashtagText = hashtagText.replace(/nam/g, 'nu');
 
     return `${introText}\n\n${specsText}\n\n${policyText}\n\n${hashtagText}`;
   } catch (error) {
@@ -780,9 +942,16 @@ CAM KẾT:
 }
 
 async function _generateDescriptionAI(sku, productName, zenSpecs, avatarImagePath) {
-  if (!avatarImagePath || !fs.existsSync(avatarImagePath)) {
+  if (!avatarImagePath || !fs.existsSync(avatarImagePath)) return null;
+
+  const allowShopee = await prisma.setting.findUnique({ where: { key: 'gemini_allow_shopee' } });
+  if (allowShopee && allowShopee.value === 'false') {
+    console.log("[Shopee AI] ❌ Tính năng AI cho Shopee bị tắt. Dùng fallback Text gốc.");
     return null;
   }
+
+  const referenceText = `I&W Carnival 525G – Chiếc đồng hồ nam chính hãng mang đậm phong thái lịch lãm dành cho quý ông yêu thích sự tinh tế và chỉn chu. Thiết kế mặt trắng thanh thoát kết hợp vỏ vàng hồng sang trọng, cọc số La Mã cổ điển và dây da đen cao cấp tạo nên vẻ ngoài nổi bật nhưng vẫn rất dễ phối đồ.
+Điểm nhấn open-heart ở vị trí 6 giờ để lộ chuyển động cơ khí đầy cuốn hút, thể hiện vẻ đẹp tinh xảo của bộ máy Automatic bền bỉ từ Seiko – Miyota Nhật Bản. Từng đường nét được hoàn thiện cân đối, nam tính và sang trọng, phù hợp từ công sở, gặp gỡ đối tác đến những buổi tiệc trang trọng. Lịch lãm – Tinh tế – Chuẩn phong thái quý ông.`;
 
   const prompt = `Bạn là một chuyên gia viết mô tả sản phẩm đồng hồ chuẩn SEO cho Shopee.
 Dựa vào hình ảnh đồng hồ (ảnh Avatar) và các thông tin sau:
@@ -790,12 +959,10 @@ Dựa vào hình ảnh đồng hồ (ảnh Avatar) và các thông tin sau:
 - Mã sản phẩm (SKU): ${sku}
 - Thông số kỹ thuật (Tham khảo): ${JSON.stringify(zenSpecs || {})}
 
-Hãy phân tích hình ảnh và viết một đoạn văn (khoảng 2 đoạn ngắn) giới thiệu sản phẩm thật hấp dẫn, tương tự phong cách của đoạn mẫu dưới đây:
+Hãy phân tích hình ảnh và viết một đoạn văn (khoảng 2 đoạn ngắn) giới thiệu sản phẩm thật hấp dẫn, tương tự phong cách và cấu trúc của đoạn mẫu dưới đây:
 
 --- BẢN MẪU THAM KHẢO ---
-I&W Carnival 525G – Chiếc đồng hồ nam chính hãng mang đậm phong thái lịch lãm dành cho quý ông yêu thích sự tinh tế và chỉn chu. Thiết kế mặt trắng thanh thoát kết hợp vỏ vàng hồng sang trọng, cọc số La Mã cổ điển và dây da đen cao cấp tạo nên vẻ ngoài nổi bật nhưng vẫn rất dễ phối đồ.
-
-Điểm nhấn open-heart ở vị trí 6 giờ để lộ chuyển động cơ khí đầy cuốn hút, thể hiện vẻ đẹp tinh xảo của bộ máy Automatic bền bỉ từ Seiko – Miyota Nhật Bản. Từng đường nét được hoàn thiện cân đối, nam tính và sang trọng, phù hợp từ công sở, gặp gỡ đối tác đến những buổi tiệc trang trọng. Lịch lãm – Tinh tế – Chuẩn phong thái quý ông.
+${referenceText}
 ------------------------
 
 CHÚ Ý QUAN TRỌNG:
@@ -807,16 +974,9 @@ CHÚ Ý QUAN TRỌNG:
   try {
     const avatarData = fs.readFileSync(avatarImagePath);
     const mimeType = avatarImagePath.toLowerCase().endsWith(".png") ? "image/png" : "image/jpeg";
-    const imagePart = {
-      data: avatarData.toString("base64"),
-      mimeType: mimeType
-    };
-
-    const result = await callAIWithRotation(prompt, [imagePart]);
+    const result = await callAIWithRotation(prompt, [{ data: avatarData.toString("base64"), mimeType }]);
     if (result) {
-      // Dọn dẹp nếu AI lỡ sinh ra THÔNG TIN CHI TIẾT
-      let cleanResult = result.replace(/THÔNG TIN CHI TIẾT.*|CHÍNH SÁCH BẢO HÀNH.*|CAM KẾT.*/is, "").trim();
-      return cleanResult;
+      return result.replace(/THÔNG TIN CHI TIẾT.*|CHÍNH SÁCH BẢO HÀNH.*|CAM KẾT.*/is, "").trim();
     }
   } catch (error) {
     console.error("AI Description Error:", error.message);
@@ -824,7 +984,7 @@ CHÚ Ý QUAN TRỌNG:
   return null;
 }
 
-async function runShopeeAutomationDemo(cookiesString, productName, shopeeProductId, media, variantId, onProgress) {
+async function runShopeeAutomationDemo(cookiesString, productName, shopeeProductId, media, variantId, onProgress, publishMode = 'focused') {
   const log = (msg) => {
     console.log(msg);
     try {
@@ -840,7 +1000,24 @@ async function runShopeeAutomationDemo(cookiesString, productName, shopeeProduct
   if (!currentVariant) throw new Error("Kh\xF4ng t\xECm th\u1EA5y bi\u1EBFn th\u1EC3 trong DB");
   const sku = currentVariant.sku;
   const cookies = JSON.parse(cookiesString);
-  let allVariants = [];
+  const potentialVariants = await prisma.variant.findMany({
+    where: { modelId: currentVariant.modelId },
+    orderBy: { sku: "asc" }
+  });
+  let allVariants = await groupVariantsByDesignAI(currentVariant, potentialVariants, log);
+  if (media.images && media.images.length === 1) {
+    log("[Browser] Không có ảnh Drive, đang tự động lấy tất cả các ảnh đại diện (Avatar) của nhóm màu để làm ảnh sản phẩm...");
+    const additionalImages = [];
+    for (const v of allVariants) {
+      if (v.id !== currentVariant.id) {
+        const avatarPath = v.avatarImage || v.rawImage;
+        if (avatarPath && fs.existsSync(avatarPath)) {
+           additionalImages.push(avatarPath);
+        }
+      }
+    }
+    media.images = media.images.concat(additionalImages).slice(0, 9);
+  }
   log(`[Browser] \u0110ang kh\u1EDFi \u0111\u1ED9ng Playwright (Chrome)...`);
   let browser = null;
   browser = await chromium.launch({
@@ -882,19 +1059,20 @@ async function runShopeeAutomationDemo(cookiesString, productName, shopeeProduct
 
   log("[Browser] Đang tạo Mô tả sản phẩm bằng AI...");
   const avatarPath = media?.images && media.images.length > 0 ? media.images[0] : null;
-  const productDescription = await generateShopeeProductDescription(sku, productName, preZenSpecs, avatarPath);
+  const productDescription = await generateShopeeProductDescription(sku, productName, preZenSpecs, avatarPath, variantId);
   log("[Browser] Đã tạo xong Mô tả sản phẩm!");
   log(`[Browser] \u0110ang chu\u1EA9n b\u1ECB tr\xECnh duy\u1EC7t cho ID: ${shopeeProductId || "T\u1EA0O M\u1EDAI"}`);
   try {
     let isNewProduct = false;
+    let uploadedImagesInNewUi = false;
     const cleanId = (shopeeProductId || "").trim();
     if (!cleanId || cleanId === "" || cleanId.toLowerCase() === "id" || !/^\d+$/.test(cleanId)) {
       isNewProduct = true;
-      log(`[Browser] Shopee ID kh\xF4ng h\u1EE3p l\u1EC7 ho\u1EB7c tr\u1ED1ng (ID hi\u1EC7n t\u1EA1i: "${shopeeProductId}"), b\u1EAFt \u0111\u1EA7u quy tr\xECnh t\u1EA1o s\u1EA3n ph\u1EA9m m\u1EDBi...`);
+      log(`[Browser] Shopee ID không hợp lệ hoặc trống (ID hiện tại: "${shopeeProductId}"), bắt đầu quy trình tạo sản phẩm mới...`);
       await page.goto("https://banhang.shopee.vn/portal/product/list/all", { waitUntil: "load", timeout: 9e4 });
       await page.waitForTimeout(3e3);
-      log(`[Browser] URL Hi\u1EC7n T\u1EA1i: ${page.url()} | Ti\xEAu \u0110\u1EC1: ${await page.title()}`);
-      log(`[Browser] \u0110ang ki\u1EC3m tra v\xE0 \u0111\xF3ng c\xE1c popup h\u01B0\u1EDBng d\u1EABn c\u1EE7a Shopee...`);
+      log(`[Browser] URL Hiện Tại: ${page.url()} | Tiêu Đề: ${await page.title()}`);
+      log(`[Browser] Đang kiểm tra và đóng các popup hướng dẫn của Shopee...`);
       try {
         const checkNowBtn = page.locator("button").filter({ hasText: /Check Now|Kiểm tra ngay/i }).first();
         if (await checkNowBtn.isVisible({ timeout: 2e3 }).catch(() => false)) {
@@ -929,7 +1107,55 @@ async function runShopeeAutomationDemo(cookiesString, productName, shopeeProduct
         await page.waitForLoadState("domcontentloaded", { timeout: 15e3 });
       }
       await page.waitForTimeout(3e3);
-      log(`[Browser] \u0110\xE3 v\xE0o trang Th\xEAm s\u1EA3n ph\u1EA9m m\u1EDBi. URL: ${page.url()} | Ti\xEAu \u0110\u1EC1: ${await page.title()}`);
+      log(`[Browser] Đã vào trang Thêm sản phẩm mới. URL: ${page.url()} | Tiêu Đề: ${await page.title()}`);
+
+      try {
+        const gotItBtn = page.locator('button').filter({ hasText: /^Nhận được$|^Got it$/i }).first();
+        if (await gotItBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
+          log(`[Browser] Phát hiện popup hướng dẫn (Nhận được), đang đóng...`);
+          await gotItBtn.click({ force: true });
+          await page.waitForTimeout(1000);
+        }
+      } catch (e) {}
+
+      log(`[Browser] Đang kiểm tra giao diện Thêm sản phẩm mới (Next Step)...`);
+      const nextStepBtn = page.locator('button').filter({ hasText: /^Next Step$|^Bước tiếp theo$|^Tiếp theo$/i }).first();
+      if (await nextStepBtn.isVisible({ timeout: 5000 }).catch(() => false)) {
+        log(`[Browser] Phát hiện giao diện mới, đang tải lên Media tạm thời...`);
+        try {
+          const fileInputs = await page.locator('input[type="file"]').all();
+          if (fileInputs.length >= 2) {
+            log("[Browser] Upload 8 ảnh chính vào giao diện mới...");
+            await fileInputs[0].setInputFiles(media.images);
+            await page.waitForTimeout(4e3);
+
+            if (media.avatar) {
+              log("[Browser] Upload 1 ảnh bìa vào giao diện mới...");
+              await fileInputs[1].setInputFiles(media.avatar);
+              await page.waitForTimeout(2e3);
+            }
+            uploadedImagesInNewUi = true;
+          }
+        } catch (e) {
+          log("[Browser] Lỗi upload ảnh giao diện mới: " + e.message);
+        }
+
+        log(`[Browser] Phát hiện giao diện mới, đang điền Tên sản phẩm tạm thời...`);
+        const tempNameInput = page.locator('input[placeholder*="tên sản phẩm"], input[placeholder*="Tên sản phẩm"], input[maxlength="120"]').first();
+        if (await tempNameInput.isVisible({ timeout: 5000 }).catch(() => false)) {
+          await tempNameInput.fill("");
+          await tempNameInput.fill(productName);
+          await tempNameInput.pressSequentially(" ", { delay: 50 });
+          await page.waitForTimeout(500);
+          await tempNameInput.press("Backspace");
+          await page.waitForTimeout(2000);
+        }
+        log(`[Browser] Đang click Next Step...`);
+        await nextStepBtn.click({ force: true });
+        await page.waitForTimeout(5000);
+        await page.waitForLoadState("domcontentloaded", { timeout: 15e3 });
+        log(`[Browser] Đã chuyển qua giao diện đăng sản phẩm chi tiết!`);
+      }
     } else {
       await page.goto(`https://banhang.shopee.vn/portal/product/${shopeeProductId}`, { waitUntil: "load", timeout: 9e4 });
       await page.waitForTimeout(8e3);
@@ -1012,10 +1238,12 @@ async function runShopeeAutomationDemo(cookiesString, productName, shopeeProduct
       // index 1: Video sản phẩm
       const fileInputs = await page.locator('input[type="file"]').all();
 
-      if (fileInputs.length > 0 && media.images.length > 0) {
+      if (fileInputs.length > 0 && media.images.length > 0 && !uploadedImagesInNewUi) {
         log(`[Browser] Upload ${media.images.length} ảnh chính...`);
         await fileInputs[0].setInputFiles(media.images);
         await page.waitForTimeout(5000);
+      } else if (uploadedImagesInNewUi) {
+        log("[Browser] Đã upload ảnh ở màn hình Next Step, bỏ qua upload ảnh chính.");
       } else {
         log("[Browser] Cảnh báo: Không tìm thấy ô upload ảnh chính (hoặc không có ảnh).");
       }
@@ -1229,11 +1457,18 @@ async function runShopeeAutomationDemo(cookiesString, productName, shopeeProduct
       waterproofArr = ["30m", "3 ATM", "<30m"];
     }
     const isAuto = productName.toLowerCase().includes("m\xE1y c\u01A1") || productName.toLowerCase().includes("automatic") || productName.toLowerCase().includes("m\xE1y t\u1EF1 \u0111\u1ED9ng");
+    
+    const warrantySetting = await prisma.setting.findUnique({ where: { key: 'shopee_warranty_period' } });
+    const warrantyPeriod = warrantySetting?.value || '5 năm';
+    
+    // Shopee không có option "2 năm", mà dùng "24 tháng"
+    const shopeeAttributeWarranty = warrantyPeriod.toLowerCase() === '2 năm' ? '24 tháng' : warrantyPeriod;
+
     const attributes = [
       { l: "Th\u01B0\u01A1ng hi\u1EC7u", v: "I&W Carnival", multi: false },
       { l: "M\u1EB7t \u0111\u1ED3ng h\u1ED3", v: "Kim", multi: false },
       { l: "Lo\u1EA1i b\u1EA3o h\xE0nh", v: "B\u1EA3o h\xE0nh nh\xE0 cung c\u1EA5p", multi: false },
-      { l: "H\u1EA1n b\u1EA3o h\xE0nh", v: "5 n\u0103m", multi: false },
+      { l: "H\u1EA1n b\u1EA3o h\xE0nh", v: shopeeAttributeWarranty, multi: false },
       { l: "Ch\u1ED1ng n\u01B0\u1EDBc", v: "C\xF3", multi: false },
       { l: "\u0110\u1ED3ng h\u1ED3 \u0111eo tay", v: isAuto ? "T\u1EF1 \u0111\u1ED9ng" : "Th\u1EA1ch anh", multi: false },
       { l: "Ki\u1EC3u \u0111\u1ED3ng h\u1ED3", v: ["Th\u1EDDi trang"], multi: true },
@@ -1521,11 +1756,9 @@ async function runShopeeAutomationDemo(cookiesString, productName, shopeeProduct
     }
     try {
       log("[Browser] \u0110ang c\u1EA5u h\xECnh Th\xF4ng tin b\xE1n h\xE0ng & Bi\u1EBFn th\u1EC3...");
-      const potentialVariants = await prisma.variant.findMany({
-        where: { modelId: currentVariant.modelId },
-        orderBy: { sku: "asc" }
-      });
-      allVariants = await groupVariantsByDesignAI(currentVariant, potentialVariants, log);
+      if (publishMode === 'matrix') {
+        log("[Browser] Chế độ Ma trận: Sẽ đăng một sản phẩm mới cho biến thể hiện tại, nhưng vẫn nhúng đủ danh sách màu vào Thông tin bán hàng.");
+      }
       if (allVariants.length > 0) {
         const salesTab = page.locator(".shopee-tabs__nav-item", { hasText: "Th\xF4ng tin b\xE1n h\xE0ng" });
         if (await salesTab.isVisible()) {
@@ -1575,8 +1808,15 @@ async function runShopeeAutomationDemo(cookiesString, productName, shopeeProduct
         log("[Browser] Đang điền các phân loại màu sắc mới...");
         for (let i = 0; i < allVariants.length; i++) {
           const v = allVariants[i];
-          const inputs = await page.locator('.variation-selector-custom-len-calc-input input, input[placeholder*="Type or Select"], input[placeholder*="e.g. Red"], input[placeholder*="v\xED d\u1EE5: \u0111\u1ECF"]').all();
-          const targetInput = inputs[i + 1];
+          const allInputs = await page.locator('.variation-selector-custom-len-calc-input input, input[placeholder*="Type or Select"], input[placeholder*="e.g. Red"], input[placeholder*="ví dụ: đỏ"], input[placeholder*="màu sắc"]').all();
+          const nameInputs = [];
+          for (const input of allInputs) {
+            const placeholder = (await input.getAttribute("placeholder")) || "";
+            if (!placeholder.toLowerCase().includes("mô tả") && !placeholder.toLowerCase().includes("description")) {
+              nameInputs.push(input);
+            }
+          }
+          const targetInput = nameInputs[i + 1];
           if (targetInput) {
             await targetInput.scrollIntoViewIfNeeded();
             await targetInput.focus();
@@ -1816,7 +2056,7 @@ async function runShopeeAutomationDemo(cookiesString, productName, shopeeProduct
           await otherInfoTab.click();
           await page.waitForTimeout(1e3);
         }
-        const globalSku = sku.replace(/\d+$/, "");
+        const globalSku = publishMode === 'matrix' ? sku : sku.replace(/\d+$/, "");
         log(`[Browser] Đang điền SKU sản phẩm: ${globalSku}`);
         const parentSkuInput = page.locator('[data-product-edit-field-unique-id="parentSku"] input, .parent-sku input, input[placeholder="SKU"]').first();
         if (await parentSkuInput.isVisible({ timeout: 2000 }).catch(() => false)) {
@@ -1956,12 +2196,20 @@ async function runShopeeAutomationDemo(cookiesString, productName, shopeeProduct
               }
               if (newShopeeId) {
                 finalShopeeId = newShopeeId;
-                const variantIds = allVariants.map(v => v.id);
-                await prisma.variant.updateMany({
-                  where: { id: { in: variantIds } },
-                  data: { shopeeProductId: newShopeeId }
-                });
-                log(`[Browser] ✅ Đã cập nhật Shopee Product ID (${newShopeeId}) vào DB cho ${allVariants.length} SKU thuộc nhóm: ${allVariants.map(v=>v.sku).join(', ')}`);
+                if (publishMode === 'matrix') {
+                  await prisma.variant.update({
+                    where: { id: currentVariant.id },
+                    data: { shopeeProductId: newShopeeId }
+                  });
+                  log(`[Browser] ✅ Đã cập nhật Shopee Product ID (${newShopeeId}) vào DB cho SKU chính: ${currentVariant.sku}`);
+                } else {
+                  const variantIds = allVariants.map(v => v.id);
+                  await prisma.variant.updateMany({
+                    where: { id: { in: variantIds } },
+                    data: { shopeeProductId: newShopeeId }
+                  });
+                  log(`[Browser] ✅ Đã cập nhật Shopee Product ID (${newShopeeId}) vào DB cho ${allVariants.length} SKU thuộc nhóm: ${allVariants.map(v=>v.sku).join(', ')}`);
+                }
               } else {
                 log(`[Browser] \u26A0\uFE0F Kh\xF4ng th\u1EC3 t\u1EF1 \u0111\u1ED9ng t\xECm th\u1EA5y Shopee Product ID m\u1EDBi sau 6 l\u1EA7n th\u1EED. B\u1EA1n c\xF3 th\u1EC3 c\u1EA7n \u0111i\u1EC1n th\u1EE7 c\xF4ng.`);
               }
@@ -2086,7 +2334,7 @@ async function testTelegramNotification(botToken, chatId) {
     return { success: false, message: `L\u1ED7i k\u1EBFt n\u1ED1i: ${e.message}` };
   }
 }
-async function startFullAutoSyncBackground(prioritySku = null) {
+async function startFullAutoSyncBackground(prioritySku = null, publishMode = 'focused') {
   const pushLog = (msg) => {
     global.autoSyncLogs = global.autoSyncLogs || [];
     global.autoSyncLogs.push(`[${new Date().toLocaleTimeString()}] ${msg}`);
@@ -2103,7 +2351,10 @@ async function startFullAutoSyncBackground(prioritySku = null) {
       return;
     }
 
-    const whereClause = { isAvatar: true };
+    const whereClause = {};
+    if (publishMode !== 'matrix') {
+      whereClause.bannerPosition = 1;
+    }
     if (prioritySku) whereClause.sku = { startsWith: prioritySku };
 
     pushLog(`DEBUG: Đang query variants với where: ${JSON.stringify(whereClause)}`);
@@ -2189,7 +2440,7 @@ async function startFullAutoSyncBackground(prioritySku = null) {
           pushLog(`⏳ Đang mở trình duyệt đăng bài Shopee cho nhóm ${avt.sku}...`);
           const productName = await generateShopeeProductName(avt.id, model.name);
 
-          await runShopeeAutomationDemo(cookiesSetting.value, productName, avt.shopeeProductId || "", media, avt.id, pushLog);
+          await runShopeeAutomationDemo(cookiesSetting.value, productName, avt.shopeeProductId || "", media, avt.id, pushLog, publishMode);
 
           pushLog(`✅ Nhóm AVT ${avt.sku} đã đồng bộ xong!`);
           processedAvts++;

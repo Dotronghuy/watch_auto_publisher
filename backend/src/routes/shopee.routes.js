@@ -132,6 +132,75 @@ router.post('/settings', async (req, res) => {
   }
 });
 
+// Update .env file specifically for GEMINI
+router.post('/settings/env', async (req, res) => {
+  try {
+    const { key, value } = req.body;
+    // 1. Update in Prisma DB to keep things in sync
+    await prisma.setting.upsert({
+      where: { key },
+      update: { value },
+      create: { key, value }
+    });
+
+    // 2. Update .env file
+    if (key === 'gemini_api_key') {
+      const envPath = path.resolve(process.cwd(), '.env');
+      if (fs.existsSync(envPath)) {
+        let envContent = fs.readFileSync(envPath, 'utf8');
+        // Thay thế GEMINI_API_KEY=...
+        const regex = /^GEMINI_API_KEY=.*$/m;
+        if (regex.test(envContent)) {
+          envContent = envContent.replace(regex, `GEMINI_API_KEY=${value}`);
+        } else {
+          envContent += `\nGEMINI_API_KEY=${value}`;
+        }
+        fs.writeFileSync(envPath, envContent);
+      }
+    }
+    res.json({ success: true, message: 'Saved to .env' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// TEMPLATE CONFIG
+router.get('/templates', async (req, res) => {
+  try {
+    const templates = await prisma.templateConfig.findMany();
+    const template = templates.length > 0 ? templates[0] : { nameTemplate: '', descTemplate: '' };
+    res.json(template);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.post('/templates', async (req, res) => {
+  try {
+    const { nameTemplate, descTemplate } = req.body;
+    let templates = await prisma.templateConfig.findMany();
+    
+    if (templates.length > 0) {
+      const updated = await prisma.templateConfig.update({
+        where: { id: templates[0].id },
+        data: { nameTemplate, descTemplate }
+      });
+      return res.json(updated);
+    }
+    
+    // Fallback: create new for the first shop
+    const shop = await prisma.shop.findFirst();
+    if (!shop) throw new Error("Chưa có Shop nào trong hệ thống");
+    
+    const created = await prisma.templateConfig.create({
+      data: { nameTemplate, descTemplate, shopId: shop.id }
+    });
+    res.json(created);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // ACTION ROUTES
 router.get('/serve-local-file', (req, res) => {
   try {
@@ -257,9 +326,9 @@ router.post('/import-sapo-excel', upload.single('file'), async (req, res) => {
         }
       }
 
-      const price = row[4] ? Number(String(row[4]).replace(/[^0-9]/g, '')) : 0;
-      // Cột F (row[5]): Vị trí banner — 1=Giữa(AVT chính), 2=Trái, 3=Phải
-      const rawBannerPos = row[5] ? parseInt(String(row[5]).trim()) : null;
+      const price = row[5] ? Number(String(row[5]).replace(/[^0-9]/g, '')) : 0;
+      // Cột G (row[6]): Vị trí banner — 1=Giữa(AVT chính), 2=Trái, 3=Phải
+      const rawBannerPos = row[6] ? parseInt(String(row[6]).trim()) : null;
       const bannerPosition = [1, 2, 3].includes(rawBannerPos) ? rawBannerPos : null;
 
       const updateData = { price: price };
@@ -361,6 +430,10 @@ router.post('/sync-shopee/:variantId', async (req, res) => {
 
       // Generate productName
       const productName = await generateShopeeProductName(variant.id, variant.model?.name);
+
+      if (variant.shopeeProductId) {
+        return res.json({ success: true, message: `Mã này đã có Shopee ID (${variant.shopeeProductId}), hệ thống tự động bỏ qua (không đăng lại hay cập nhật).` });
+      }
       
       // Avatar path
       const avatarFiles = fs.readdirSync(path.join(process.cwd(), 'uploads')).filter(f => f.startsWith(`avatar_${variant.id}_`));
@@ -393,13 +466,13 @@ router.post('/run-full-auto-sync', async (req, res) => {
     return res.json({ success: false, message: 'Tiến trình Auto Sync đang chạy, vui lòng đợi hoàn tất hoặc khởi động lại server!' });
   }
 
-  const { prioritySku } = req.body || {};
+  const { prioritySku, publishMode } = req.body || {};
   global.isAutoSyncRunning = true;
   // Trả về ngay để frontend không bị timeout
   res.json({ success: true, message: 'Đã bắt đầu tiến trình chạy ngầm!' });
   
   // Gọi hàm chạy ngầm (không dùng await để nó chạy độc lập)
-  startFullAutoSyncBackground(prioritySku).then(() => {
+  startFullAutoSyncBackground(prioritySku, publishMode).then(() => {
     global.isAutoSyncRunning = false;
   }).catch(err => {
     global.isAutoSyncRunning = false;

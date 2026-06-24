@@ -549,6 +549,52 @@ QUY TẮC:
       }
     }
 
+    // ====== Toggle Check: Dùng Gemini API thay Playwright? ======
+    const allowZalo = await prisma.setting.findUnique({ where: { key: 'gemini_allow_zalo' } });
+    if (allowZalo && allowZalo.value === 'true') {
+      log('   [Toggle] ✅ Dùng Gemini API viết Zalo content (thay Playwright)...', 'info');
+      try {
+        const geminiSetting = await prisma.setting.findUnique({ where: { key: 'gemini_api_key' } });
+        const geminiKeys = (geminiSetting?.value || '').split(',').map(k => k.trim()).filter(k => k !== '');
+        if (geminiKeys.length === 0) throw new Error('Không có Gemini API Key!');
+        
+        const { GoogleGenerativeAI } = await import('@google/generative-ai');
+        let aiResult = null;
+        
+        for (let i = 0; i < geminiKeys.length; i++) {
+          try {
+            const ai = new GoogleGenerativeAI(geminiKeys[i]);
+            const model = ai.getGenerativeModel({ model: 'gemini-2.5-flash' });
+            const parts = [prompt];
+            if (imagePath && fs.existsSync(imagePath)) {
+              const base64Data = fs.readFileSync(imagePath, { encoding: 'base64' });
+              const mimeType = imagePath.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg';
+              parts.push({ inlineData: { data: base64Data, mimeType } });
+            }
+            const result = await model.generateContent(parts);
+            aiResult = result.response.text().trim();
+            break;
+          } catch (err) {
+            if (err.message?.includes('429') || err.message?.includes('503')) {
+              await new Promise(r => setTimeout(r, 5000));
+              continue;
+            }
+            break;
+          }
+        }
+        
+        if (aiResult && aiResult.length > 20) {
+          log(`   [Toggle] ✅ Gemini API viết xong (${aiResult.length} ký tự)`, 'success');
+          if (priority === '0') {
+            return `🔥 NHẬN ĐẶT TRƯỚC – Model ${product.id}\nLiên hệ đặt cọc: ${phone}\n\n${aiResult}`;
+          }
+          return `☎ /-v CTV: ${priceK}\nGiá đại lý/ sỉ/ số lượng lớn liên hệ: ${phone}\n\n${aiResult}`;
+        }
+      } catch (apiErr) {
+        log(`   [Toggle] ⚠️ Gemini API lỗi, fallback về Playwright: ${apiErr.message}`, 'warning');
+      }
+    }
+
     // ====== Playwright → gemini.google.com ======
     log('   🌐 Mở Gemini trên trình duyệt...', 'info');
     const geminiDataDir = path.join(__dirname, '../../chrome_data_gemini');

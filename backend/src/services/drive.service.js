@@ -51,7 +51,11 @@ export const getImagesInFolder = async (folderId) => {
         
         for (const file of res.data.files) {
           if (file.mimeType === 'application/vnd.google-apps.folder') {
-            await fetchRecursive(file.id);
+            if (!file.name.toUpperCase().includes('AVT')) {
+              await fetchRecursive(file.id);
+            } else {
+              console.log(`[Drive] Bỏ qua thư mục AVT: ${file.name}`);
+            }
           } else if (file.mimeType.startsWith('image/')) {
             allImages.push(file);
           }

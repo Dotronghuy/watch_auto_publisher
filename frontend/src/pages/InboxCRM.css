@@ -2,7 +2,7 @@
 
 .inbox-crm {
   display: flex;
-  height: calc(100vh - 120px); /* Fit within page-content without outer scroll */
+  height: calc(100vh - 48px); /* Fit within page-content without outer scroll */
   background: #101114;
   border-radius: 12px;
   overflow: hidden;

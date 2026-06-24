@@ -1,6 +1,9 @@
 import axios from 'axios';
 import { getPostsToTrack, updatePostMetrics } from '../utils/history.js';
 import { generateContentOnChatGPT } from './playwright.service.js';
+import { PrismaClient } from '@prisma/client';
+
+const prisma = new PrismaClient();
 
 import fs from 'fs';
 import path from 'path';
@@ -87,6 +90,13 @@ export const trackPostMetrics = async () => {
             if (likes >= 5 || comments >= 2) {
                 console.log(`🔥 Bài viết ${post.post_id} đang có tương tác tốt (${likes} Likes, ${comments} Comments). Đang gửi Feedback cho AI...`);
                 
+                // Toggle Check: Tracking Feedback
+                const allowTracking = await prisma.setting.findUnique({ where: { key: 'gemini_allow_tracking' } });
+                if (allowTracking && allowTracking.value === 'false') {
+                  console.log('[Toggle] ❌ Tracking Feedback AI bị TẮT. Bỏ qua feedback loop.');
+                  continue;
+                }
+
                 // 1. Feedback cho Content (Text)
                 const taskType = post.platform === 'instagram' ? 'ig' : 'fb';
                 const textFeedbackPrompt = `[HỆ THỐNG BÁO CÁO KẾT QUẢ]:

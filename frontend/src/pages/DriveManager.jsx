@@ -2,8 +2,10 @@ import { useState, useEffect } from 'react';
 import { Database, Search, RefreshCw, FileSpreadsheet, ExternalLink, PackageSearch } from 'lucide-react';
 import Swal from 'sweetalert2';
 import './DriveManager.css';
+import AutoFillSheet from './AutoFillSheet';
 
 const DriveManager = () => {
+  const [activeTab, setActiveTab] = useState('data');
   const [products, setProducts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
@@ -46,9 +48,9 @@ const DriveManager = () => {
     fetch(`/api/products?page=${page}&limit=${limit}&search=${encodeURIComponent(searchTerm)}`)
       .then(res => res.json())
       .then(data => {
-        setProducts(data.data);
-        setTotal(data.total);
-        setTotalPages(data.totalPages);
+        setProducts(data.data || []);
+        setTotal(data.total || 0);
+        setTotalPages(data.totalPages || 0);
         if (data.syncedAt) setSyncedAt(data.syncedAt);
         setLoading(false);
       })
@@ -97,7 +99,6 @@ const DriveManager = () => {
     return pages;
   };
 
-  // Skeleton loading rows
   const SkeletonRows = () => (
     Array.from({ length: limit }).map((_, i) => (
       <tr key={`sk-${i}`} className="skeleton-row">
@@ -111,137 +112,165 @@ const DriveManager = () => {
   );
 
   return (
-    <div className="drive-manager">
-      {/* ─── Page Header ─── */}
-      <div className="page-header">
-        <h1>Dữ liệu Sản phẩm</h1>
-        <p>Bảng đồng bộ tự động danh sách sản phẩm từ Google Sheets — nguồn dữ liệu gốc cho AI tạo Content.</p>
-      </div>
-
-      {/* ═══ Top Stats Bar ═══ */}
-      <div className="top-stats">
-        <div className="stat-col">
-          <div className="stat-title">
-            <FileSpreadsheet size={14} style={{color: '#34d399'}} />
-            <span>Nguồn dữ liệu</span>
-          </div>
-          <div className="stat-value-group">
-            <a href="https://docs.google.com/spreadsheets/d/1y2U9cuBNTT6SoHNHsHycLqVlwVM9yjvsSp6Nq2DPwxo/" target="_blank" rel="noreferrer" className="sheet-link">
-              Mở Google Sheet <ExternalLink size={11} />
-            </a>
-          </div>
-        </div>
-
-        <div className="stat-col">
-          <div className="stat-title">
-            <RefreshCw size={14} style={{color: '#60a5fa'}} />
-            <span>Trạng thái đồng bộ</span>
-          </div>
-          <div className="stat-value-group mt-1">
-            <span className={`status-badge ${syncedAt ? 'connected' : 'disconnected'}`}>
-              <span className="dot"></span>
-              {isSyncing ? (
-                <><RefreshCw size={10} style={{ display: 'inline', marginRight: 4, animation: 'spin 1s linear infinite' }} /> Đang đồng bộ...</>
-              ) : syncLabel}
-            </span>
-          </div>
-        </div>
-
-        <div className="stat-col action-col">
-          <button className="btn-primary sync-btn" disabled={isSyncing} onClick={handleSync}>
-            <RefreshCw size={14} className={isSyncing ? 'spin' : ''} /> Đồng bộ Sheet
-          </button>
-        </div>
-      </div>
-
-      {/* ═══ Data Table ═══ */}
-      <div className="data-table-section">
-        <div className="table-header-bar">
-          <div className="header-title">
-            <div className="icon-wrap"><Database size={15} /></div>
-            <h3>Danh sách SKU</h3>
-            {!loading && <span className="total-badge">{total} sản phẩm</span>}
+    <div className="relative min-h-[calc(100vh-60px)] pb-32">
+      {activeTab === 'data' ? (
+        <div className="drive-manager">
+          <div className="page-header">
+            <h1>Dữ liệu Sản phẩm</h1>
+            <p>Bảng đồng bộ tự động danh sách sản phẩm từ Google Sheets — nguồn dữ liệu gốc cho AI tạo Content.</p>
           </div>
 
-          <div className="table-actions">
-            <div className="search-box">
-              <Search size={14} style={{color: 'var(--color-text-dim)', flexShrink: 0}} />
-              <input
-                type="text"
-                placeholder="Tìm theo SKU hoặc Tên..."
-                value={searchInput}
-                onChange={(e) => setSearchInput(e.target.value)}
-              />
+          <div className="top-stats">
+            <div className="stat-col">
+              <div className="stat-title">
+                <FileSpreadsheet size={14} style={{color: '#34d399'}} />
+                <span>Nguồn dữ liệu</span>
+              </div>
+              <div className="stat-value-group">
+                <a href="https://docs.google.com/spreadsheets/d/1y2U9cuBNTT6SoHNHsHycLqVlwVM9yjvsSp6Nq2DPwxo/" target="_blank" rel="noreferrer" className="sheet-link">
+                  Mở Google Sheet <ExternalLink size={11} />
+                </a>
+              </div>
+            </div>
+
+            <div className="stat-col">
+              <div className="stat-title">
+                <RefreshCw size={14} style={{color: '#60a5fa'}} />
+                <span>Trạng thái đồng bộ</span>
+              </div>
+              <div className="stat-value-group mt-1">
+                <span className={`status-badge ${syncedAt ? 'connected' : 'disconnected'}`}>
+                  <span className="dot"></span>
+                  {isSyncing ? (
+                    <><RefreshCw size={10} style={{ display: 'inline', marginRight: 4, animation: 'spin 1s linear infinite' }} /> Đang đồng bộ...</>
+                  ) : syncLabel}
+                </span>
+              </div>
+            </div>
+
+            <div className="stat-col action-col">
+              <button className="btn-primary sync-btn" disabled={isSyncing} onClick={handleSync}>
+                <RefreshCw size={14} className={isSyncing ? 'spin' : ''} /> Đồng bộ Sheet
+              </button>
+            </div>
+          </div>
+
+          <div className="data-table-section">
+            <div className="table-header-bar">
+              <div className="header-title">
+                <div className="icon-wrap"><Database size={15} /></div>
+                <h3>Danh sách SKU</h3>
+                {!loading && <span className="total-badge">{total} sản phẩm</span>}
+              </div>
+
+              <div className="table-actions">
+                <div className="search-box">
+                  <Search size={14} style={{color: 'var(--color-text-dim)', flexShrink: 0}} />
+                  <input
+                    type="text"
+                    placeholder="Tìm theo SKU hoặc Tên..."
+                    value={searchInput}
+                    onChange={(e) => setSearchInput(e.target.value)}
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="table-container">
+              <table>
+                <thead>
+                  <tr>
+                    <th style={{width: '50px', textAlign: 'center'}}>#</th>
+                    <th>Tên sản phẩm</th>
+                    <th>Mã SKU</th>
+                    <th>Thương hiệu</th>
+                    <th>Trạng thái</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {loading ? (
+                    <SkeletonRows />
+                  ) : !products || products.length === 0 ? (
+                    <tr>
+                      <td colSpan="5">
+                        <div className="empty-state">
+                          <PackageSearch size={40} />
+                          <p>Không tìm thấy sản phẩm nào{searchTerm ? ` cho "${searchTerm}"` : ''}</p>
+                        </div>
+                      </td>
+                    </tr>
+                  ) : products.map((item, index) => (
+                    <tr key={item.id}>
+                      <td className="col-stt">{((page - 1) * limit) + index + 1}</td>
+                      <td className="col-name">{item.name}</td>
+                      <td className="col-sku"><span className="sku-chip">{item.sku}</span></td>
+                      <td className="col-brand">{item.brand}</td>
+                      <td>
+                        {item.status.includes('Sẽ đăng') || item.status.includes('Đã đăng') ? (
+                          <span className="status-badge posted"><span className="dot"></span> {item.status}</span>
+                        ) : (
+                          <span className="status-badge disconnected"><span className="dot"></span> {item.status}</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="table-footer">
+              <div className="footer-info">
+                <span>Hiển thị {products ? products.length : 0} / {total} sản phẩm</span>
+                <select className="limit-selector" value={limit} onChange={e => { setLimit(Number(e.target.value)); setPage(1); }}>
+                  <option value={12}>12 / trang</option>
+                  <option value={24}>24 / trang</option>
+                  <option value={48}>48 / trang</option>
+                  <option value={100}>100 / trang</option>
+                </select>
+              </div>
+              <div className="pagination">
+                <span onClick={() => setPage(p => Math.max(1, p - 1))} style={{opacity: page === 1 ? .3 : 1, pointerEvents: page === 1 ? 'none' : 'auto'}}>&lt;</span>
+                {generatePagination().map((p, i) => (
+                  <span
+                    key={i}
+                    className={`${p === page ? 'active' : ''} ${typeof p !== 'number' ? 'dots' : ''}`}
+                    onClick={() => typeof p === 'number' && setPage(p)}
+                  >
+                    {p}
+                  </span>
+                ))}
+                <span onClick={() => setPage(p => Math.min(totalPages, p + 1))} style={{opacity: page === totalPages ? .3 : 1, pointerEvents: page === totalPages ? 'none' : 'auto'}}>&gt;</span>
+              </div>
             </div>
           </div>
         </div>
+      ) : (
+        <AutoFillSheet />
+      )}
 
-        <div className="table-container">
-          <table>
-            <thead>
-              <tr>
-                <th style={{width: '50px', textAlign: 'center'}}>#</th>
-                <th>Tên sản phẩm</th>
-                <th>Mã SKU</th>
-                <th>Thương hiệu</th>
-                <th>Trạng thái</th>
-              </tr>
-            </thead>
-            <tbody>
-              {loading ? (
-                <SkeletonRows />
-              ) : products.length === 0 ? (
-                <tr>
-                  <td colSpan="5">
-                    <div className="empty-state">
-                      <PackageSearch size={40} />
-                      <p>Không tìm thấy sản phẩm nào{searchTerm ? ` cho "${searchTerm}"` : ''}</p>
-                    </div>
-                  </td>
-                </tr>
-              ) : products.map((item, index) => (
-                <tr key={item.id}>
-                  <td className="col-stt">{((page - 1) * limit) + index + 1}</td>
-                  <td className="col-name">{item.name}</td>
-                  <td className="col-sku"><span className="sku-chip">{item.sku}</span></td>
-                  <td className="col-brand">{item.brand}</td>
-                  <td>
-                    {item.status.includes('Sẽ đăng') || item.status.includes('Đã đăng') ? (
-                      <span className="status-badge posted"><span className="dot"></span> {item.status}</span>
-                    ) : (
-                      <span className="status-badge disconnected"><span className="dot"></span> {item.status}</span>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-
-        <div className="table-footer">
-          <div className="footer-info">
-            <span>Hiển thị {products.length} / {total} sản phẩm</span>
-            <select className="limit-selector" value={limit} onChange={e => { setLimit(Number(e.target.value)); setPage(1); }}>
-              <option value={12}>12 / trang</option>
-              <option value={24}>24 / trang</option>
-              <option value={48}>48 / trang</option>
-              <option value={100}>100 / trang</option>
-            </select>
-          </div>
-          <div className="pagination">
-            <span onClick={() => setPage(p => Math.max(1, p - 1))} style={{opacity: page === 1 ? .3 : 1, pointerEvents: page === 1 ? 'none' : 'auto'}}>&lt;</span>
-            {generatePagination().map((p, i) => (
-              <span
-                key={i}
-                className={`${p === page ? 'active' : ''} ${typeof p !== 'number' ? 'dots' : ''}`}
-                onClick={() => typeof p === 'number' && setPage(p)}
-              >
-                {p}
-              </span>
-            ))}
-            <span onClick={() => setPage(p => Math.min(totalPages, p + 1))} style={{opacity: page === totalPages ? .3 : 1, pointerEvents: page === totalPages ? 'none' : 'auto'}}>&gt;</span>
-          </div>
-        </div>
+      {/* Floating Navigation Tabs */}
+      <div className="fixed bottom-8 left-1/2 -translate-x-1/2 z-50 rounded-2xl p-1.5 flex gap-1 shadow-[0_0_40px_rgba(0,0,0,0.5)] border bg-[#0B0F19]/90 backdrop-blur-xl" style={{ borderColor: '#2D3349' }}>
+        <button 
+          onClick={() => setActiveTab('data')}
+          className="flex items-center gap-2 py-2 px-6 rounded-xl transition-all duration-300 font-medium text-sm hover:text-white"
+          style={{ 
+            backgroundColor: activeTab === 'data' ? '#2D3349' : 'transparent',
+            color: activeTab === 'data' ? '#fff' : '#94A3B8'
+          }}
+        >
+          <Database size={16} /> Dữ liệu Sản phẩm
+        </button>
+        <button 
+          onClick={() => setActiveTab('autofill')}
+          className="flex items-center gap-2 py-2 px-6 rounded-xl transition-all duration-300 font-medium text-sm hover:text-white"
+          style={{
+            backgroundColor: activeTab === 'autofill' ? '#FF4D8D' : 'transparent',
+            color: activeTab === 'autofill' ? '#fff' : '#94A3B8',
+            boxShadow: activeTab === 'autofill' ? '0 0 15px rgba(255,77,141,0.4)' : 'none'
+          }}
+        >
+          <FileSpreadsheet size={16} /> Tool Cào Dữ liệu
+        </button>
       </div>
     </div>
   );

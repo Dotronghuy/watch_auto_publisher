@@ -62,6 +62,9 @@ function App() {
   const [showGeminiKey, setShowGeminiKey] = useState(false)
   const [openaiApiKey, setOpenaiApiKey] = useState('')
   const [showOpenaiKey, setShowOpenaiKey] = useState(false)
+  const [nameTemplate, setNameTemplate] = useState('')
+  const [descTemplate, setDescTemplate] = useState('')
+  const [warrantyPeriod, setWarrantyPeriod] = useState('5 năm')
   const [googleSheetUrl, setGoogleSheetUrl] = useState('')
   const [isMatchingAi, setIsMatchingAi] = useState(false)
   const [hasShopeeCookies, setHasShopeeCookies] = useState(false)
@@ -171,7 +174,19 @@ function App() {
     setProcessingVariantId(variantId)
     const result = await api.generateAvatar(variantId)
     if (result.success) {
-      setNotification('✅ Đã tạo Avatar thành công!')
+      setNotification('✅ Đã tạo Avatar thành công và đang tải xuống!')
+      
+      // Tự động tải xuống file vừa tạo
+      if (result.path) {
+        const link = document.createElement('a');
+        link.href = safeFileUrl(result.path);
+        const filename = result.path.split(/[\\/]/).pop() || 'avatar.jpg';
+        link.download = filename;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+      }
+
       setTimeout(() => setNotification(''), 3000)
       // Cập nhật lại danh sách biến thể
       if (selectedModel) {
@@ -309,6 +324,14 @@ function App() {
     if (telToken) setTelegramBotToken(telToken)
     const telChatId = await api.getSetting('telegram_chat_id')
     if (telChatId) setTelegramChatId(telChatId)
+    const wp = await api.getSetting('shopee_warranty_period')
+    if (wp) setWarrantyPeriod(wp)
+
+    const templateConfig = await api.getTemplateConfig()
+    if (templateConfig) {
+      setNameTemplate(templateConfig.nameTemplate || '')
+      setDescTemplate(templateConfig.descTemplate || '')
+    }
   }
 
   const handleSelectWatermark = async () => {
@@ -330,6 +353,12 @@ function App() {
   const handleSaveOpenAiKey = async () => {
     await api.saveSetting('openai_api_key', openaiApiKey)
     setNotification('✅ Đã lưu OpenAI API Key!')
+    setTimeout(() => setNotification(''), 3000)
+  }
+
+  const handleSaveTemplateConfig = async () => {
+    await api.saveTemplateConfig(nameTemplate, descTemplate)
+    setNotification('✅ Đã lưu cấu hình Template AI!')
     setTimeout(() => setNotification(''), 3000)
   }
 
@@ -408,6 +437,8 @@ function App() {
     setIsMatchingAi(false);
   }
 
+  const [publishMode, setPublishMode] = useState<'focused' | 'matrix'>('focused');
+
   const handleShopeeLogin = async () => {
     setNotification('Mở cửa sổ đăng nhập Shopee...')
     const result = await api.shopeeLogin()
@@ -433,7 +464,7 @@ function App() {
     setIsAutoSyncing(true);
     setAutoSyncLog(['🚀 Đã khởi động Full Auto Sync...']);
     setActiveTab('sync'); // Chuyển sang tab Sync để hiển thị log trực tiếp
-    const result = await api.runFullAutoSync(priorityModel.trim());
+    const result = await api.runFullAutoSync(priorityModel.trim(), publishMode);
     if (result.success) {
       setNotification(`🎉 ${result.message}`);
     } else {
@@ -670,7 +701,10 @@ function App() {
                 <div className="flex-1 w-full min-w-0">
                   <div className="font-bold text-white text-sm truncate">{v.color}</div>
                   <div className="text-[10px] text-[#94A3B8] font-mono mt-1 truncate">
-                    SKU: {v.sku} {v.isAvatar && <span className="text-[#00F5FF] font-bold ml-1" title="Ảnh đại diện (AVT) cho bộ">* (AVT)</span>}
+                    SKU: {v.sku} 
+                    {v.bannerPosition === 1 && <span className="text-[#00F5FF] font-bold ml-1" title="Ảnh đại diện (AVT) cho bộ">* (AVT)</span>}
+                    {v.bannerPosition === 2 && <span className="text-[#FF4D8D] font-bold ml-1" title="Banner Trái">* (TRÁI)</span>}
+                    {v.bannerPosition === 3 && <span className="text-[#FFB800] font-bold ml-1" title="Banner Phải">* (PHẢI)</span>}
                   </div>
                 </div>
                 
@@ -692,7 +726,7 @@ function App() {
                       {v.rawImage ? (
                         <>
                           <img src={safeFileUrl(v.rawImage)} className="w-full h-full object-contain" />
-                          {watermarkPath && <img src={safeFileUrl(watermarkPath)} onLoad={(e) => setWatermarkAspectRatio(e.currentTarget.naturalWidth / e.currentTarget.naturalHeight)} className="absolute z-10 pointer-events-none drop-shadow-[0_1px_1px_rgba(255,255,255,0.8)]" style={{ top: watermarkY + '%', left: watermarkX + '%', width: watermarkScale + '%',  }} />}
+                          {watermarkPath && <img src={safeFileUrl(watermarkPath)} onLoad={(e) => setWatermarkAspectRatio(e.currentTarget.naturalWidth / e.currentTarget.naturalHeight)} className="absolute z-10 pointer-events-none drop-shadow-[0_1px_1px_rgba(255,255,255,0.8)]" style={{ top: watermarkY + '%', left: watermarkX + '%', width: watermarkScale + '%', height: 'auto'  }} />}
                           <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity z-20">
                              <span className="text-[8px] text-white font-bold bg-[#00F5FF]/20 border border-[#00F5FF]/50 px-1.5 py-0.5 rounded">SỬA LOGO</span>
                           </div>
@@ -701,11 +735,18 @@ function App() {
                     </div>
                   </div>
                   
-                  {/* Sync SKU Button */}
-                  <div className="ml-4 pl-4 border-l border-[#2D3349]/50 flex items-center">
+                  {/* Sync & Generate Buttons */}
+                  <div className="ml-4 pl-4 border-l border-[#2D3349]/50 flex flex-col gap-2 justify-center">
+                    <button 
+                      onClick={(e) => { e.stopPropagation(); handleGenerateAvatar(v.id); }}
+                      className="px-4 py-1.5 bg-[#1A1D27] border border-[#2D3349] text-[#00F5FF] hover:bg-[#00F5FF]/10 font-bold text-[10px] rounded hover:shadow-[0_0_10px_rgba(0,245,255,0.2)] transition-all flex items-center gap-2 justify-center"
+                    >
+                      <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
+                      TẠO LOGO
+                    </button>
                     <button 
                       onClick={(e) => { e.stopPropagation(); handleSyncShopee(v.id); }}
-                      className="px-4 py-2.5 bg-gradient-to-r from-[#00F5FF] to-[#00B8FF] text-black font-bold text-xs rounded-lg hover:shadow-[0_0_15px_rgba(0,245,255,0.3)] hover:scale-105 active:scale-95 transition-all flex items-center gap-2"
+                      className="px-4 py-1.5 bg-gradient-to-r from-[#00F5FF] to-[#00B8FF] text-black font-bold text-xs rounded hover:shadow-[0_0_15px_rgba(0,245,255,0.3)] hover:scale-105 active:scale-95 transition-all flex items-center gap-2"
                     >
                       <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
                       AUTO SYNC
@@ -981,7 +1022,7 @@ function App() {
               <h1 className="text-3xl font-bold text-white tracking-tight">Configuration & Platform Credentials</h1>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-8 items-start">
               {/* Left Column: Watermark */}
               <div className="bg-[#12141C] border border-[#2D3349]/60 rounded-3xl p-8 flex flex-col">
                 <h3 className="text-xs font-bold uppercase tracking-widest text-[#94A3B8] flex items-center gap-2 mb-6">
@@ -990,7 +1031,7 @@ function App() {
 
                 <div className="border border-dashed border-[#2D3349] rounded-3xl bg-[#0B0F19]/50 flex-1 min-h-[300px] flex flex-col items-center justify-center p-8 mb-6 relative group overflow-hidden">
                    {watermarkPath ? (
-                      <img src={safeFileUrl(watermarkPath)} className="max-w-full max-h-full object-contain p-4 group-hover:scale-105 transition-transform duration-500" />
+                      <img src={safeFileUrl(watermarkPath)} className="w-full h-full object-contain p-4 group-hover:scale-105 transition-transform duration-500" />
                    ) : (
                       <div className="text-center text-[#2D3349]">
                         <span className="text-6xl block mb-4">👑</span>
@@ -1009,34 +1050,127 @@ function App() {
               {/* Right Column: APIs & Connections */}
               <div className="space-y-6">
                 
+
+
+                {/* AI TEMPLATE CONFIG */}
                 <div className="bg-[#12141C] border border-[#2D3349]/60 rounded-3xl p-6">
-                  <h3 className="text-xs font-bold uppercase tracking-widest text-[#94A3B8] flex items-center gap-2 mb-4">
-                    <span className="text-[#00E676]">🤖</span> GEMINI AI KEY MANAGER
-                    <span className="ml-auto bg-green-500/10 text-green-500 border border-green-500/20 px-2 py-0.5 rounded text-[9px]">ĐÃ NẠP</span>
-                  </h3>
-                  
-                  <div className="flex gap-2 mb-4">
-                    <div className="flex-1 bg-[#0B0F19] border border-[#2D3349] rounded-xl flex items-center px-4">
-                       <input 
-                         type={showGeminiKey ? "text" : "password"} 
-                         value={geminiApiKey} 
-                         onChange={(e) => setGeminiApiKey(e.target.value)} 
-                         className="bg-transparent border-none outline-none text-white text-sm w-full font-mono placeholder-[#2D3349]"
-                         placeholder="AIzaSyA..."
-                       />
-                       <span 
-                         className="text-[#94A3B8] cursor-pointer hover:text-white transition-colors select-none" 
-                         onClick={() => setShowGeminiKey(!showGeminiKey)}
-                         title={showGeminiKey ? 'Ẩn Key' : 'Hiện Key'}
-                       >{showGeminiKey ? '🙈' : '👁'}</span>
+                  <div className="flex justify-between items-center mb-4">
+                    <h3 className="text-xs font-bold uppercase tracking-widest text-[#94A3B8] flex items-center gap-2">
+                      <span className="text-[#FF4D8D]">📝</span> MẪU NỘI DUNG SHOPEE (AI CLONE)
+                    </h3>
+                    <div className="flex items-center gap-2 bg-[#0B0F19] px-3 py-1.5 rounded-lg border border-[#2D3349]">
+                      <span className="text-[10px] text-[#94A3B8] uppercase tracking-wider font-bold">Hạn bảo hành:</span>
+                      <select 
+                        value={warrantyPeriod}
+                        onChange={async (e) => {
+                          const val = e.target.value;
+                          setWarrantyPeriod(val);
+                          await api.saveSetting('shopee_warranty_period', val);
+                          setNotification('✅ Đã lưu Hạn bảo hành thành: ' + val);
+                          setTimeout(() => setNotification(''), 3000);
+                        }}
+                        className="bg-transparent text-[#00F5FF] text-xs font-bold outline-none cursor-pointer"
+                      >
+                        <option value="5 năm" className="bg-[#0B0F19]">5 năm</option>
+                        <option value="2 năm" className="bg-[#0B0F19]">2 năm</option>
+                      </select>
                     </div>
-                    <button onClick={handleSaveGeminiKey} className="bg-[#FF4D8D] hover:bg-[#FF669D] text-white font-bold px-6 py-3 rounded-xl transition-all shadow-[0_0_15px_rgba(255,77,141,0.3)]">
-                      Lưu Key
+                  </div>
+                  
+                  <div className="space-y-4">
+                    <div>
+                      <label className="block text-[#94A3B8] text-[10px] uppercase tracking-wider mb-2">Chọn nhanh Format Tên (Shop Profile)</label>
+                      <select 
+                        className="w-full bg-[#0B0F19] border border-[#2D3349] rounded-xl p-3 text-sm text-white mb-2 focus:border-[#00F5FF] outline-none"
+                        onChange={(e) => {
+                          if (e.target.value === 'vuadongho') {
+                            setNameTemplate('[VUA ĐỒNG HỒ] Đồng Hồ Nam I&W Carnival [Mã] Chính Hãng - [Màu/Viền], [Dây], Kính Sapphire, BH 5 Năm');
+                            setDescTemplate('[VUA ĐỒNG HỒ] (Hệ thống sẽ tự động ghép thông số kỹ thuật, chính sách bảo hành và cam kết của Vua Đồng Hồ vào cuối bài)');
+                          } else if (e.target.value === 'baothanh') {
+                            setNameTemplate('Đồng Hồ Nam Chính Hãng I&W Carnival [Mã] Full Box Chống Nước Kính Sapphire (Máy Cơ Tự Động)');
+                            setDescTemplate(`💥THÔNG SỐ KỸ THUẬT:\nThương hiệu: I&W Carnival
+Quốc gia đăng ký thương hiệu: Thụy Sỹ
+Bảo hành: 24 tháng
+Mã sản phẩm: 55851G1
+Giới tính: Nam
+Kiểu máy: Nam: Japan Miyota Automatic Mov't (Máy cơ tự động Miyota - Nhật Bản) - Nữ: Japan Miyota Quartz Mov't (Máy pin Miyota - Nhật Bản)
+Đường kính mặt: 41mm (Nam)
+Độ dày: 10,5 mm
+Chất liệu vỏ: Thép không gỉ 316L
+Chất liệu dây: Thép không gỉ 316L
+Mặt kính: Sapphire Crystal nguyên khối chống xước
+Độ chịu nước; 3 ATM
+Đặc điểm nổi bật: - Phong cách thiết kế Dress watch.
+                             - Mặt số cọc kết hợp kim nung xanh tạo điểm nhấn.
+                             - Chức năng: Mặt số nhỏ chỉ giây.
+
+💥BỘ SẢN PHẨM BAO GỒM
+- Đồng hồ
+- Hộp đựng
+- Sách hướng dẫn sử dụng của hãng
+- Thẻ cứng của hãng 
+- Thẻ bảo hành của Bảo Thanh Watch
+-------------------------------------------------------------------
+🔥Bảo Thanh Watch – Hơn 10 năm xây dựng uy tín trong ngành đồng hồ chính hãng
+Được thành lập từ năm 2013, Bảo Thanh Watch đã không ngừng phát triển và khẳng định vị thế
+của mình trên thị trường đồng hồ Việt Nam. Với hơn một thập kỷ hoạt động, Bảo
+Thanh Watch tự hào trở thành một trong những chuỗi bán sỉ và lẻ đồng hồ chính
+hãng hàng đầu, được đông đảo khách hàng trên cả nước tin tưởng lựa chọn.
+Bảo Thanh Watch chuyên phân phối các thương hiệu đồng hồ chính hãng với cam kết về chất
+lượng, nguồn gốc xuất xứ rõ ràng cùng chế độ bảo hành uy tín. Mỗi sản phẩm đến
+tay khách hàng đều được kiểm tra kỹ lưỡng, đảm bảo mang lại sự an tâm tuyệt đối
+trong quá trình sử dụng.
+Với phương châm lấy uy tín làm nền tảng phát triển, Bảo Thanh Watch luôn nỗ lực mang đến
+những mẫu đồng hồ thời trang, đẳng cấp với mức giá hợp lý, đáp ứng nhu cầu đa
+dạng của khách hàng từ phổ thông đến cao cấp.
+🔥Cam Kết Của Chúng Tôi: 
+- Đồng Hồ Bảo Thanh cam kết mang đến cho người tiêu dùng những sản phẩm đồng hồ
+chính hãng với chất lượng tốt nhất.
+- Đồng Hồ Bảo Thanh cam kết nói không với hàng giả, hàng nhái.
+- Với mục tiêu tạo ra các sản phẩm đồng hồ chất lượng cao và đáng tin cậy, Đồng hồ
+Bảo Thanh luôn tập trung vào việc kiểm tra chất lượng sản phẩm
+- Dịch vụ chuyên nghiệp nhất.
+- 100% khách hàng hài lòng về chất lượng sản phẩm và dịch vụ của chúng tôi.
+- Với các tiêu chí về chất lượng và dịch vụ cùng với đội ngũ nhân viên năng động,
+nhiệt huyết, giàu kinh nghiệm, Đồng Hồ Bảo Thanh nhất định là điểm mua sắm lý
+tưởng cho đối tượng khách hàng trên cả nước.
+-------------------------------------------------------------------
+👍Nếu bạn hài lòng về sản phẩm hãy để lại
+đánh giá 5⭐️ giúp Bảo Thanh Watch nhé! Đây là động lực lớn lao giúp Bảo Thanh Watch ngày một hoàn
+thiện và phát triển hơn. 
+👍 Khi bạn có bất kỳ vấn đề gì về sản phẩm
+đừng vội đánh giá mà hãy Liên hệ shop để được hỗ trợ tốt nhất nhé! 
+#carnival #dongholed #led #donghocarniva #dientu #shopee #sale #giamgia #donghothoitrang #donghoteen #thethao #thoitrang #donghonu #donghodoi #donghothethao #chongnuoc #donghonam #donghodientunu #donghodientunam #donghohot #donghogiare`);
+                          }
+                        }}
+                      >
+                        <option value="">-- Click để chọn mẫu Shop --</option>
+                        <option value="vuadongho">Shopee Vua Đồng Hồ (Logic chuẩn có sẵn)</option>
+                        <option value="baothanh">Bảo Thanh Watch</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-[#94A3B8] text-[10px] uppercase tracking-wider mb-2">Tên sản phẩm mẫu (1 dòng, không dài dòng)</label>
+                      <textarea
+                        value={nameTemplate}
+                        onChange={(e) => setNameTemplate(e.target.value)}
+                        className="w-full bg-[#0B0F19] border border-[#2D3349] rounded-xl p-3 text-sm text-white placeholder-[#2D3349] resize-none h-20"
+                        placeholder="VD: Đồng Hồ Nam I&W Carnival 737G Chính Hãng - Viền Đá, Dây Thép..."
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[#94A3B8] text-[10px] uppercase tracking-wider mb-2">Mô tả sản phẩm mẫu (Văn phong mẫu)</label>
+                      <textarea
+                        value={descTemplate}
+                        onChange={(e) => setDescTemplate(e.target.value)}
+                        className="w-full bg-[#0B0F19] border border-[#2D3349] rounded-xl p-3 text-sm text-white placeholder-[#2D3349] resize-none h-48 custom-scrollbar"
+                        placeholder="Dán đoạn văn mô tả mẫu của bạn vào đây. AI sẽ bắt chước 100% cách viết, cách ngắt nghỉ, nhưng tự thay đổi thông số/màu sắc/sku cho phù hợp."
+                      />
+                    </div>
+                    <button onClick={handleSaveTemplateConfig} className="w-full bg-gradient-to-r from-[#FF4D8D] to-[#FF669D] hover:opacity-90 text-white font-bold px-6 py-3 rounded-xl transition-all shadow-[0_0_15px_rgba(255,77,141,0.3)]">
+                      Lưu Mẫu Nội Dung
                     </button>
                   </div>
-                  <a href="#" className="text-[10px] text-[#00F5FF] hover:underline flex items-center gap-1">
-                    <span>⚡</span> Nhấn vào đây để đăng ký nhận API Key miễn phí từ Google AI Studio
-                  </a>
                 </div>
 
                 <div className="bg-[#12141C] border border-[#2D3349]/60 rounded-3xl p-6">
@@ -1082,46 +1216,33 @@ function App() {
                   </div>
                 </div>
 
-                <div className="bg-[#12141C] border border-[#2D3349]/60 rounded-3xl p-6">
-                  <h3 className="text-xs font-bold uppercase tracking-widest text-[#94A3B8] flex items-center gap-2 mb-4">
-                    <span className="text-white">🧠</span> OPENAI BACKUP API
-                  </h3>
-                  
-                  <div className="flex gap-2">
-                    <input 
-                      type={showOpenaiKey ? "text" : "password"} 
-                      value={openaiApiKey} 
-                      onChange={(e) => setOpenaiApiKey(e.target.value)} 
-                      className="flex-1 bg-[#0B0F19] border border-[#2D3349] rounded-xl px-4 text-sm text-white font-mono placeholder-[#2D3349]"
-                      placeholder="sk-proj-..."
-                    />
-                    <button onClick={handleSaveOpenAiKey} className="bg-[#FF4D8D] hover:bg-[#FF669D] text-white font-bold px-6 py-3 rounded-xl transition-all shadow-[0_0_15px_rgba(255,77,141,0.3)]">
-                      Lưu Key
-                    </button>
-                  </div>
-                </div>
+
 
                 <div className="bg-[#12141C] border border-[#2D3349]/60 rounded-3xl p-6">
-                  <h3 className="text-xs font-bold uppercase tracking-widest text-[#94A3B8] flex items-center gap-2 mb-6">
+                  <h3 className="text-xs font-bold uppercase tracking-widest text-[#94A3B8] flex items-center gap-2 mb-4">
                     <span className="text-[#FF4D8D]">🛍</span> SHOPEE MERCHANT CONNECTION
-                    {hasShopeeCookies && (
-                      <span className="ml-auto bg-green-500/10 text-green-500 border border-green-500/20 px-2 py-0.5 rounded-full text-[9px] flex items-center gap-1">
-                        <span className="w-1.5 h-1.5 rounded-full bg-green-500"></span> CONNECTED
-                      </span>
-                    )}
                   </h3>
                   
-                  <div className="bg-[#0B0F19] border border-[#2D3349] rounded-2xl p-6 relative overflow-hidden">
-                    <div className="absolute right-0 top-0 bottom-0 w-32 bg-gradient-to-l from-[#2D3349]/20 to-transparent pointer-events-none"></div>
-                    <div className="absolute -right-4 top-1/2 -translate-y-1/2 text-[#2D3349]/40 text-7xl">⎈</div>
-                    
-                    <button onClick={handleShopeeLogin} className="w-full sm:w-auto bg-[#FF4D8D] hover:bg-[#FF669D] text-white font-bold py-3 px-8 rounded-xl transition-all flex items-center justify-center gap-2 mx-auto relative z-10 shadow-[0_0_15px_rgba(255,77,141,0.3)]">
-                      <span className="text-lg">🔄</span> Refresh Cookie Session
-                    </button>
-                    {hasShopeeCookies && (
-                      <p className="text-center text-[10px] text-[#515C67] mt-4 font-mono">Last synced: Just now</p>
-                    )}
-                  </div>
+                  {hasShopeeCookies ? (
+                    <div className="flex items-center justify-between bg-[#0B0F19] border border-[#2D3349] rounded-xl p-4">
+                      <div className="flex items-center gap-3">
+                        <span className="w-2.5 h-2.5 rounded-full bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]"></span>
+                        <span className="text-sm font-bold text-white tracking-wide">Đã kết nối với Shopee</span>
+                      </div>
+                      <button onClick={handleShopeeLogin} className="px-4 py-2 bg-[#2D3349]/50 hover:bg-[#2D3349] text-[#94A3B8] hover:text-white rounded-lg text-xs font-bold transition-all flex items-center gap-2">
+                        <span>🔄</span> Làm mới (Refresh)
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="bg-[#0B0F19] border border-[#2D3349] rounded-2xl p-6 relative overflow-hidden">
+                      <div className="absolute right-0 top-0 bottom-0 w-32 bg-gradient-to-l from-[#2D3349]/20 to-transparent pointer-events-none"></div>
+                      <div className="absolute -right-4 top-1/2 -translate-y-1/2 text-[#2D3349]/40 text-7xl">⎈</div>
+                      
+                      <button onClick={handleShopeeLogin} className="w-full sm:w-auto bg-[#FF4D8D] hover:bg-[#FF669D] text-white font-bold py-3 px-8 rounded-xl transition-all flex items-center justify-center gap-2 mx-auto relative z-10 shadow-[0_0_15px_rgba(255,77,141,0.3)]">
+                        <span className="text-lg">👉</span> Đăng Nhập Lấy Cookie
+                      </button>
+                    </div>
+                  )}
                 </div>
 
               </div>
@@ -1151,6 +1272,14 @@ function App() {
                   placeholder="Nhập tên Model ưu tiên chạy trước (VD: 751G)" 
                   className="bg-[#12141C] border border-[#2D3349]/60 rounded-xl px-3 py-2 text-sm text-white placeholder:text-[#515C67] w-64 focus:outline-none focus:border-[#00F5FF]/50"
                 />
+                <select 
+                  value={publishMode} 
+                  onChange={(e) => setPublishMode(e.target.value as 'focused' | 'matrix')} 
+                  className="bg-[#12141C] border border-[#2D3349]/60 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-[#00F5FF]/50"
+                >
+                  <option value="focused">Tập trung</option>
+                  <option value="matrix">Ma trận</option>
+                </select>
                 <button onClick={handleFullAutoSync} disabled={isAutoSyncing} className={`border px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2 transition-colors ${isAutoSyncing ? 'bg-[#2D3349]/50 text-[#515C67] border-[#2D3349]/30 cursor-not-allowed' : 'bg-green-500/10 text-green-500 border-green-500/30 hover:bg-green-500/20'}`}>
                   <span>⚡</span> {isAutoSyncing ? 'Running...' : 'Run Auto'}
                 </button>
@@ -1457,7 +1586,7 @@ function App() {
                                   <>
                                     <img src={safeFileUrl(model.variants[0].avatarImage || model.variants[0].rawImage)} className="w-full h-full object-contain" />
                                     {watermarkPath && (
-                                      <img src={safeFileUrl(watermarkPath)} onLoad={(e) => setWatermarkAspectRatio(e.currentTarget.naturalWidth / e.currentTarget.naturalHeight)} className="absolute z-10 pointer-events-none drop-shadow-[0_1px_1px_rgba(255,255,255,0.8)]" style={{ top: watermarkY + '%', left: watermarkX + '%', width: watermarkScale + '%',  }} />
+                                      <img src={safeFileUrl(watermarkPath)} onLoad={(e) => setWatermarkAspectRatio(e.currentTarget.naturalWidth / e.currentTarget.naturalHeight)} className="absolute z-10 pointer-events-none drop-shadow-[0_1px_1px_rgba(255,255,255,0.8)]" style={{ top: watermarkY + '%', left: watermarkX + '%', width: watermarkScale + '%', height: 'auto'  }} />
                                     )}
                                   </>
                                ) : (
@@ -1530,7 +1659,7 @@ function App() {
                                 <>
                                   <img src={safeFileUrl(model.variants[0].avatarImage || model.variants[0].rawImage)} className="w-full h-full object-contain group-hover:scale-110 transition-transform duration-500" />
                                   {watermarkPath && (
-                                    <img src={safeFileUrl(watermarkPath)} onLoad={(e) => setWatermarkAspectRatio(e.currentTarget.naturalWidth / e.currentTarget.naturalHeight)} className="absolute z-10 pointer-events-none drop-shadow-[0_1px_1px_rgba(255,255,255,0.8)]" style={{ top: watermarkY + '%', left: watermarkX + '%', width: watermarkScale + '%',  }} />
+                                    <img src={safeFileUrl(watermarkPath)} onLoad={(e) => setWatermarkAspectRatio(e.currentTarget.naturalWidth / e.currentTarget.naturalHeight)} className="absolute z-10 pointer-events-none drop-shadow-[0_1px_1px_rgba(255,255,255,0.8)]" style={{ top: watermarkY + '%', left: watermarkX + '%', width: watermarkScale + '%', height: 'auto'  }} />
                                   )}
                                 </>
                              ) : (

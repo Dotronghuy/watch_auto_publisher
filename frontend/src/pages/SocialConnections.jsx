@@ -1,9 +1,11 @@
 import { useState, useEffect } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
 import { Key, Copy, Link2, Clock, Plus, X, Save, Check, Eye, EyeOff, BrainCircuit, RefreshCw, Sparkles, Trash2, AlertCircle, Play, CheckCircle2, XCircle, FileText, ChevronDown, ChevronRight, Settings, Users, Edit2, MessageSquare } from 'lucide-react';
 import Swal from 'sweetalert2';
 import { Facebook, Instagram, Threads, TikTok } from '../components/SocialIcons';
 import { useAuth } from '../context/AuthContext';
 import { Link } from 'react-router-dom';
+import api from './ShopeeManager/apiClient';
 import './SocialConnections.css';
 
 const SocialConnections = () => {
@@ -20,6 +22,20 @@ const SocialConnections = () => {
   const [botPauseHours, setBotPauseHours] = useState(2);
   const [botDelayMin, setBotDelayMin] = useState(3);
   const [botDelayMax, setBotDelayMax] = useState(8);
+
+  const [geminiApiKey, setGeminiApiKey] = useState('');
+  const [showGeminiKey, setShowGeminiKey] = useState(false);
+
+  // API Power Toggles (Nhóm 1: Dùng API trực tiếp)
+  const [allowAutoFill, setAllowAutoFill] = useState(true);
+  const [allowShopee, setAllowShopee] = useState(true);
+  const [allowChatbot, setAllowChatbot] = useState(true);
+
+  // API Power Toggles (Nhóm 2: Thay thế Playwright)
+  const [allowContent, setAllowContent] = useState(false);
+  const [allowImage, setAllowImage] = useState(false);
+  const [allowTracking, setAllowTracking] = useState(false);
+  const [allowZalo, setAllowZalo] = useState(false);
 
   const [connectedSocials, setConnectedSocials] = useState({
     facebook: true,
@@ -64,6 +80,17 @@ const SocialConnections = () => {
       })
       .catch(err => console.error(err));
 
+    api.getSetting('gemini_api_key')
+      .then(key => { if (key) setGeminiApiKey(key); })
+      .catch(err => console.error(err));
+      
+    api.getSetting('gemini_allow_autofill').then(val => { if (val === 'false') setAllowAutoFill(false); });
+    api.getSetting('gemini_allow_shopee').then(val => { if (val === 'false') setAllowShopee(false); });
+    api.getSetting('gemini_allow_chatbot').then(val => { if (val === 'false') setAllowChatbot(false); });
+    api.getSetting('gemini_allow_content').then(val => { if (val === 'true') setAllowContent(true); });
+    api.getSetting('gemini_allow_image').then(val => { if (val === 'true') setAllowImage(true); });
+    api.getSetting('gemini_allow_tracking').then(val => { if (val === 'true') setAllowTracking(true); });
+    api.getSetting('gemini_allow_zalo').then(val => { if (val === 'true') setAllowZalo(true); });
     
     fetch('/api/accounts')
       .then(res => res.json())
@@ -195,6 +222,24 @@ const SocialConnections = () => {
       });
     } catch (e) {
       console.error('Lỗi auto save:', e);
+    }
+  };
+
+  const handleSaveGeminiKey = async () => {
+    try {
+      await api.saveEnvSetting('gemini_api_key', geminiApiKey);
+      Swal.fire({ title: 'Thành công', text: 'Đã lưu Khóa API Gemini vào file .env và hệ thống!', icon: 'success', background: 'var(--color-surface)', color: 'white' });
+    } catch (e) {
+      Swal.fire('Lỗi', 'Không thể lưu Khóa API Gemini', 'error');
+    }
+  };
+
+  const handleToggleApiPower = async (key, value, setter) => {
+    setter(value);
+    try {
+      await api.saveEnvSetting(key, value ? 'true' : 'false');
+    } catch (e) {
+      console.error('Lỗi khi lưu toggle API:', e);
     }
   };
 
@@ -446,6 +491,111 @@ const SocialConnections = () => {
                     <span className="delay-label">Giây</span>
                   </div>
                 </div>
+              </div>
+
+              {/* Gemini API Key input block */}
+              <div style={{ marginTop: '20px', padding: '16px', background: 'var(--color-surface-light)', borderRadius: '12px', border: '1px solid var(--color-border)' }}>
+                <h4 style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px', color: '#10b981' }}>
+                  <Key size={16} /> Khóa Gemini API (Cấu hình)
+                </h4>
+                <div style={{ display: 'flex', gap: '10px' }}>
+                  <div style={{ flex: 1, position: 'relative', display: 'flex', alignItems: 'center' }}>
+                    <input 
+                      type={showGeminiKey ? "text" : "password"} 
+                      value={geminiApiKey}
+                      onChange={(e) => setGeminiApiKey(e.target.value)}
+                      placeholder="AIzaSy..." 
+                      style={{ width: '100%', padding: '10px 40px 10px 12px', background: 'var(--color-surface)', border: '1px solid var(--color-border)', color: 'white', borderRadius: '8px', fontFamily: 'monospace' }} 
+                      onKeyDown={(e) => { if (e.key === 'Enter') handleSaveGeminiKey(); }}
+                    />
+                    <div 
+                      onClick={() => setShowGeminiKey(!showGeminiKey)} 
+                      style={{ position: 'absolute', right: '12px', cursor: 'pointer', color: 'var(--color-text-muted)' }}
+                      title={showGeminiKey ? 'Ẩn Key' : 'Hiện Key'}
+                    >
+                      {showGeminiKey ? <EyeOff size={16} /> : <Eye size={16} />}
+                    </div>
+                  </div>
+                  <button 
+                    onClick={handleSaveGeminiKey}
+                    className="btn-primary glow-primary" 
+                    style={{ padding: '0 20px', display: 'flex', alignItems: 'center', gap: '8px', border: 'none', borderRadius: '8px', cursor: 'pointer' }}
+                  >
+                    <Save size={16} /> Lưu Key
+                  </button>
+                </div>
+                
+                {/* Toggles for API Source */}
+                <div style={{ margin: '16px 0 12px', borderTop: '1px dashed rgba(255,255,255,0.1)', paddingTop: '12px' }}>
+                  <div style={{ fontWeight: 'bold', color: '#e2e8f0', fontSize: '13px', marginBottom: '4px' }}>Phân bổ Nguồn API cho:</div>
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                  <AnimatePresence>
+                    {(() => {
+                      const allItems = [
+                        { id: 'autofill', key: 'gemini_allow_autofill', state: allowAutoFill, setState: setAllowAutoFill, color: '#06b6d4', bg: 'rgba(6, 182, 212, 0.05)', border: 'rgba(6, 182, 212, 0.2)', title: '⚡ Tool Cào Dữ Liệu (Auto Fill Sheet)', desc: 'Trích xuất thông số, dịch tự động từ ảnh', index: 0 },
+                        { id: 'shopee', key: 'gemini_allow_shopee', state: allowShopee, setState: setAllowShopee, color: '#FF4D8D', bg: 'rgba(255, 77, 141, 0.05)', border: 'rgba(255, 77, 141, 0.2)', title: '🛍️ Shopee Manager', desc: 'Xào nấu nội dung, sinh mô tả SEO theo Template', index: 1 },
+                        { id: 'chatbot', key: 'gemini_allow_chatbot', state: allowChatbot, setState: setAllowChatbot, color: '#10b981', bg: 'rgba(16, 185, 129, 0.05)', border: 'rgba(16, 185, 129, 0.2)', title: '🤖 Chatbot Tư Vấn', desc: 'Fallback trả lời văn bản và phân tích ảnh (Vision)', index: 2 },
+                        { id: 'content', key: 'gemini_allow_content', state: allowContent, setState: setAllowContent, color: '#8B5CF6', bg: 'rgba(139, 92, 246, 0.05)', border: 'rgba(139, 92, 246, 0.2)', title: '📝 Viết Content MXH', desc: 'Viết caption FB, IG, Reels (hiện dùng ChatGPT Plus qua Playwright)', index: 3 },
+                        { id: 'image', key: 'gemini_allow_image', state: allowImage, setState: setAllowImage, color: '#F59E0B', bg: 'rgba(245, 158, 11, 0.05)', border: 'rgba(245, 158, 11, 0.2)', title: '🎨 Tạo Ảnh Nền AI', desc: 'Ghép ảnh đồng hồ vào nền (hiện dùng ChatGPT Plus). Tắt = dùng ảnh gốc', index: 4 },
+                        { id: 'tracking', key: 'gemini_allow_tracking', state: allowTracking, setState: setAllowTracking, color: '#EC4899', bg: 'rgba(236, 72, 153, 0.05)', border: 'rgba(236, 72, 153, 0.2)', title: '📊 Tracking Feedback', desc: 'Gửi feedback huấn luyện AI khi bài viết có tương tác tốt', index: 5 },
+                        { id: 'zalo', key: 'gemini_allow_zalo', state: allowZalo, setState: setAllowZalo, color: '#06B6D4', bg: 'rgba(6, 182, 212, 0.05)', border: 'rgba(6, 182, 212, 0.2)', title: '📱 Zalo Content', desc: 'Viết bài đăng nhóm Zalo CTV (hiện dùng Gemini Plus qua Playwright)', index: 6 }
+                      ];
+
+                      const topItems = allItems.filter(i => i.state).sort((a,b) => a.index - b.index);
+                      const bottomItems = allItems.filter(i => !i.state).sort((a,b) => a.index - b.index);
+                      
+                      const combinedList = [
+                        ...topItems,
+                        ...(bottomItems.length > 0 ? [{ isDivider: true, id: 'divider_playwright' }] : []),
+                        ...bottomItems
+                      ];
+
+                      return combinedList.map((item) => {
+                        if (item.isDivider) {
+                          return (
+                            <motion.div 
+                              layout 
+                              key={item.id}
+                              initial={{ opacity: 0 }}
+                              animate={{ opacity: 1 }}
+                              exit={{ opacity: 0 }}
+                              style={{ margin: '6px 0 2px', borderTop: '1px dashed rgba(255,255,255,0.1)', paddingTop: '12px' }}
+                            >
+                              <div style={{ fontWeight: 'bold', color: '#e2e8f0', fontSize: '13px', marginBottom: '4px' }}>Playwright</div>
+                            </motion.div>
+                          );
+                        }
+
+                        return (
+                          <motion.div 
+                            layout
+                            initial={{ opacity: 0, y: 10 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            exit={{ opacity: 0, scale: 0.9 }}
+                            transition={{ type: "spring", stiffness: 350, damping: 25 }}
+                            key={item.id} 
+                            style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: item.bg, padding: '10px 14px', borderRadius: '8px', border: `1px solid ${item.border}` }}
+                          >
+                            <div>
+                              <div style={{ color: item.color, fontWeight: 'bold', fontSize: '13px' }}>{item.title}</div>
+                              <div style={{ color: 'var(--color-text-muted)', fontSize: '11px', marginTop: '2px' }}>{item.desc}</div>
+                            </div>
+                            <label className="switch" style={{ position: 'relative', display: 'inline-block', width: '40px', height: '20px' }}>
+                              <input type="checkbox" checked={item.state} onChange={(e) => handleToggleApiPower(item.key, e.target.checked, item.setState)} style={{ opacity: 0, width: 0, height: 0, margin: 0 }} />
+                              <span className="slider round" style={{ position: 'absolute', cursor: 'pointer', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: item.state ? item.color : '#3f4147', borderRadius: '24px', transition: '.4s' }}>
+                                <span style={{ position: 'absolute', content: '""', height: '14px', width: '14px', left: item.state ? '23px' : '3px', bottom: '3px', backgroundColor: 'white', borderRadius: '50%', transition: '.4s' }}></span>
+                              </span>
+                            </label>
+                          </motion.div>
+                        );
+                      });
+                    })()}
+                  </AnimatePresence>
+                </div>
+
+
               </div>
 
               <div className="section-footer">

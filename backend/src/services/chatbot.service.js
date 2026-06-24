@@ -8,7 +8,10 @@ import { getProductInfoBySku } from './sheet.service.js';
 import { replyCRM } from './crm.service.js';
 import { broadcastCRM } from '../routes/api.routes.js';
 import dotenv from 'dotenv';
+import { PrismaClient } from '@prisma/client';
+
 dotenv.config();
+const prisma = new PrismaClient();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -336,6 +339,9 @@ const processConversation = async (conversationId, messageText, imageUrl, settin
       }
     }
 
+    const allowChatbot = await prisma.setting.findUnique({ where: { key: 'gemini_allow_chatbot' } });
+    const isAiAllowed = !(allowChatbot && allowChatbot.value === 'false');
+
     let replyMessage = "";
 
     // 2. Xử lý tin nhắn CÓ ẢNH
@@ -371,7 +377,7 @@ const processConversation = async (conversationId, messageText, imageUrl, settin
         }
       } else {
         // Lớp 3: Gemini Vision (2-Stage Verification)
-        if (settings.enableLayer3 !== false) {
+        if (settings.enableLayer3 !== false && isAiAllowed) {
            console.log(`🤖 Chuyển qua Lớp 3: Gemini Vision`);
            const layer3Result = await runLayer3GeminiVision(imageUrl, messageText);
            
@@ -400,12 +406,17 @@ const processConversation = async (conversationId, messageText, imageUrl, settin
     } 
     // 3. Xử lý tin nhắn CHỈ CÓ TEXT
     else {
-      console.log(`🤖 Bot đang xử lý Text bằng Gemini...`);
-      // Lấy lịch sử 10 tin nhắn gần nhất
-      const historyRows = await getMessagesByConversation(conversationId);
-      const recentHistory = historyRows.slice(-10); // Không gửi quá dài để đỡ token
-      
-      replyMessage = await runGeminiText(recentHistory, messageText || '');
+      if (!isAiAllowed) {
+        console.log(`🤖 Bot đang xử lý Text nhưng API AI BỊ TẮT -> Fallback kịch bản gốc.`);
+        replyMessage = "Dạ hiện tại hệ thống AI đang tạm ngưng, anh/chị cần tư vấn thêm cứ để lại tin nhắn, nhân viên shop sẽ phản hồi sớm nhất nha!";
+      } else {
+        console.log(`🤖 Bot đang xử lý Text bằng Gemini...`);
+        // Lấy lịch sử 10 tin nhắn gần nhất
+        const historyRows = await getMessagesByConversation(conversationId);
+        const recentHistory = historyRows.slice(-10); // Không gửi quá dài để đỡ token
+        
+        replyMessage = await runGeminiText(recentHistory, messageText || '');
+      }
     }
 
     // 4. Delay tự nhiên và Gửi Reply
