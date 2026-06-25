@@ -9,7 +9,7 @@ import api from './ShopeeManager/apiClient';
 import './SocialConnections.css';
 
 const SocialConnections = () => {
-  const { user } = useAuth();
+  const { user, hasPermission } = useAuth();
   const [timeSlots, setTimeSlots] = useState([]);
   const [newTime, setNewTime] = useState('');
   const [mode, setMode] = useState('real');
@@ -357,10 +357,8 @@ const SocialConnections = () => {
       {/* ═══ Settings Sections ═══ */}
       <div className="settings-sections">
 
-        {/* ── Section 1 & 2: Chỉ Admin mới được xem ── */}
-        {user && user.role === 'admin' && (
-          <>
-            {/* ── Section 1: Lịch Đăng ── */}
+        {/* ── Section 1: Lịch Đăng (quyền: settings.schedule) ── */}
+        {hasPermission('settings.schedule') && (
             <div className="section-card">
               <div className="section-header">
                 <div className="icon-circle blue"><Clock size={16} /></div>
@@ -433,9 +431,11 @@ const SocialConnections = () => {
 
 
             </div>
+        )}
 
             
-            {/* ── AI Chatbot Settings ── */}
+        {/* ── AI Chatbot Settings (quyền: settings.chatbot + settings.api_keys) ── */}
+        {hasPermission('settings.chatbot') && (
             <div className="section-card">
               <div className="section-header">
                 <div className="icon-circle green"><MessageSquare size={16} /></div>
@@ -610,8 +610,10 @@ const SocialConnections = () => {
                 </button>
               </div>
             </div>
+        )}
 
-            {/* ── Section 2: Quản lý Tài Khoản Đăng Bài ── */}
+        {hasPermission('settings.accounts') && (
+          <>
             <div className="section-card">
               <div className="section-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
@@ -691,11 +693,11 @@ const SocialConnections = () => {
                 </div>
               </div>
             )}
-
-            {/* ── Section 3: AI Login ── */}
           </>
         )}
 
+        {/* ── Section 3: AI Login (quyền: settings.ai_login) ── */}
+        {hasPermission('settings.ai_login') && (
         <div className="section-card">
           <div className="section-header">
             <div className="icon-circle green"><BrainCircuit size={16} /></div>
@@ -743,9 +745,10 @@ const SocialConnections = () => {
             </div>
           </div>
         </div>
+        )}
 
         {/* ── Section 4: User Management (Admin Only) ── */}
-        {user && user.role === 'admin' && (
+        {hasPermission('settings.users') && (
           <div className="section-card" style={{ borderColor: 'var(--color-primary)', background: 'linear-gradient(to right, rgba(255, 77, 141, 0.05), transparent)' }}>
             <div className="section-header">
               <div className="icon-circle pink"><Users size={16} /></div>

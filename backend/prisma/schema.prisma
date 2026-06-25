@@ -1,5 +1,3 @@
-// prisma/schema.prisma
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -10,17 +8,15 @@ datasource db {
 }
 
 model Shop {
-  id            String   @id @default(uuid())
+  id            String           @id @default(uuid())
   name          String
-  publishMode   String   @default("GROUPED") // GROUPED, STANDALONE
-  
+  publishMode   String           @default("GROUPED")
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+  shopeeAccount ShopeeAccount?
+  templates     TemplateConfig[]
   users         User[]
   products      WatchModel[]
-  templates     TemplateConfig[]
-  shopeeAccount ShopeeAccount?
-
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
 }
 
 model User {
@@ -28,78 +24,70 @@ model User {
   username    String   @unique
   password    String
   role        String   @default("user")
-  permissions String?  // JSON string
-  
+  permissions String?
   shopId      String?
-  shop        Shop?    @relation(fields: [shopId], references: [id], onDelete: SetNull)
-
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+  shop        Shop?    @relation(fields: [shopId], references: [id])
 }
 
 model TemplateConfig {
-  id              String   @id @default(uuid())
-  shopId          String
-  nameTemplate    String   @default("[Mã {{sku}}] {{product_name}} chính hãng")
-  descTemplate    String   @default("Sản phẩm {{product_name}} hiện đang có sẵn...")
-  
-  shop            Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  id           String @id @default(uuid())
+  shopId       String
+  nameTemplate String @default("[Mã {{sku}}] {{product_name}} chính hãng")
+  descTemplate String @default("Sản phẩm {{product_name}} hiện đang có sẵn...")
+  shop         Shop   @relation(fields: [shopId], references: [id], onDelete: Cascade)
 }
 
 model ShopeeAccount {
-  id              String   @id @default(uuid())
-  shopId          String   @unique
-  cookieData      String?  
-  
-  shop            Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  id         String  @id @default(uuid())
+  shopId     String  @unique
+  cookieData String?
+  shop       Shop    @relation(fields: [shopId], references: [id], onDelete: Cascade)
 }
 
 model WatchModel {
   id          String    @id @default(uuid())
-  name        String    @unique // VD: "735G"
+  name        String    @unique
   description String?
   basePrice   Float?
-  
   shopId      String?
-  shop        Shop?     @relation(fields: [shopId], references: [id], onDelete: Cascade)
-
-  variants    Variant[]
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
+  variants    Variant[]
+  shop        Shop?     @relation(fields: [shopId], references: [id], onDelete: Cascade)
 }
 
 model Variant {
-  id               String    @id @default(uuid())
-  modelId          String
-  color            String    // VD: "Đỏ", "Xanh"
-  sku              String    @unique // VD: "735G2-T8"
-  price            Float
-  shopeeProductId  String?   // ID lấy từ link Shopee (VD: 43764866809)
-  rawImage         String?   // Đường dẫn ảnh gốc trên máy
-  avatarImage      String?   // Đường dẫn ảnh đã render bằng Sharp
-  status           String    @default("DRAFT") // DRAFT, PUBLISHED, HIDDEN
-  bannerPosition   Int?      // Vị trí trên banner: 1=Giữa(AVT chính), 2=Trái, 3=Phải. null=không dùng
-  
-  model            WatchModel @relation(fields: [modelId], references: [id], onDelete: Cascade)
-  syncTasks        SyncTask[]
+  id              String     @id @default(uuid())
+  modelId         String
+  color           String
+  sku             String     @unique
+  price           Float
+  shopeeProductId String?
+  rawImage        String?
+  avatarImage     String?
+  status          String     @default("DRAFT")
+  bannerPosition  Int?
+  syncTasks       SyncTask[]
+  model           WatchModel @relation(fields: [modelId], references: [id], onDelete: Cascade)
 }
 
 model SyncTask {
-  id          String   @id @default(uuid())
-  variantId   String
-  action      String   // UPLOAD_AVATAR, UPDATE_INFO, UNHIDE
-  status      String   @default("PENDING") // PENDING, RUNNING, SUCCESS, FAILED
-  logs        String?  // Ghi log lỗi từ Puppeteer
-  createdAt   DateTime @default(now())
-
-  variant     Variant  @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  id        String   @id @default(uuid())
+  variantId String
+  action    String
+  status    String   @default("PENDING")
+  logs      String?
+  createdAt DateTime @default(now())
+  variant   Variant  @relation(fields: [variantId], references: [id], onDelete: Cascade)
 }
 
 model Setting {
-  id      String  @id @default(uuid())
-  key     String  @unique
-  value   String
-  shopId  String?
+  id     String  @id @default(uuid())
+  key    String  @unique
+  value  String
+  shopId String?
 }
 
 model ZaloPostHistory {

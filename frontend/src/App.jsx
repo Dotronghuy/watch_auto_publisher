@@ -23,7 +23,7 @@ function App() {
           <Route path="/login" element={<Login />} />
           
           <Route path="/" element={<Layout />}>
-            <Route element={<ProtectedRoute permission="dashboard" />}>
+          <Route element={<ProtectedRoute permission="dashboard" />}>
               <Route index element={<Dashboard />} />
             </Route>
 
@@ -47,8 +47,11 @@ function App() {
               <Route path="inbox" element={<InboxCRM />} />
             </Route>
 
-            <Route element={<ProtectedRoute permission="dashboard" />}>
+            <Route element={<ProtectedRoute permission="shopee" />}>
               <Route path="shopee" element={<ShopeeManager />} />
+            </Route>
+
+            <Route element={<ProtectedRoute permission="zalo" />}>
               <Route path="zenwatch/zalo" element={<ZenwatchZalo />} />
             </Route>
 

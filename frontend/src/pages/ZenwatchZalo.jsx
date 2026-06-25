@@ -1,11 +1,13 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Play, Square, Send, Plus, X, Clock, BarChart3, CheckCircle2, MessageSquare, Settings, Terminal, History, Zap } from 'lucide-react';
 import Swal from 'sweetalert2';
+import { useAuth } from '../context/AuthContext';
 import './ZenwatchZalo.css';
 
 
 
 export default function ZenwatchZalo() {
+  const { hasPermission } = useAuth();
   const [status, setStatus] = useState({ isRunning: false, logs: [] });
   const [config, setConfig] = useState({
     groups: [], phone: '', sheetUrl: '',
@@ -210,13 +212,17 @@ export default function ZenwatchZalo() {
         </div>
         <div className="zalo-hero-actions">
           {!status.isRunning ? (
+            hasPermission('zalo.start') && (
             <button className="btn-cta" onClick={handleStart}>
               <Play size={18} /> Bắt đầu chiến dịch
             </button>
+            )
           ) : (
+            hasPermission('zalo.stop') && (
             <button className="btn-danger" onClick={handleStop}>
               <Square size={18} /> Dừng khẩn cấp
             </button>
+            )
           )}
         </div>
       </div>

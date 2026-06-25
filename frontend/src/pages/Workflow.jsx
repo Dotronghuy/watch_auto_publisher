@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { ChevronLeft, ChevronRight, Cloud, Settings, Share2, Search, Pause, Terminal, Image as ImageIcon, BrainCircuit, FileText, UploadCloud, RotateCcw, Trash2, FlaskConical, X, MessageSquare, Camera, Zap, CheckCircle, Palette, PenTool, Maximize } from 'lucide-react';
 import Swal from 'sweetalert2';
+import { useAuth } from '../context/AuthContext';
 import './Workflow.css';
 
 const INITIAL_NODES = {
@@ -32,6 +33,7 @@ const getSavedNodes = () => {
 };
 
 const Workflow = () => {
+  const { hasPermission } = useAuth();
   const [logs, setLogs] = useState([]);
   const [imageGallery, setImageGallery] = useState([]);
   const [carouselIdx, setCarouselIdx] = useState(0);
@@ -65,6 +67,7 @@ const Workflow = () => {
   // Sample images state
   const [sampleImages, setSampleImages] = useState([]);
   const [sampleImgUploading, setSampleImgUploading] = useState(false);
+  const [skuCode, setSkuCode] = useState('');
   // Canvas transform state
   const [transform, setTransform] = useState({ x: 0, y: 0, scale: 1 });
   const terminalEndRef = useRef(null);
@@ -505,7 +508,11 @@ const Workflow = () => {
     setDryRunResult(null);
     setTrainMode('image');
     try {
-      const res = await fetch('/api/train-image', { method: 'POST' });
+      const res = await fetch('/api/train-image', { 
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sku: skuCode })
+      });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Training ảnh thất bại');
       if (data.trainMode === 'image' && data.images.length === 0) {
@@ -823,6 +830,30 @@ const Workflow = () => {
               <div className="port" style={{top:'50%', left:'-5px'}} title="Input từ Nhánh 1"></div>
               <div className="node-header"><BrainCircuit size={14} className="pink" /> GPT-5.5 Version (Sinh Ảnh)</div>
               <div className="node-body">
+                <div className="field" style={{marginBottom: '12px'}}>
+                  <label>Mã SKU Sản phẩm</label>
+                  <input
+                    type="text"
+                    placeholder="Nhập mã SKU (vd: SP01)..."
+                    value={skuCode}
+                    onChange={(e) => setSkuCode(e.target.value)}
+                    onKeyDown={(e) => e.stopPropagation()}
+                    style={{
+                      width: '100%',
+                      background: 'rgba(0,0,0,0.3)',
+                      border: '1px solid rgba(255,255,255,0.05)',
+                      color: '#fff',
+                      padding: '8px 10px',
+                      borderRadius: '6px',
+                      fontSize: '11px',
+                      outline: 'none',
+                      marginTop: '4px',
+                      transition: 'border-color 0.2s'
+                    }}
+                    onFocus={(e) => e.target.style.borderColor = 'var(--color-primary)'}
+                    onBlur={(e) => e.target.style.borderColor = 'rgba(255,255,255,0.05)'}
+                  />
+                </div>
                 <div className="field">
                   <label>Trạng thái Prompt</label>
                   <div className="value prompt-preview" style={{ color: '#ffcc00', border: '1px dashed rgba(255, 204, 0, 0.3)', background: 'rgba(255, 204, 0, 0.05)', cursor: 'default' }}>

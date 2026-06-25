@@ -1,100 +1,102 @@
 import express from 'express';
 import bcrypt from 'bcryptjs';
-import { readUsers, writeUsers } from '../services/user.service.js';
+import { PrismaClient } from '@prisma/client';
 import { verifyToken, requireAdmin } from '../middleware/auth.middleware.js';
 
 const router = express.Router();
+const prisma = new PrismaClient();
 
 // Lấy danh sách users
-router.get('/', [verifyToken, requireAdmin], (req, res) => {
-  const users = readUsers();
-  // Không trả về password
-  const safeUsers = users.map(u => {
-    const { password, ...userWithoutPassword } = u;
-    return userWithoutPassword;
-  });
-  res.status(200).json(safeUsers);
+router.get('/', [verifyToken, requireAdmin], async (req, res) => {
+  try {
+    const users = await prisma.user.findMany();
+    const safeUsers = users.map(u => {
+      const { password, ...userWithoutPassword } = u;
+      let permissions = [];
+      try { if (u.permissions) permissions = JSON.parse(u.permissions); } catch(e){}
+      return { ...userWithoutPassword, permissions };
+    });
+    res.status(200).json(safeUsers);
+  } catch(e) {
+    res.status(500).json({message: 'Lỗi server'});
+  }
 });
 
 // Tạo user mới
-router.post('/', [verifyToken, requireAdmin], (req, res) => {
+router.post('/', [verifyToken, requireAdmin], async (req, res) => {
   const { username, password, role, permissions } = req.body;
-  const users = readUsers();
-  
-  if (users.find(u => u.username === username)) {
-    return res.status(400).json({ message: 'Tên đăng nhập đã tồn tại!' });
+  try {
+    const existing = await prisma.user.findUnique({ where: { username } });
+    if (existing) return res.status(400).json({ message: 'Tên đăng nhập đã tồn tại!' });
+
+    const salt = bcrypt.genSaltSync(10);
+    const newUser = await prisma.user.create({
+      data: {
+        username,
+        password: bcrypt.hashSync(password, salt),
+        role: role || 'staff',
+        permissions: JSON.stringify(permissions || [])
+      }
+    });
+
+    const { password: _, ...safeUser } = newUser;
+    safeUser.permissions = permissions || [];
+    res.status(201).json(safeUser);
+  } catch(e) {
+    res.status(500).json({message: 'Lỗi server'});
   }
-
-  const salt = bcrypt.genSaltSync(10);
-  const newUser = {
-    id: Date.now().toString(),
-    username,
-    password: bcrypt.hashSync(password, salt),
-    role: role || 'staff',
-    permissions: permissions || []
-  };
-
-  users.push(newUser);
-  writeUsers(users);
-
-  const { password: _, ...safeUser } = newUser;
-  res.status(201).json(safeUser);
 });
 
 // Cập nhật user (quyền hoặc đổi pass)
-router.put('/:id', [verifyToken, requireAdmin], (req, res) => {
+router.put('/:id', [verifyToken, requireAdmin], async (req, res) => {
   const { id } = req.params;
   const { password, permissions, role } = req.body;
-  const users = readUsers();
-  const index = users.findIndex(u => u.id === id);
+  
+  try {
+    const user = await prisma.user.findUnique({ where: { id } });
+    if (!user) return res.status(404).json({ message: 'User không tồn tại' });
 
-  if (index === -1) {
-    return res.status(404).json({ message: 'User không tồn tại' });
-  }
-
-  // Admin không thể tự đổi quyền của mình thành staff (tránh mất quyền admin duy nhất)
-  if (users[index].role === 'admin' && role === 'staff') {
-    const adminCount = users.filter(u => u.role === 'admin').length;
-    if (adminCount <= 1) {
-      return res.status(400).json({ message: 'Phải có ít nhất 1 Admin trong hệ thống!' });
+    // Admin không thể tự đổi quyền của mình thành staff (tránh mất quyền admin duy nhất)
+    if (user.role === 'admin' && role === 'staff') {
+      const adminCount = await prisma.user.count({ where: { role: 'admin' } });
+      if (adminCount <= 1) return res.status(400).json({ message: 'Phải có ít nhất 1 Admin trong hệ thống!' });
     }
-  }
 
-  if (password) {
-    const salt = bcrypt.genSaltSync(10);
-    users[index].password = bcrypt.hashSync(password, salt);
-  }
-  
-  if (permissions) users[index].permissions = permissions;
-  if (role) users[index].role = role;
+    const dataToUpdate = {};
+    if (password) dataToUpdate.password = bcrypt.hashSync(password, bcrypt.genSaltSync(10));
+    if (permissions) dataToUpdate.permissions = JSON.stringify(permissions);
+    if (role) dataToUpdate.role = role;
 
-  writeUsers(users);
-  
-  const { password: _, ...safeUser } = users[index];
-  res.status(200).json(safeUser);
+    const updatedUser = await prisma.user.update({
+      where: { id },
+      data: dataToUpdate
+    });
+
+    const { password: _, ...safeUser } = updatedUser;
+    safeUser.permissions = permissions || (user.permissions ? JSON.parse(user.permissions) : []);
+    res.status(200).json(safeUser);
+  } catch(e) {
+    res.status(500).json({message: 'Lỗi server'});
+  }
 });
 
 // Xóa user
-router.delete('/:id', [verifyToken, requireAdmin], (req, res) => {
+router.delete('/:id', [verifyToken, requireAdmin], async (req, res) => {
   const { id } = req.params;
-  const users = readUsers();
-  const userToDelete = users.find(u => u.id === id);
+  try {
+    const user = await prisma.user.findUnique({ where: { id } });
+    if (!user) return res.status(404).json({ message: 'User không tồn tại' });
 
-  if (!userToDelete) {
-    return res.status(404).json({ message: 'User không tồn tại' });
-  }
-
-  if (userToDelete.role === 'admin') {
-    const adminCount = users.filter(u => u.role === 'admin').length;
-    if (adminCount <= 1) {
-      return res.status(400).json({ message: 'Không thể xóa Admin duy nhất!' });
+    if (user.role === 'admin') {
+      const adminCount = await prisma.user.count({ where: { role: 'admin' } });
+      if (adminCount <= 1) return res.status(400).json({ message: 'Không thể xóa Admin duy nhất!' });
     }
+
+    await prisma.user.delete({ where: { id } });
+    res.status(200).json({ message: 'Xóa user thành công!' });
+  } catch(e) {
+    res.status(500).json({message: 'Lỗi server'});
   }
-
-  const filteredUsers = users.filter(u => u.id !== id);
-  writeUsers(filteredUsers);
-
-  res.status(200).json({ message: 'Xóa user thành công!' });
 });
 
 export default router;

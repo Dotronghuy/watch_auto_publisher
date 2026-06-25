@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { dbAPI, driveAPI, fsAPI } from './ShopeeManager/apiClient';
+import { useAuth } from '../context/AuthContext';
 import './ShopeeManager-tailwind.css';
 import api from './ShopeeManager/apiClient.ts';
 
@@ -398,6 +399,12 @@ function App() {
     }
     setTimeout(() => setNotification(''), 4000);
   }
+
+  const { hasPermission } = useAuth();
+  
+  // ===============================
+  // STATE MANAGEMENT
+  // ===============================
 
   const handleAutoMatchAi = async () => {
     if (imagePool.length === 0) return;
@@ -1280,10 +1287,12 @@ thiện và phát triển hơn.
                   <option value="focused">Tập trung</option>
                   <option value="matrix">Ma trận</option>
                 </select>
-                <button onClick={handleFullAutoSync} disabled={isAutoSyncing} className={`border px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2 transition-colors ${isAutoSyncing ? 'bg-[#2D3349]/50 text-[#515C67] border-[#2D3349]/30 cursor-not-allowed' : 'bg-green-500/10 text-green-500 border-green-500/30 hover:bg-green-500/20'}`}>
-                  <span>⚡</span> {isAutoSyncing ? 'Running...' : 'Run Auto'}
-                </button>
-                {isAutoSyncing && (
+                {hasPermission('shopee.sync_start') && (
+                  <button onClick={handleFullAutoSync} disabled={isAutoSyncing} className={`border px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2 transition-colors ${isAutoSyncing ? 'bg-[#2D3349]/50 text-[#515C67] border-[#2D3349]/30 cursor-not-allowed' : 'bg-green-500/10 text-green-500 border-green-500/30 hover:bg-green-500/20'}`}>
+                    <span>⚡</span> {isAutoSyncing ? 'Running...' : 'Run Auto'}
+                  </button>
+                )}
+                {isAutoSyncing && hasPermission('shopee.sync_stop') && (
                   <button onClick={handleStopAutoSync} className="bg-red-500/10 text-red-500 border border-red-500/30 hover:bg-red-500/20 px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2 transition-colors">
                     <span>🛑</span> Stop
                   </button>

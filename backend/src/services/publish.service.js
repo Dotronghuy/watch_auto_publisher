@@ -756,7 +756,7 @@ telegramEvents.on('trigger_start_training', () => {
   }
 });
 
-export const startTelegramTrainingLoop = async () => {
+export const startTelegramTrainingLoop = async (targetSku = null) => {
   isRoutineRunning = true;
   let isTraining = true;
 
@@ -786,14 +786,28 @@ export const startTelegramTrainingLoop = async () => {
       let selectedSku = null;
       let avtImageFile = null;
 
-      for (const skuFolder of shuffledSkus) {
+      const skusToSearch = targetSku 
+        ? skuFolders.filter(f => f.name.toLowerCase().includes(targetSku.toLowerCase()))
+        : shuffledSkus;
+
+      if (targetSku && skusToSearch.length === 0) {
+        throw new Error(`Không tìm thấy SKU nào chứa từ khóa "${targetSku}" trên Google Drive!`);
+      }
+
+      for (const skuFolder of skusToSearch) {
         const avtFolderId = await getFolderIdByName('0_Anh_AVT', skuFolder.id);
         if (!avtFolderId) continue;
         const mediaFiles = await getImagesInFolder(avtFolderId);
-        const freshMedia = mediaFiles.filter(item => !postedIds.includes(item.id));
-        if (freshMedia.length > 0) {
+        
+        let validMedia = mediaFiles.filter(item => !postedIds.includes(item.id));
+        // Force use any media if targetSku is set but all media has been posted
+        if (targetSku && validMedia.length === 0 && mediaFiles.length > 0) {
+           validMedia = mediaFiles;
+        }
+
+        if (validMedia.length > 0) {
           selectedSku = skuFolder;
-          avtImageFile = freshMedia[Math.floor(Math.random() * freshMedia.length)];
+          avtImageFile = validMedia[Math.floor(Math.random() * validMedia.length)];
           break;
         }
       }
@@ -947,15 +961,15 @@ export const startTelegramTrainingLoop = async () => {
   isRoutineRunning = false;
 };
 
-export const trainImageOnly = async () => {
+export const trainImageOnly = async (targetSku = null) => {
   if (isRoutineRunning) throw new Error('Hệ thống đang chạy một tiến trình khác!');
 
   // Khởi động luồng chạy ngầm
-  startTelegramTrainingLoop().catch(console.error);
+  startTelegramTrainingLoop(targetSku).catch(console.error);
 
   return {
     success: true,
-    sku: 'Auto',
+    sku: targetSku || 'Auto',
     postMode: 'AI',
     fbContent: '',
     igContent: '',

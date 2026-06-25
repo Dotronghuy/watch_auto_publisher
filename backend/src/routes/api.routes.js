@@ -377,10 +377,11 @@ router.post('/stop-workflow', async (req, res) => {
 router.post('/train-image', async (req, res) => {
   try {
     resetGlobalStop();
-    addActivity('Bắt đầu Train Ảnh (GPT Vision)', 'info');
+    const { sku } = req.body || {};
+    addActivity('Bắt đầu Train Ảnh (GPT Vision)' + (sku ? ` - SKU: ${sku}` : ''), 'info');
     sendLogToClients({ time: new Date().toLocaleTimeString(), sender: 'System', message: '🚀 Bắt đầu luồng Train Ảnh...', type: 'info' });
     
-    const result = await trainImageOnly();
+    const result = await trainImageOnly(sku);
     res.json(result);
   } catch (err) {
     const isAborted = err.message?.includes('aborted') || err.name === 'AbortError';

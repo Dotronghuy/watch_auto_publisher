@@ -104,7 +104,10 @@ async function callAIWithRotation(prompt, images = []) {
         const ai = new GoogleGenerativeAI(apiKey);
         const model = ai.getGenerativeModel({ model: "gemini-2.5-flash" });
         const parts = [prompt, ...images.map((img) => ({ inlineData: { data: img.data, mimeType: img.mimeType } }))];
-        const result = await model.generateContent(parts);
+        const result = await Promise.race([
+          model.generateContent(parts),
+          new Promise((_, rej) => setTimeout(() => rej(new Error("Timeout 60s")), 60000))
+        ]);
         const response = await result.response;
         return response.text().trim();
       } catch (error) {
@@ -112,6 +115,7 @@ async function callAIWithRotation(prompt, images = []) {
           console.warn(`[AI] Gemini Key ${i + 1} báo bận (429/503). Đang chờ 5s để thử lại lần ${retryCount}...`);
           await new Promise(res => setTimeout(res, 5000));
           retryCount++;
+          if (retryCount > 5) break; // Thử lại 5 lần rồi chuyển key hoặc văng lỗi, không treo vĩnh viễn
           continue;
         }
         console.error(`[AI] Lỗi Gemini Key ${i + 1}:`, error.message);
@@ -159,6 +163,7 @@ async function callAIWithRotation(prompt, images = []) {
           console.warn(`[AI] OpenAI Key ${i + 1} báo bận (429/503). Đang chờ 5s để thử lại lần ${retryCount}...`);
           await new Promise(res => setTimeout(res, 5000));
           retryCount++;
+          if (retryCount > 5) break;
           continue;
         }
         console.error(`[AI] Lỗi OpenAI Key ${i + 1}:`, error.message);

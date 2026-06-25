@@ -178,22 +178,26 @@
   top: 0; left: 0; right: 0; bottom: 0;
   background: rgba(0, 0, 0, 0.6);
   display: flex;
-  align-items: center;
+  align-items: flex-start; /* Fix scroll clipping */
   justify-content: center;
   z-index: 1000;
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
   animation: fadeIn 0.2s ease-out;
+  overflow-y: auto;
+  padding: 40px 20px;
 }
 
 .um-modal {
-  background: rgba(20, 20, 20, 0.8);
+  background: linear-gradient(145deg, rgba(30, 30, 35, 0.95), rgba(20, 20, 25, 0.95));
   border: 1px solid rgba(255, 255, 255, 0.1);
+  border-top: 1px solid rgba(255, 255, 255, 0.2);
   border-radius: 24px;
-  padding: 40px;
+  padding: 30px 40px;
   width: 100%;
-  max-width: 550px;
-  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.8);
+  max-width: 600px;
+  margin: auto; /* Centers if screen is taller than modal */
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5), 0 0 40px rgba(255, 77, 141, 0.1);
   animation: slideUpModal 0.4s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
@@ -299,63 +303,230 @@
   margin-top: 12px;
 }
 
-.um-custom-checkbox {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  cursor: pointer;
-  padding: 12px 16px;
-  background: rgba(255, 255, 255, 0.03);
+/* ═══ Permission Grid Cards ═══ */
+.um-permission-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  max-height: 450px;
+  overflow-y: auto;
+  padding-right: 8px;
+  align-content: start;
+}
+
+.um-permission-grid::-webkit-scrollbar {
+  width: 6px;
+}
+
+.um-permission-grid::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 6px;
+}
+
+.um-permission-grid::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+.perm-node-card {
+  background: #111111;
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 12px;
+  overflow: hidden;
   transition: all 0.2s;
-  user-select: none;
 }
 
-.um-custom-checkbox:hover {
-  background: rgba(255, 255, 255, 0.08);
+.perm-node-card.active {
+  border-color: rgba(16, 185, 129, 0.3);
 }
 
-.um-custom-checkbox.checked {
-  border-color: var(--color-primary);
-  background: rgba(255, 77, 141, 0.08);
-}
-
-.checkbox-box {
-  width: 22px;
-  height: 22px;
-  border: 2px solid rgba(255, 255, 255, 0.3);
-  border-radius: 6px;
+.perm-node-header {
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: space-between;
+  padding: 16px;
+  cursor: pointer;
+  user-select: none;
+  background: transparent;
   transition: all 0.2s;
-  flex-shrink: 0;
 }
 
-.um-custom-checkbox.checked .checkbox-box {
-  background: var(--color-primary);
-  border-color: var(--color-primary);
-  color: white;
+.perm-node-header:hover {
+  background: rgba(255, 255, 255, 0.03);
 }
 
-.um-custom-checkbox span {
+.perm-node-label {
   font-size: 14px;
-  font-weight: 500;
-  color: rgba(255, 255, 255, 0.8);
+  font-weight: 600;
+  color: white;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
-.um-custom-checkbox.checked span {
-  color: white;
+/* iOS Switch Style */
+.ios-switch {
+  width: 42px;
+  height: 24px;
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 12px;
+  position: relative;
+  transition: all 0.3s;
+  cursor: pointer;
+}
+
+.ios-switch.on {
+  background: #10b981;
+}
+
+.ios-switch.partial {
+  background: #f59e0b;
+}
+
+.ios-switch-knob {
+  width: 20px;
+  height: 20px;
+  background: white;
+  border-radius: 50%;
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+}
+
+.ios-switch.on .ios-switch-knob,
+.ios-switch.partial .ios-switch-knob {
+  transform: translateX(18px);
+}
+
+.perm-node-children {
+  padding: 0 16px 16px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.perm-child-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+  padding-top: 12px;
+}
+
+.perm-child-label {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.6);
+  transition: all 0.2s;
+}
+
+.perm-child-item.checked .perm-child-label {
+  color: rgba(255, 255, 255, 0.95);
+}
+
+/* Sub switch */
+.ios-switch-small {
+  width: 34px;
+  height: 20px;
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 10px;
+  position: relative;
+  transition: all 0.3s;
+}
+
+.ios-switch-small.on {
+  background: #10b981;
+}
+
+.ios-switch-small-knob {
+  width: 16px;
+  height: 16px;
+  background: white;
+  border-radius: 50%;
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.ios-switch-small.on .ios-switch-small-knob {
+  transform: translateX(14px);
+}
+
+/* Grid layout for form */
+.um-modal-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 40px;
+  margin-top: 20px;
+}
+
+@media (max-width: 768px) {
+  .um-modal-grid {
+    grid-template-columns: 1fr;
+    gap: 20px;
+  }
+}
+
+.um-modal-right-header {
+  font-size: 11px;
+  font-weight: 600;
+  color: #ff8fb0;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  margin-bottom: 16px;
+}
+
+.um-modal-subtitle {
+  font-size: 13px;
+  color: rgba(255,255,255,0.6);
+  margin: 6px 0 0 0;
+}
+
+.um-modal-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 30px;
+  padding-top: 24px;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
 }
 
 .um-modal-actions {
   display: flex;
-  justify-content: flex-end;
   gap: 16px;
-  margin-top: 40px;
-  padding-top: 24px;
-  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.um-modal-security {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.5);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.um-modal-security span {
+  color: #10b981;
+  font-weight: 700;
+  background: rgba(16, 185, 129, 0.1);
+  padding: 4px 8px;
+  border-radius: 4px;
+  letter-spacing: 0.5px;
+}
+
+/* Override input background for premium solid look */
+.um-form-group .input-with-icon input,
+.um-form-group .input-with-icon select {
+  background: #111111;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.um-form-group .input-with-icon input:focus,
+.um-form-group .input-with-icon select:focus {
+  background: #1a1a1a;
+  border-color: rgba(255, 77, 141, 0.4);
 }
 
 .btn-cancel {
@@ -392,3 +563,4 @@
   transform: translateY(-2px);
   box-shadow: 0 8px 25px rgba(255, 77, 141, 0.5);
 }
+

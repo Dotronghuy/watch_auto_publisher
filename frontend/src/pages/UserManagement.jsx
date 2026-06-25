@@ -1,16 +1,103 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { Users, UserPlus, X, Check, Shield, User, Lock, LayoutGrid } from 'lucide-react';
+import { Users, UserPlus, X, Check, Shield, User, Lock, LayoutGrid, ChevronDown, ChevronRight } from 'lucide-react';
 import './UserManagement.css';
 
+// ═══ Cấu trúc cây quyền chi tiết ═══
+const PERMISSION_TREE = [
+  {
+    id: 'dashboard', label: '📊 Tổng quan', children: [
+      { id: 'dashboard.view', label: 'Xem trang tổng quan' }
+    ]
+  },
+  {
+    id: 'drive', label: '☁️ Lưu trữ', children: [
+      { id: 'drive.view', label: 'Xem trang Google Drive' },
+      { id: 'drive.upload', label: 'Upload ảnh / video' }
+    ]
+  },
+  {
+    id: 'workflow', label: '🔄 Luồng công việc', children: [
+      { id: 'workflow.view', label: 'Xem trang Luồng công việc' },
+      { id: 'workflow.start', label: 'Bắt đầu đăng bài tự động' },
+      { id: 'workflow.stop', label: 'Dừng đăng bài' }
+    ]
+  },
+  {
+    id: 'calendar', label: '📅 Lịch đăng', children: [
+      { id: 'calendar.view', label: 'Xem lịch đăng bài' }
+    ]
+  },
+  {
+    id: 'inbox', label: '💬 Hộp thư (CRM)', children: [
+      { id: 'inbox.view', label: 'Xem danh sách tin nhắn' },
+      { id: 'inbox.reply', label: 'Trả lời tin nhắn khách hàng' }
+    ]
+  },
+  {
+    id: 'shopee', label: '🛍️ Shopee Manager', children: [
+      { id: 'shopee.view', label: 'Xem trang Shopee Manager' },
+      { id: 'shopee.sync_start', label: 'Bắt đầu đồng bộ (Auto Sync)' },
+      { id: 'shopee.sync_stop', label: 'Dừng đồng bộ' },
+      { id: 'shopee.edit_product', label: 'Sửa thông tin sản phẩm' }
+    ]
+  },
+  {
+    id: 'database', label: '🗃️ Dữ liệu SP', children: [
+      { id: 'database.view', label: 'Xem trang Dữ liệu sản phẩm' },
+      { id: 'database.import', label: 'Import dữ liệu (Sapo / Sheets)' },
+      { id: 'database.delete', label: 'Xóa model / variant' }
+    ]
+  },
+  {
+    id: 'autofill', label: '📋 Auto Fill Sheet', children: [
+      { id: 'autofill.view', label: 'Xem trang Auto Fill' },
+      { id: 'autofill.start', label: 'Bắt đầu cào dữ liệu' },
+      { id: 'autofill.stop', label: 'Dừng cào' }
+    ]
+  },
+  {
+    id: 'zalo', label: '📱 Zalo Auto Post', children: [
+      { id: 'zalo.view', label: 'Xem trang Zalo Auto Post' },
+      { id: 'zalo.start', label: 'Bắt đầu đăng Zalo' },
+      { id: 'zalo.stop', label: 'Dừng đăng Zalo' }
+    ]
+  },
+  {
+    id: 'settings', label: '⚙️ Cài đặt', children: [
+      { id: 'settings.view', label: 'Xem trang Cài đặt' },
+      { id: 'settings.schedule', label: 'Khung giờ đăng & Tần suất' },
+      { id: 'settings.chatbot', label: 'Cài đặt Chatbot Tư Vấn' },
+      { id: 'settings.api_keys', label: 'Khóa API Gemini & Phân bổ nguồn' },
+      { id: 'settings.accounts', label: 'Danh sách tài khoản đăng bài' },
+      { id: 'settings.ai_login', label: 'Login Helper AI (ChatGPT/Gemini)' },
+      { id: 'settings.users', label: 'Quản lý Nhân sự (Chỉ Admin)' }
+    ]
+  }
+];
+
+// Helper: lấy tất cả permission IDs dạng phẳng
+const ALL_PERMISSION_IDS = PERMISSION_TREE.flatMap(g => g.children.map(c => c.id));
+
+// Helper: lấy label hiển thị từ permission ID
+const getPermLabel = (permId) => {
+  for (const group of PERMISSION_TREE) {
+    if (group.id === permId) return group.label;
+    const child = group.children.find(c => c.id === permId);
+    if (child) return child.label;
+  }
+  return permId;
+};
+
 const UserManagement = () => {
-  const { user, token } = useAuth();
+  const { user } = useAuth();
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   
   const [showModal, setShowModal] = useState(false);
   const [editingUser, setEditingUser] = useState(null);
+  const [expandedGroups, setExpandedGroups] = useState({});
   
   const [formData, setFormData] = useState({
     username: '',
@@ -18,15 +105,6 @@ const UserManagement = () => {
     role: 'staff',
     permissions: []
   });
-
-  const availablePermissions = [
-    { id: 'dashboard', label: 'Tổng quan' },
-    { id: 'drive', label: 'Lưu trữ' },
-    { id: 'workflow', label: 'Luồng công việc' },
-    { id: 'calendar', label: 'Lịch đăng' },
-    { id: 'database', label: 'Dữ liệu SP' },
-    { id: 'settings', label: 'Cài đặt' }
-  ];
 
   const fetchUsers = async () => {
     try {
@@ -70,6 +148,7 @@ const UserManagement = () => {
         permissions: []
       });
     }
+    setExpandedGroups({});
     setShowModal(true);
   };
 
@@ -80,6 +159,27 @@ const UserManagement = () => {
         : [...prev.permissions, permId];
       return { ...prev, permissions: perms };
     });
+  };
+
+  const handleGroupToggleAll = (group) => {
+    const childIds = group.children.map(c => c.id);
+    const allChecked = childIds.every(id => formData.permissions.includes(id));
+    
+    setFormData(prev => {
+      let perms;
+      if (allChecked) {
+        // Bỏ chọn tất cả
+        perms = prev.permissions.filter(p => !childIds.includes(p));
+      } else {
+        // Chọn tất cả
+        perms = [...new Set([...prev.permissions, ...childIds])];
+      }
+      return { ...prev, permissions: perms };
+    });
+  };
+
+  const toggleGroupExpand = (groupId) => {
+    setExpandedGroups(prev => ({ ...prev, [groupId]: !prev[groupId] }));
   };
 
   const handleSubmit = async (e) => {
@@ -141,7 +241,7 @@ const UserManagement = () => {
       <div className="um-header">
         <div className="um-header-left">
           <h2><Users size={28} style={{ color: 'var(--color-primary)' }} /> Quản lý Nhân sự</h2>
-          <p>Thiết lập tài khoản và phân quyền cho nhân viên truy cập hệ thống</p>
+          <p>Thiết lập tài khoản và phân quyền chi tiết cho nhân viên truy cập hệ thống</p>
         </div>
         <button className="um-add-btn glow-primary" onClick={() => handleOpenModal()}>
           <UserPlus size={18} /> Thêm Nhân viên
@@ -182,10 +282,22 @@ const UserManagement = () => {
                     <div className="um-perms-badges">
                       {u.role === 'admin' 
                         ? <span className="perm-badge all">Toàn quyền hệ thống</span>
-                        : u.permissions.map(p => {
-                            const lbl = availablePermissions.find(ap => ap.id === p)?.label || p;
-                            return <span key={p} className="perm-badge">{lbl}</span>;
-                          })
+                        : (() => {
+                            // Group permissions by module for display
+                            const grouped = {};
+                            (u.permissions || []).forEach(p => {
+                              const mod = p.split('.')[0] || p;
+                              if (!grouped[mod]) grouped[mod] = [];
+                              grouped[mod].push(p);
+                            });
+                            const moduleLabels = Object.keys(grouped).map(mod => {
+                              const group = PERMISSION_TREE.find(g => g.id === mod);
+                              return group ? group.label : mod;
+                            });
+                            return moduleLabels.length > 0 
+                              ? moduleLabels.map(lbl => <span key={lbl} className="perm-badge">{lbl}</span>)
+                              : <span className="perm-badge" style={{ opacity: 0.5 }}>Chưa có quyền</span>;
+                          })()
                       }
                     </div>
                   </td>
@@ -204,13 +316,18 @@ const UserManagement = () => {
 
       {showModal && (
         <div className="um-modal-overlay">
-          <div className="um-modal">
+          <div className="um-modal" style={{ maxWidth: '850px' }}>
             <div className="um-modal-header">
-              <h3>{editingUser ? 'Chỉnh sửa tài khoản' : 'Thêm Nhân viên mới'}</h3>
+              <div>
+                <h3>{editingUser ? 'Chỉnh sửa tài khoản' : 'Add New Employee'}</h3>
+                <p className="um-modal-subtitle">Initialize employee credentials and define systemic permissions.</p>
+              </div>
               <button className="close-btn" onClick={() => setShowModal(false)}><X size={20} /></button>
             </div>
             
-            <form onSubmit={handleSubmit}>
+            <form onSubmit={handleSubmit} className="um-modal-form">
+              <div className="um-modal-grid">
+                <div className="um-modal-left">
               <div className="um-form-group">
                 <label>Tên đăng nhập</label>
                 <div className="input-with-icon">
@@ -226,7 +343,7 @@ const UserManagement = () => {
                 </div>
               </div>
               <div className="um-form-group">
-                <label>{editingUser ? 'Mật khẩu mới (bỏ trống nếu không đổi)' : 'Mật khẩu'}</label>
+                <label>Email Address / Mật khẩu</label>
                 <div className="input-with-icon">
                   <Lock size={18} className="input-icon" />
                   <input 
@@ -239,7 +356,7 @@ const UserManagement = () => {
                 </div>
               </div>
               <div className="um-form-group">
-                <label>Vai trò</label>
+                <label>Primary Role</label>
                 <div className="input-with-icon">
                   <Shield size={18} className="input-icon" />
                   <select 
@@ -252,35 +369,68 @@ const UserManagement = () => {
                 </div>
               </div>
 
+                </div>
+
               {formData.role !== 'admin' && (
-                <div className="um-form-group" style={{ marginTop: '30px' }}>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <LayoutGrid size={16} color="var(--color-primary)" /> 
-                    Cấp quyền truy cập hệ thống
-                  </label>
-                  <div className="um-checkbox-grid">
-                    {availablePermissions.map(p => {
-                      const isChecked = formData.permissions.includes(p.id);
+                <div className="um-modal-right">
+                  <div className="um-modal-right-header">ACCESS NODES</div>
+                  <div className="um-permission-grid">
+                    {PERMISSION_TREE.map(group => {
+                      const isExpanded = expandedGroups[group.id];
+                      const childIds = group.children.map(c => c.id);
+                      const checkedCount = childIds.filter(id => formData.permissions.includes(id)).length;
+                      const allChecked = checkedCount === childIds.length;
+                      const someChecked = checkedCount > 0 && !allChecked;
+
                       return (
-                        <div 
-                          key={p.id} 
-                          className={`um-custom-checkbox ${isChecked ? 'checked' : ''}`}
-                          onClick={() => handlePermissionToggle(p.id)}
-                        >
-                          <div className="checkbox-box">
-                            {isChecked && <Check size={14} strokeWidth={3} />}
+                        <div key={group.id} className={`perm-node-card ${checkedCount > 0 ? 'active' : ''}`}>
+                          <div 
+                            className="perm-node-header"
+                            onClick={() => toggleGroupExpand(group.id)}
+                          >
+                            <span className="perm-node-label">{group.label}</span>
+                            <div 
+                              className={`ios-switch ${allChecked ? 'on' : someChecked ? 'partial' : ''}`}
+                              onClick={(e) => { e.stopPropagation(); handleGroupToggleAll(group); }}
+                            >
+                              <div className="ios-switch-knob"></div>
+                            </div>
                           </div>
-                          <span>{p.label}</span>
+                          {isExpanded && (
+                            <div className="perm-node-children">
+                              {group.children.map(child => {
+                                const isChecked = formData.permissions.includes(child.id);
+                                return (
+                                  <div 
+                                    key={child.id}
+                                    className={`perm-child-item ${isChecked ? 'checked' : ''}`}
+                                    onClick={() => handlePermissionToggle(child.id)}
+                                  >
+                                    <span className="perm-child-label">{child.label}</span>
+                                    <div className={`ios-switch-small ${isChecked ? 'on' : ''}`}>
+                                      <div className="ios-switch-small-knob"></div>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
                         </div>
                       );
                     })}
                   </div>
                 </div>
               )}
+              </div>
 
-              <div className="um-modal-actions">
-                <button type="button" className="btn-cancel" onClick={() => setShowModal(false)}>Hủy bỏ</button>
-                <button type="submit" className="btn-save glow-primary">{editingUser ? 'Lưu thay đổi' : 'Tạo tài khoản'}</button>
+              <div className="um-modal-footer">
+                <div className="um-modal-actions">
+                  <button type="button" className="btn-cancel" onClick={() => setShowModal(false)}>Cancel</button>
+                  <button type="submit" className="btn-save glow-primary">{editingUser ? 'Lưu thay đổi' : 'Create Account'}</button>
+                </div>
+                <div className="um-modal-security">
+                  Security Verification: <span>LEVEL 3 (ENCRYPTED)</span>
+                </div>
               </div>
             </form>
           </div>

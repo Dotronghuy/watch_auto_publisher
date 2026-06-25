@@ -8,9 +8,11 @@ import {
 import EmojiPicker from 'emoji-picker-react';
 import { Facebook, Instagram } from '../components/SocialIcons';
 import Swal from 'sweetalert2';
+import { useAuth } from '../context/AuthContext';
 import './InboxCRM.css';
 
 const InboxCRM = () => {
+  const { hasPermission } = useAuth();
   const [conversations, setConversations] = useState([]);
   const [messages, setMessages] = useState([]);
   const [activeConv, setActiveConv] = useState(null);
@@ -877,16 +879,17 @@ const InboxCRM = () => {
 
             <div className="chat-input-area">
               <div className="chat-input-wrapper">
-                <button className="btn-icon"><Plus size={20} /></button>
+                <button className="btn-icon" disabled={!hasPermission('inbox.reply')}><Plus size={20} /></button>
                 <input 
                   type="text" 
-                  placeholder="Type a message..." 
+                  placeholder={hasPermission('inbox.reply') ? "Type a message..." : "Bạn không có quyền trả lời tin nhắn"} 
                   value={replyText}
                   onChange={e => setReplyText(e.target.value)}
                   onKeyDown={e => e.key === 'Enter' && handleSend()}
+                  disabled={!hasPermission('inbox.reply')}
                 />
                 <div style={{position: 'relative'}} ref={emojiPickerRef}>
-                  <button className="btn-icon" onClick={() => setShowEmojiPicker(!showEmojiPicker)}>
+                  <button className="btn-icon" onClick={() => setShowEmojiPicker(!showEmojiPicker)} disabled={!hasPermission('inbox.reply')}>
                     <Smile size={20} />
                   </button>
                   {showEmojiPicker && (
@@ -898,7 +901,7 @@ const InboxCRM = () => {
                     </div>
                   )}
                 </div>
-                <button className="btn-send" onClick={handleSend} disabled={!replyText.trim() || isSending}>
+                <button className="btn-send" onClick={handleSend} disabled={!replyText.trim() || isSending || !hasPermission('inbox.reply')}>
                   <Send size={18} />
                 </button>
               </div>
