@@ -19,6 +19,8 @@ call npm install
 echo --- Cai dat thu vien backend... ---
 cd backend
 call npm install
+echo --- Khoi tao Database Backend ---
+call npx prisma db push
 cd ..
 echo --- Cai dat thu vien frontend... ---
 cd frontend
