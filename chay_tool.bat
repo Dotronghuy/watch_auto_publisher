@@ -30,6 +30,7 @@ echo ===================================================
 echo [3/4] Dang khoi dong CSDL Redis...
 echo ===================================================
 echo Dang bat Redis ngam...
+if exist "%~dp0dump.rdb" del /Q "%~dp0dump.rdb"
 start "Redis Server" /B "%~dp0Redis\redis-server.exe" "%~dp0Redis\redis.windows.conf"
 
 echo.
