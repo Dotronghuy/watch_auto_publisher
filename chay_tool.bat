@@ -27,7 +27,14 @@ cd ..
 
 echo.
 echo ===================================================
-echo [3/3] Dang khoi dong Tool...
+echo [3/4] Dang khoi dong CSDL Redis...
+echo ===================================================
+echo Dang bat Redis ngam...
+start "Redis Server" /B "%~dp0Redis\redis-server.exe" "%~dp0Redis\redis.windows.conf"
+
+echo.
+echo ===================================================
+echo [4/4] Dang khoi dong Tool...
 echo ===================================================
 echo Vui long doi vai giay de tool khoi dong. KHONG TAT CUA SO NAY!
 call npm run dev
