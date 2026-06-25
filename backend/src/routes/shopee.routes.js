@@ -206,8 +206,25 @@ router.get('/serve-local-file', (req, res) => {
   try {
     const filePath = req.query.path;
     if (!filePath) return res.status(400).send('No path');
-    const absolutePath = path.resolve(filePath);
-    if (!fs.existsSync(absolutePath)) return res.status(404).send('File not found: ' + absolutePath);
+    
+    let absolutePath = path.resolve(filePath);
+    
+    if (!fs.existsSync(absolutePath)) {
+      // Fix for database portability across computers:
+      // If the absolute path from the original PC fails, look for the file in the local uploads directory
+      const fileName = path.basename(filePath);
+      const fallbackUploads = path.join(process.cwd(), 'uploads', fileName);
+      const fallbackSapo = path.join(process.cwd(), 'uploads', 'SapoImages', fileName);
+      
+      if (fs.existsSync(fallbackUploads)) {
+        absolutePath = fallbackUploads;
+      } else if (fs.existsSync(fallbackSapo)) {
+        absolutePath = fallbackSapo;
+      } else {
+        return res.status(404).send('File not found: ' + absolutePath);
+      }
+    }
+    
     res.sendFile(absolutePath);
   } catch (err) {
     res.status(500).send(err.message);
