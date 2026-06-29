@@ -56,19 +56,53 @@
 
 ### Về sản phẩm
 - Q: Đồng hồ có chống nước không?
-  A: ???
+  A: Có ạ, sản phẩm này chống nước {thông số sheet cột AG độ chịu nước}, anh/chị sử dụng {thông tin ở sheet AH mô tả độ chịu nước}.
 
 - Q: Đồng hồ là hàng chính hãng hay rep?
-  A: ???
+  A: Sản phẩm bên em bán là hàng chính hãng, có đầy đủ giấy tờ và thông tin sản phẩm rõ ràng ạ.
 
-- Q: Có giấy tờ, hộp, chứng nhận kèm theo không?
-  A: ???
+- Q: Có sổ, hộp, xuất hóa đơn kèm theo không?
+  A: Sản phẩm khi anh nhận sẽ có đầy đủ hộp sổ thẻ!
 
 - Q: Pin đồng hồ dùng được bao lâu?
-  A: ???
+  A: Với dòng sản phẩm pin sẽ sử dụng được 1 năm và được bảo hành thay pin trọn đời ạ!
 
 - Q: Kích thước mặt bao nhiêu mm? Có vừa cổ tay nhỏ không?
-  A: ???
+  A: Dạ mẫu này mặt khoảng {thông số kích thước mặt X ở sheet} mm ạ. Nếu cổ tay nhỏ vẫn đeo được, nhưng em xin chu vi cổ tay của anh/chị để tư vấn chuẩn hơn nhé.
+
+- Q: Đồng hồ này dành cho nam hay nữ?
+  A: Dạ mẫu này phù hợp với {giới tính/phân loại sản phẩm trong sheet} ạ. Nếu anh/chị muốn, em có thể tư vấn thêm theo cổ tay, phong cách và nhu cầu sử dụng.
+
+- Q: Chất liệu dây là gì?
+  A: Dạ mẫu này sử dụng dây {chất liệu dây trong sheet} ạ. (đối với dây thép thì khỏe khoắn, v.v.. dây da thì thanh lịch, v.v.. dây cao su thì năng động trẻ trung v.v....)
+
+- Q: Mặt kính là kính gì?
+  A: Dạ mặt kính của mẫu này là {chất liệu kính trong sheet} ạ. Chống va đập mạnh, chống trầy xước, luôn giữ được độ sáng bóng nhất định.
+
+- Q: Đồng hồ dùng máy gì?
+  A: Dạ mẫu này dùng máy {loại máy trong sheet} ạ. Dòng máy tốt của nhật nên sai số trong ngày rất thấp ạ khoảng 5-10s 
+/Nếu là máy pin thì dễ dùng, ít phải chỉnh.
+
+- Q: Đồng hồ có bị phai màu không?
+  A: Sản phẩm được mạ PVD nên rất khó phai màu nhưng hạn chế tiếp xúc với các hóa chất vàmồ hôi muối hoặc nước biển để sản phẩm bền màu hơn.
+
+- Q: Mẫu này có những màu nào?
+  A: Dạ mẫu này hiện có các màu {màu sản phẩm trong sheet sẽ là các sku} ạ. (khi khách hỏi câu này thì phải vào tra xem toàn bộ sku sản phẩm và từ sku sản phẩm sẽ phải gửi ảnh AVT cho khách phải gửi hết nhé). Anh/chị thích phong cách nào ạ để em tư vấn màu mặt hợp lý hơn.
+
+Q: Cho xin ảnh thật?
+A:
+Nếu Drive của SKU có ảnh trong thư mục tu_chup hoặc có video trong thư mục video_doc:
+Gửi ảnh/video thật của sản phẩm trước.
+Sau khi gửi xong, trả lời:
+Dạ em gửi anh/chị ảnh/video thật của mẫu này rồi ạ. Anh/chị xem giúp em, nếu cần em tư vấn thêm mẫu lên tay, kích thước mặt hoặc màu nào hợp cổ tay hơn ạ.
+
+Nếu Drive của SKU chưa có ảnh thật hoặc video thật:
+Dạ mẫu này hiện em chưa có sẵn ảnh/video thật trên hệ thống ạ. Em sẽ báo nhân viên kiểm tra và quay/gửi hình thực tế cho anh/chị. Trong lúc chờ, anh/chị muốn xem kỹ phần mặt, dây hay ảnh lên tay để em nhờ quay đúng chi tiết mình cần ạ? 
+
+- Q: Đồng hồ có phù hợp đi làm, đi tiệc không?
+  A: Dạ mẫu này phù hợp với {phong cách sản phẩm trong sheet} ạ. Nếu anh/chị cần đeo đi làm, đi tiệc hoặc làm quà tặng, em có thể gợi ý thêm mẫu phù hợp hơn.
+
+
 
 ### Về mua hàng
 - Q: Giá bao nhiêu? / Giá sao không thấy ghi?

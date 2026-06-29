@@ -113,7 +113,7 @@ export const generateBackgroundOnChatGPT = async (imagePath, promptsArray, abort
     const page = context.pages().length > 0 ? context.pages()[0] : await context.newPage();
     
     try {
-        let targetUrl = 'https://chatgpt.com/g/g-p-6a21019c9228819187d6284f9b4ff8f9-image-watch-ai/project';
+        let targetUrl = 'https://chatgpt.com/g/g-p-6a4240ccda448191a449beb0ad60cdab/project';
         let savedChatId = null;
         if (!isNewSession) {
             savedChatId = getAiTaskUrl('imageChatUrl');
@@ -193,6 +193,12 @@ export const generateBackgroundOnChatGPT = async (imagePath, promptsArray, abort
             console.log(`\n--- VẼ ẢNH ${i + 1}/${count} ---`);
             if (abortSignal?.aborted) throw new Error('aborted');
 
+            // Nghỉ 30 giây trước khi vẽ ảnh tiếp theo để tránh Rate Limit
+            if (i > 0) {
+                console.log('⏳ Đang nghỉ 30 giây để tránh bị ChatGPT chặn vì gửi liên tục...');
+                await page.waitForTimeout(30000);
+            }
+
             const currentPromptObj = promptsArray[i];
             const isString = typeof currentPromptObj === 'string';
             const currentPrompt = isString ? currentPromptObj : currentPromptObj.prompt;
@@ -242,13 +248,31 @@ export const generateBackgroundOnChatGPT = async (imagePath, promptsArray, abort
             // Chờ ảnh tải lên hiện thành thumbnail
             await page.waitForTimeout(4000);
 
+            // Xử lý popup Duplicate File nếu có (tránh lỗi intercept pointer events)
+            try {
+                const duplicateModal = page.locator('#modal-duplicate-file');
+                if (await duplicateModal.isVisible({ timeout: 1000 })) {
+                    console.log('⚠️ Phát hiện popup "Duplicate File", đang xử lý...');
+                    const confirmBtn = duplicateModal.locator('button.btn-primary');
+                    if (await confirmBtn.isVisible()) {
+                        await confirmBtn.click();
+                    } else {
+                        await page.keyboard.press('Escape');
+                    }
+                    await page.waitForTimeout(1000);
+                }
+            } catch (e) {}
+
             console.log(`✍️ Đang gõ prompt số ${i + 1}...`);
             await promptLocator.click();
             await page.waitForTimeout(300);
             
             let finalPrompt;
-            const hasExtraRefs = (extraWatchImages && extraWatchImages.length > 0);
-            if (currentSampleImage && hasExtraRefs) {
+            if (currentPrompt.includes('Dùng ảnh 1 làm sản phẩm chính')) {
+                finalPrompt = currentPrompt;
+            } else {
+                const hasExtraRefs = (extraWatchImages && extraWatchImages.length > 0);
+                if (currentSampleImage && hasExtraRefs) {
                 finalPrompt = `I am sending you ${1 + extraWatchImages.length + 1} images in this EXACT order:
 - IMAGE 1: The luxury watch with transparent/white background — this is the MAIN PRODUCT.
 - IMAGE 2 to ${1 + extraWatchImages.length}: REAL PRODUCT PHOTOS from different angles. Use these as REFERENCE to understand the watch's TRUE colors, textures, bracelet style, dial details, and proportions.
@@ -288,11 +312,21 @@ CRITICAL RULES:
 2. KEEP the watch design 100% identical.
 3. Place it in this exact scene: ${currentPrompt}`;
             }
+            }
 
             finalPrompt += `\n\n[ANTI-DUPLICATE INSTRUCTION]: This is image request #${i + 1}. You MUST generate a completely NEW, UNIQUE image. Do NOT output the exact same image as previous generations. Vary the precise camera angle, lighting, or background element placement slightly to ensure uniqueness. Unique Seed: ${Date.now()}_${Math.floor(Math.random() * 1000000)}`;
             
-            await promptLocator.fill(finalPrompt);
+            await promptLocator.fill(''); // Xóa text cũ nếu có
+            await page.waitForTimeout(200);
+            await page.keyboard.insertText(finalPrompt);
             await page.waitForTimeout(1000);
+            
+            // Nhấn phím Space rồi Backspace để kích hoạt sự kiện UI làm nút Send hiện ra
+            await page.keyboard.press('Space');
+            await page.waitForTimeout(100);
+            await page.keyboard.press('Backspace');
+            await page.waitForTimeout(500);
+
             console.log('🚀 Nhấn nút Send gửi yêu cầu...');
             
             try {
@@ -338,9 +372,58 @@ CRITICAL RULES:
             } catch (e) {}
             console.log(`📍 Tọa độ Y thấp nhất của ảnh cũ: ${Math.round(maxY)} px`);
 
+            let imageRetryCount = 0;
             for (let attempt = 0; attempt < 60; attempt++) {
                 if (abortSignal && abortSignal.aborted) throw new Error('Abort requested');
                 await page.waitForTimeout(5000);
+                
+                // ── Detect "Image generation failed" từ ChatGPT ──
+                try {
+                    // Không phụ thuộc vào thẻ assistant nữa vì UI ChatGPT có thể đặt thông báo lỗi ở ngoài
+                    const errorLocator = page.getByText('Image generation failed').last();
+                    if (await errorLocator.isVisible({ timeout: 500 })) {
+                        imageRetryCount++;
+                        if (imageRetryCount > 2) {
+                            console.log(`❌ Ảnh ${i + 1} đã thất bại sau ${imageRetryCount - 1} lần thử lại. Bỏ qua ảnh này.`);
+                            liveLog(`❌ Ảnh ${i + 1}: ChatGPT tạo ảnh thất bại sau 2 lần thử lại. Bỏ qua.`, 'error', 'ChatGPT');
+                            break;
+                        }
+                        console.log(`⚠️ ChatGPT báo "Image generation failed". Đang nhấn Try again... (lần ${imageRetryCount}/2)`);
+                        liveLog(`⚠️ Ảnh ${i + 1}: ChatGPT tạo ảnh thất bại. Đang thử lại lần ${imageRetryCount}/2...`, 'warning', 'ChatGPT');
+                        
+                        // Tìm và nhấn nút "Try again"
+                        try {
+                            const tryAgainBtn = page.getByText(/try again/i).last();
+                            if (await tryAgainBtn.isVisible()) {
+                                await tryAgainBtn.click();
+                                console.log('🔄 Đã nhấn "Try again". Chờ ChatGPT vẽ lại...');
+                                await page.waitForTimeout(3000);
+                            } else {
+                                console.log('⚠️ Không tìm thấy nút "Try again" bằng text. Thử selector khác...');
+                                const retryBtn = page.locator('button[aria-label*="etry"], button:has-text("Thử lại")').last();
+                                if (await retryBtn.isVisible()) {
+                                    await retryBtn.click();
+                                    console.log('🔄 Đã nhấn nút retry fallback.');
+                                    await page.waitForTimeout(3000);
+                                }
+                            }
+                        } catch (btnErr) {
+                            console.log('⚠️ Lỗi khi nhấn Try again:', btnErr.message);
+                        }
+
+                        // An toàn thay đổi textContent để không quét trúng vào lần lặp sau (không phá hủy DOM HTML)
+                        await page.evaluate(() => {
+                            const walk = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null, false);
+                            let node;
+                            while (node = walk.nextNode()) {
+                                if (node.nodeValue.includes('Image generation failed')) {
+                                    node.nodeValue = node.nodeValue.replace('Image generation failed', 'Đang đợi vẽ lại...');
+                                }
+                            }
+                        });
+                        continue;
+                    }
+                } catch (e) {}
                 
                 // Quét tìm ảnh có tọa độ Y lớn hơn ảnh cũ
                 try {
@@ -376,7 +459,34 @@ CRITICAL RULES:
             }
             
             if (!targetImgSrc) {
-                console.log(`⚠️ Timeout chờ ảnh ${i + 1} (Không tìm thấy ảnh sau 5 phút)`);
+                const reason = imageRetryCount > 0 
+                    ? `ChatGPT tạo ảnh thất bại sau ${imageRetryCount} lần thử` 
+                    : 'Không tìm thấy ảnh sau 5 phút chờ';
+                console.log(`⚠️ Bỏ qua ảnh ${i + 1}: ${reason}`);
+                liveLog(`⚠️ Ảnh ${i + 1}: ${reason}. Bỏ qua. Đang tải lại trang để tránh dính lỗi nút Send...`, 'error', 'ChatGPT');
+                
+                // Tải lại trang để reset trạng thái của ChatGPT (khắc phục lỗi khóa nút gửi ảnh tiếp theo)
+                try {
+                    await page.reload({ waitUntil: 'domcontentloaded' });
+                    await page.waitForTimeout(10000); // Chờ 10 giây để trang tải xong hoàn toàn
+                    
+                    // Cập nhật lại promptLocator vì trang vừa reload
+                    promptLocator = null;
+                    for (let retry = 0; retry < 5; retry++) {
+                        for (const sel of PROMPT_SELECTORS) {
+                            try {
+                                await page.waitForSelector(sel, { state: 'visible', timeout: 5000 });
+                                promptLocator = page.locator(sel).first();
+                                break;
+                            } catch (e) {}
+                        }
+                        if (promptLocator) break;
+                        await page.waitForTimeout(3000);
+                    }
+                } catch (e) {
+                    console.log('⚠️ Lỗi khi tải lại trang:', e.message);
+                }
+                
                 continue;
             }
             
@@ -454,7 +564,7 @@ export const generateContentOnChatGPT = async (prompt, type, imagePath = null) =
     
     try {
         // Luôn sử dụng URL gốc của Dự án Content AI (Bảo đảm 100% chạy trong Dự án)
-        let targetUrl = 'https://chatgpt.com/g/g-p-6a225013edb8819184026aa7da611aa4-content-watch-ai/project';
+        let targetUrl = 'https://chatgpt.com/g/g-p-6a4240841f78819187a78013293677ad/project';
         
         console.log(`🌐 Đang truy cập Dự án Content AI: ${targetUrl}...`);
         await page.goto(targetUrl, { waitUntil: 'domcontentloaded' });
@@ -491,11 +601,34 @@ export const generateContentOnChatGPT = async (prompt, type, imagePath = null) =
             }
         }
 
+        // Xử lý popup Duplicate File nếu có
+        try {
+            const duplicateModal = page.locator('#modal-duplicate-file');
+            if (await duplicateModal.isVisible({ timeout: 1000 })) {
+                console.log('⚠️ Phát hiện popup "Duplicate File", đang xử lý...');
+                const confirmBtn = duplicateModal.locator('button.btn-primary');
+                if (await confirmBtn.isVisible()) {
+                    await confirmBtn.click();
+                } else {
+                    await page.keyboard.press('Escape');
+                }
+                await page.waitForTimeout(1000);
+            }
+        } catch (e) {}
+
         console.log('✍️ Đang gõ prompt text...');
         await promptLocator.click();
         await page.waitForTimeout(300);
-        await promptLocator.fill(prompt);
+        await promptLocator.fill(''); // Xóa text cũ nếu có
+        await page.waitForTimeout(200);
+        await page.keyboard.insertText(prompt);
         await page.waitForTimeout(1000);
+        
+        // Kích hoạt sự kiện để nút Send mở khóa
+        await page.keyboard.press('Space');
+        await page.waitForTimeout(100);
+        await page.keyboard.press('Backspace');
+        await page.waitForTimeout(500);
         
         try {
             const sendBtn = await page.waitForSelector('button[data-testid="send-button"]:not([disabled])', { timeout: 10000 });
@@ -703,8 +836,23 @@ export const analyzeNewSampleImages = async () => {
                     await page.waitForTimeout(4000);
                 }
 
+                // Xử lý popup Duplicate File nếu có
+                try {
+                    const duplicateModal = page.locator('#modal-duplicate-file');
+                    if (await duplicateModal.isVisible({ timeout: 1000 })) {
+                        console.log('⚠️ Phát hiện popup "Duplicate File", đang xử lý...');
+                        const confirmBtn = duplicateModal.locator('button.btn-primary');
+                        if (await confirmBtn.isVisible()) {
+                            await confirmBtn.click();
+                        } else {
+                            await page.keyboard.press('Escape');
+                        }
+                        await page.waitForTimeout(1000);
+                    }
+                } catch (e) {}
+
                 // Gõ prompt phân tích
-                const analyzePrompt = `Look at this lifestyle/product photography reference image carefully. I want you to describe it so I can use your description as a prompt to recreate a similar scene with a luxury watch composited into it.
+                let analyzePrompt = `Look at this lifestyle/product photography reference image carefully. I want you to describe it so I can use your description as a prompt to recreate a similar scene with a luxury watch composited into it.
 
 Please provide your response in EXACTLY this format (nothing else):
 

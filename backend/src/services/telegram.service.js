@@ -9,6 +9,9 @@ import { generateBackgroundOnSD } from './sd.service.js';
 
 dotenv.config();
 
+// Tắt cảnh báo deprecation của node-telegram-bot-api khi gửi file
+process.env.NTBA_FIX_350 = 1;
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const settingsPath = path.join(__dirname, '../../config/settings.json');

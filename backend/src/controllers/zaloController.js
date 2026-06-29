@@ -241,7 +241,7 @@ async function runZaloTask(signal) {
       f.name.toLowerCase().includes('i&w carnival') || f.name.toLowerCase().includes('i&w')
     );
     if (!iwFolder) throw new Error('Không tìm thấy thư mục I&W Carnival trên Drive!');
-    const skuFolders = await getFoldersInFolder(iwFolder.id);
+    const skuFolders = (await getFoldersInFolder(iwFolder.id)).filter(f => !f.name.toLowerCase().includes('review'));
     log(`✅ Tìm thấy ${skuFolders.length} thư mục SKU trên Drive`, 'success');
 
     // ====== BƯỚC 6: Đăng bài (Zalo browser chỉ mở khi cần) ======

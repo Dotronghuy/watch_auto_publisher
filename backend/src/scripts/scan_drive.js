@@ -16,7 +16,7 @@ const scanDrive = async () => {
       return;
     }
 
-    const skuFolders = await getFoldersInFolder(iwFolder.id);
+    const skuFolders = (await getFoldersInFolder(iwFolder.id)).filter(f => !f.name.toLowerCase().includes('review'));
     if (skuFolders.length === 0) {
       console.error('❌ Không tìm thấy thư mục SKU nào!');
       return;

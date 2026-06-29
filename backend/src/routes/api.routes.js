@@ -509,7 +509,7 @@ router.get('/publish/test-tones', async (req, res) => {
       const brandFolders = await getFoldersInFolder(ROOT_DRIVE_FOLDER_ID);
       const iwFolder = brandFolders.find(f => f.name.toLowerCase().includes('i&w carnival') || f.name.toLowerCase().includes('i&w'));
       if (iwFolder) {
-        const skuFolders = await getFoldersInFolder(iwFolder.id);
+        const skuFolders = (await getFoldersInFolder(iwFolder.id)).filter(f => !f.name.toLowerCase().includes('review'));
         if (skuFolders.length > 0) {
           // Lấy ngẫu nhiên 1 SKU
           const randomSkuFolder = skuFolders[Math.floor(Math.random() * skuFolders.length)];

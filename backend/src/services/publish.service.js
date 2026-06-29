@@ -12,7 +12,7 @@ import { generateBackgroundOnChatGPT, generateContentOnChatGPT } from './playwri
 import { generateBackgroundOnSD } from './sd.service.js';
 import { telegramEvents, sendBatchToTelegram } from './telegram.service.js';
 import { publishToInstagram, publishCarouselToInstagram, publishFBReels, publishIGReels, publishThreadChain } from './meta.service.js';
-import { addMusicToVideo } from './video.service.js';
+import { addMusicToVideo, hasAudioStream } from './video.service.js';
 import { addActivity } from '../utils/activity.js';
 import { liveLog } from '../utils/liveLog.js';
 import { computeHashFromBuffer } from './image-hash.service.js';
@@ -190,6 +190,40 @@ const getRandomToneAndPerspective = () => {
   return getToneInstructionText(randomTone, randomPersp, randomCta);
 };
 
+export const parseColorsFromFilename = (filename, baseSku) => {
+  if (!filename) return baseSku;
+  
+  let mainPart = filename.split('_')[0]; 
+  mainPart = mainPart.replace(/\.[^/.]+$/, "");
+
+  const parts = mainPart.split('-');
+  
+  if (parts.length > 5) {
+     return `${baseSku} (FULL MÀU)`;
+  }
+  
+  let skus = [];
+  let colors = [];
+  for (const part of parts) {
+     if (part === baseSku) continue;
+     if (/^T\d+$/i.test(part) || /^M\d+$/i.test(part) || /^V\d+$/i.test(part) || /^[A-Z]\d+$/.test(part)) {
+        colors.push(part);
+     } else {
+        skus.push(part);
+     }
+  }
+  
+  let resultList = [];
+  if (skus.length === 0 && colors.length > 0) {
+      resultList = colors.map(c => `${baseSku}-${c}`);
+  } else {
+      resultList = [baseSku, ...skus];
+  }
+  
+  if (resultList.length === 0) return baseSku;
+  return resultList.join(' và ');
+};
+
 // Lấy ngẫu nhiên 1 ảnh mẫu từ thư mục sample_images (nếu có)
 const getRandomSampleImage = () => {
   if (!fs.existsSync(SAMPLE_IMAGES_DIR)) return null;
@@ -314,14 +348,21 @@ const getSmartFilteredSkus = async (skuFolders, allProductsInfo) => {
       .filter(([k]) => k !== selectedGroup)
       .sort(([a], [b]) => Number(b) - Number(a)) // Ưu tiên nhóm cao hơn trước
       .flatMap(([, v]) => v.sort(sortByMedia))
-  ];
+  ].map(item => item.folder);
+
+  // Thêm DAILY VLOG vào luồng với tỷ lệ 15%
+  const dailyVlogFolder = skuFolders.find(f => f.name.toUpperCase().includes('DAILY VLOG'));
+  if (dailyVlogFolder && Math.random() < 0.15) {
+    result.unshift(dailyVlogFolder);
+    liveLog('🎥 [Smart Filter] Trúng tỷ lệ 15% xuất hiện DAILY VLOG!', 'highlight', 'System');
+  }
 
   if (result.length === 0) {
     liveLog('⚠️ [Smart Filter] Không có SKU khả dụng, dùng random.', 'warning', 'System');
     return skuFolders.sort(() => 0.5 - Math.random());
   }
 
-  return result.map(item => item.folder);
+  return result;
 };
 
 // ============================================================
@@ -361,7 +402,7 @@ export const dryRunRoutine = async () => {
     const brandFolders = await getFoldersInFolder(ROOT_DRIVE_FOLDER_ID);
     const iwFolder = brandFolders.find(f => f.name.toLowerCase().includes('i&w carnival') || f.name.toLowerCase().includes('i&w'));
     if (!iwFolder) throw new Error('Không tìm thấy thư mục I&W Carnival trong Drive!');
-    const skuFolders = await getFoldersInFolder(iwFolder.id);
+    const skuFolders = (await getFoldersInFolder(iwFolder.id)).filter(f => !f.name.toLowerCase().includes('review'));
     if (skuFolders.length === 0) throw new Error('Không tìm thấy thư mục SKU nào trong thư mục I&W Carnival!');
 
     const postedIds = await getPostedImageIds();
@@ -392,6 +433,18 @@ export const dryRunRoutine = async () => {
     let thContent = '';
 
     for (const skuFolder of shuffledSkus) {
+      if (skuFolder.name.toUpperCase().includes('DAILY VLOG')) {
+        const mediaFiles = await getVideosInFolder(skuFolder.id);
+        const freshMedia = mediaFiles.filter(item => !postedIds.includes(item.id));
+        if (freshMedia.length > 0) {
+          selectedSku = skuFolder;
+          selectedImages = [freshMedia[Math.floor(Math.random() * freshMedia.length)]];
+          postMode = 'REELS';
+          break;
+        }
+        continue;
+      }
+
       const shuffledFolderTypes = [...folderTypes].sort(() => 0.5 - Math.random());
       for (const folderName of shuffledFolderTypes) {
         const targetFolderId = await getFolderIdByName(folderName, skuFolder.id);
@@ -480,9 +533,52 @@ export const dryRunRoutine = async () => {
       let aiGeneratedImagePaths = [];
       if (postMode === 'AI' && localFilePaths.length === 1) {
         try {
+          let imgPromptsArray = [];
+          const isExperimentalAI = true;
+          let sampleImg = getRandomSampleImage();
+
+          if (isExperimentalAI) {
+            console.log('🧪 Đang chạy chế độ AI thử nghiệm (DRY RUN): 1 ảnh AVT + 1 ảnh mẫu, gộp prompt nhận diện tay.');
+            const numAiImages = 1;
+            
+            if (sampleImg) liveLog(`🖼️ [DRY RUN] Dùng ảnh mẫu tham chiếu: ${path.basename(sampleImg)}`, 'highlight', 'ChatGPT');
+            
+            const experimentalPrompt = `Dùng ảnh 1 làm sản phẩm chính. Thay chiếc đồng hồ trong ảnh 2 bằng đồng hồ ở ảnh 1.
+
+Quan sát thật kỹ ảnh 2. Nếu ảnh 2 KHÔNG CÓ tay hoặc cổ tay người mẫu, hãy áp dụng các Yêu cầu bắt buộc sau:
+- Giữ đúng hình dáng, tỷ lệ và phối cảnh của đồng hồ ảnh 1, không bóp méo.
+- Giữ nguyên logo/chữ trên mặt đồng hồ ảnh 1.
+- Giữ dây đồng hồ đầy đủ, không làm cụt dây.
+- Xóa toàn bộ logo, chữ, thương hiệu có sẵn trong ảnh 2, nhưng không xóa logo trên đồng hồ ảnh 1.
+- Giữ ánh sáng, bóng đổ, nền và bố cục tự nhiên như ảnh 2.
+- Kết quả phải giống ảnh chụp sản phẩm thật, không bị méo, không bị giả.
+- Ưu tiên bảo toàn sản phẩm ảnh 1 hơn việc sáng tạo lại để khớp bố cục.
+- Nếu có xung đột giữa bố cục ảnh 2 và hình dáng thật của đồng hồ ảnh 1, hãy giữ đúng hình dáng thật của đồng hồ ảnh 1.
+
+Nếu ảnh 2 CÓ tay hoặc cổ tay người mẫu, hãy áp dụng các Yêu cầu bắt buộc sau:
+- Giữ đúng hình dáng, tỷ lệ và phối cảnh của đồng hồ ảnh 1, không bóp méo.
+- Giữ nguyên logo/chữ trên mặt đồng hồ ảnh 1.
+- Giữ dây đồng hồ đầy đủ, không làm cụt dây.
+- Xóa toàn bộ logo, chữ, thương hiệu có sẵn trong ảnh 2, nhưng không xóa logo trên đồng hồ ảnh 1.
+- Giữ ánh sáng, bóng đổ, nền và bố cục tự nhiên như ảnh 2.
+- Kết quả phải giống ảnh chụp sản phẩm thật, không bị méo, không bị giả.
+- Ưu tiên bảo toàn sản phẩm ảnh 1 hơn việc sáng tạo lại để khớp bố cục.
+- Nếu có xung đột giữa bố cục ảnh 2 và hình dáng thật của đồng hồ ảnh 1, hãy giữ đúng hình dáng thật của đồng hồ ảnh 1.
+- Hãy giữ tay/cổ tay tự nhiên, đúng giải phẫu, không méo, không thừa hoặc thiếu ngón.
+- Giữ tư thế bàn tay, góc tay và cách đặt tay tự nhiên như ảnh 2.
+- Đồng hồ phải nằm đúng vị trí trên cổ tay/tay như trong ảnh 2, ôm tay tự nhiên, không lơ lửng, không chìm vào da.
+- Phần tiếp xúc giữa dây đồng hồ và cổ tay phải chân thực, đúng tỷ lệ, không bị biến dạng.
+- Không làm thay đổi màu da, hình dáng bàn tay hoặc phong cách tổng thể của ảnh 2 ngoài những gì cần thiết để thay đồng hồ.`;
+
+            imgPromptsArray = Array(numAiImages).fill(experimentalPrompt);
+            currentSceneTextsArray = Array(numAiImages).fill('Experimental Scene');
+            const extraWatchImages = [];
+            
+            aiGeneratedImagePaths = await generateImageWithEngine(localFilePaths[0], imgPromptsArray, globalStopController.signal, sampleImg, false, extraWatchImages);
+          } else {
+
           const promptGuidePath = path.join(__dirname, '../../config/gpt_image_prompt.md');
           const numAiImages = Math.floor(Math.random() * 5) + 4;
-          let imgPromptsArray = [];
 
           if (fs.existsSync(promptGuidePath)) {
             const mdContent = fs.readFileSync(promptGuidePath, 'utf8');
@@ -538,7 +634,7 @@ export const dryRunRoutine = async () => {
             imgPromptsArray = Array(numAiImages).fill('This is a luxury watch image with the background removed. Place this exact watch into a high-end lifestyle scene. CRITICAL: IGNORE ALL PREVIOUS IMAGES. Use ONLY the attached image. Do NOT alter the watch design. Photorealistic, 4K quality.');
           }
 
-          const sampleImg = getRandomSampleImage();
+          
           if (sampleImg) liveLog(`🖼️ [DRY RUN] Dùng ảnh mẫu: ${path.basename(sampleImg)}`, 'info', 'ChatGPT');
 
           let extraWatchImages = [];
@@ -574,6 +670,7 @@ export const dryRunRoutine = async () => {
           }
 
           aiGeneratedImagePaths = await generateImageWithEngine(localFilePaths[0], imgPromptsArray, globalStopController.signal, sampleImg, false, extraWatchImages);
+          } // KẾT THÚC isExperimentalAI
           currentImgPromptsArray = imgPromptsArray;
           const lastWatchPath = path.join(__dirname, '../../temp_images/last_watch_image.png');
           if (fs.existsSync(localFilePaths[0])) { fs.copyFileSync(localFilePaths[0], lastWatchPath); fs.unlinkSync(localFilePaths[0]); }
@@ -594,13 +691,14 @@ export const dryRunRoutine = async () => {
         let fbPromptFinal = null;
         let reelsPromptFinal = null;
 
+        const originalFilename = selectedImages[0]?.name || '';
+        const selectedSkuInfo = parseColorsFromFilename(originalFilename, selectedSku.name);
+
         if (fs.existsSync(geminiTemplatePath)) {
           const templateRaw = fs.readFileSync(geminiTemplatePath, 'utf8');
-          // KHÔNG nối thêm marketing + persona vào prompt nữa
-          // vì 2 file đó đã được upload làm Sources trong dự án Content_Watch_AI trên ChatGPT
 
           const fillTemplate = (tmpl) => tmpl
-            .replace(/\{\{SKU\}\}/g, selectedSku.name)
+            .replace(/\{\{SKU\}\}/g, selectedSkuInfo)
             .replace(/\{\{PRODUCT_INFO\}\}/g, productInfoText || 'Không có thông tin')
             .replace(/\{\{GENDER\}\}/g, genderLabel);
 
@@ -633,8 +731,13 @@ export const dryRunRoutine = async () => {
           checkAbort();
           
           if (postMode === 'REELS') {
-            const reelsFallback = `Hãy đóng vai TikTok creator. Viết caption ngắn giật tít cho video Reels giới thiệu đồng hồ SKU ${selectedSku.name}. Chỉ trả về caption, dùng hashtag #iwcarnivalvietnam #iwcarnival #donghoiwcarnival và các hashtag trending.`;
-            const reelsPrompt = (reelsPromptFinal || reelsFallback) + getRandomToneAndPerspective();
+            let reelsPrompt = '';
+            if (selectedSku.name.toUpperCase().includes('DAILY VLOG')) {
+               reelsPrompt = `Đây là một video Daily Vlog (hoạt động hằng ngày: đóng hàng, giao hàng, vệ sinh đồng hồ...). Hãy đóng vai nhân viên của I&W Carnival, viết một đoạn caption thật ngắn gọn, tự nhiên, vui vẻ, thân thiện. Tuyệt đối KHÔNG quảng cáo hay chèo kéo mua hàng. Chỉ dùng hashtag #iwcarnivalvietnam #iwcarnival #dailyvlog`;
+            } else {
+               const reelsFallback = `Hãy đóng vai TikTok creator. Viết caption ngắn giật tít cho video Reels giới thiệu đồng hồ SKU ${selectedSku.name}. Chỉ trả về caption, dùng hashtag #iwcarnivalvietnam #iwcarnival #donghoiwcarnival và các hashtag trending.`;
+               reelsPrompt = (reelsPromptFinal || reelsFallback) + getRandomToneAndPerspective();
+            }
 
             const sampleFolders = ['1_Anh_Hang', '2_Anh_Tu_Chup'];
             for (const sFolder of sampleFolders) {
@@ -775,7 +878,7 @@ export const startTelegramTrainingLoop = async (targetSku = null) => {
       const brandFolders = await getFoldersInFolder(ROOT_DRIVE_FOLDER_ID);
       const iwFolder = brandFolders.find(f => f.name.toLowerCase().includes('i&w carnival') || f.name.toLowerCase().includes('i&w'));
       if (!iwFolder) throw new Error('Không tìm thấy thư mục I&W Carnival trong Drive!');
-      const skuFolders = await getFoldersInFolder(iwFolder.id);
+      const skuFolders = (await getFoldersInFolder(iwFolder.id)).filter(f => !f.name.toLowerCase().includes('review'));
       if (skuFolders.length === 0) throw new Error('Không tìm thấy thư mục SKU nào trong thư mục I&W Carnival!');
 
       const postedIds = await getPostedImageIds();
@@ -841,10 +944,54 @@ export const startTelegramTrainingLoop = async (targetSku = null) => {
         liveLog('⚠️ Lỗi xóa nền: ' + e.message, 'error', 'remove.bg');
       }
 
-      const promptGuidePath = path.join(__dirname, '../../config/gpt_image_prompt.md');
-      const numAiImages = 10; // Gốc là 10 ảnh mỗi mẻ
+      let aiGeneratedImagePaths;
       let imgPromptsArray = [];
       let currentSceneTextsArray = [];
+      const isExperimentalAI = true;
+      let sampleImg = getRandomSampleImage();
+
+      if (isExperimentalAI) {
+        console.log('🧪 Đang chạy chế độ AI thử nghiệm (TRAIN ẢNH): 1 ảnh AVT + 1 ảnh mẫu, gộp prompt nhận diện tay.');
+        const numAiImages = 10;
+        
+        if (sampleImg) liveLog(`🖼️ [TRAIN ẢNH] Dùng ảnh mẫu tham chiếu: ${path.basename(sampleImg)}`, 'highlight', 'ChatGPT');
+
+        const experimentalPrompt = `Dùng ảnh 1 làm sản phẩm chính. Thay chiếc đồng hồ trong ảnh 2 bằng đồng hồ ở ảnh 1.
+
+Quan sát thật kỹ ảnh 2. Nếu ảnh 2 KHÔNG CÓ tay hoặc cổ tay người mẫu, hãy áp dụng các Yêu cầu bắt buộc sau:
+- Giữ đúng hình dáng, tỷ lệ và phối cảnh của đồng hồ ảnh 1, không bóp méo.
+- Giữ nguyên logo/chữ trên mặt đồng hồ ảnh 1.
+- Giữ dây đồng hồ đầy đủ, không làm cụt dây.
+- Xóa toàn bộ logo, chữ, thương hiệu có sẵn trong ảnh 2, nhưng không xóa logo trên đồng hồ ảnh 1.
+- Giữ ánh sáng, bóng đổ, nền và bố cục tự nhiên như ảnh 2.
+- Kết quả phải giống ảnh chụp sản phẩm thật, không bị méo, không bị giả.
+- Ưu tiên bảo toàn sản phẩm ảnh 1 hơn việc sáng tạo lại để khớp bố cục.
+- Nếu có xung đột giữa bố cục ảnh 2 và hình dáng thật của đồng hồ ảnh 1, hãy giữ đúng hình dáng thật của đồng hồ ảnh 1.
+
+Nếu ảnh 2 CÓ tay hoặc cổ tay người mẫu, hãy áp dụng các Yêu cầu bắt buộc sau:
+- Giữ đúng hình dáng, tỷ lệ và phối cảnh của đồng hồ ảnh 1, không bóp méo.
+- Giữ nguyên logo/chữ trên mặt đồng hồ ảnh 1.
+- Giữ dây đồng hồ đầy đủ, không làm cụt dây.
+- Xóa toàn bộ logo, chữ, thương hiệu có sẵn trong ảnh 2, nhưng không xóa logo trên đồng hồ ảnh 1.
+- Giữ ánh sáng, bóng đổ, nền và bố cục tự nhiên như ảnh 2.
+- Kết quả phải giống ảnh chụp sản phẩm thật, không bị méo, không bị giả.
+- Ưu tiên bảo toàn sản phẩm ảnh 1 hơn việc sáng tạo lại để khớp bố cục.
+- Nếu có xung đột giữa bố cục ảnh 2 và hình dáng thật của đồng hồ ảnh 1, hãy giữ đúng hình dáng thật của đồng hồ ảnh 1.
+- Hãy giữ tay/cổ tay tự nhiên, đúng giải phẫu, không méo, không thừa hoặc thiếu ngón.
+- Giữ tư thế bàn tay, góc tay và cách đặt tay tự nhiên như ảnh 2.
+- Đồng hồ phải nằm đúng vị trí trên cổ tay/tay như trong ảnh 2, ôm tay tự nhiên, không lơ lửng, không chìm vào da.
+- Phần tiếp xúc giữa dây đồng hồ và cổ tay phải chân thực, đúng tỷ lệ, không bị biến dạng.
+- Không làm thay đổi màu da, hình dáng bàn tay hoặc phong cách tổng thể của ảnh 2 ngoài những gì cần thiết để thay đồng hồ.`;
+
+        imgPromptsArray = Array(numAiImages).fill(experimentalPrompt);
+        currentSceneTextsArray = Array(numAiImages).fill('Experimental Scene');
+        const extraWatchImages = [];
+
+        aiGeneratedImagePaths = await generateImageWithEngine(pathStr, imgPromptsArray, globalStopController.signal, sampleImg, false, extraWatchImages);
+      } else {
+
+      const promptGuidePath = path.join(__dirname, '../../config/gpt_image_prompt.md');
+      const numAiImages = 10; // Gốc là 10 ảnh mỗi mẻ
 
       if (fs.existsSync(promptGuidePath)) {
         const mdContent = fs.readFileSync(promptGuidePath, 'utf8');
@@ -892,7 +1039,7 @@ export const startTelegramTrainingLoop = async (targetSku = null) => {
         }
       }
 
-      const sampleImg = getRandomSampleImage();
+      
 
       let extraWatchImages = [];
       try {
@@ -927,7 +1074,8 @@ export const startTelegramTrainingLoop = async (targetSku = null) => {
         liveLog(`⚠️ [TRAIN ẢNH] Lỗi khi lấy ảnh tham khảo: ${e.message}`, 'warning', 'Google Drive');
       }
 
-      const aiGeneratedImagePaths = await generateImageWithEngine(pathStr, imgPromptsArray, globalStopController.signal, sampleImg, false, extraWatchImages);
+      aiGeneratedImagePaths = await generateImageWithEngine(pathStr, imgPromptsArray, globalStopController.signal, sampleImg, false, extraWatchImages);
+      } // KẾT THÚC isExperimentalAI
       const lastWatchPath = path.join(__dirname, '../../temp_images/last_watch_image.png');
       if (fs.existsSync(pathStr)) { fs.copyFileSync(pathStr, lastWatchPath); fs.unlinkSync(pathStr); }
 
@@ -1000,7 +1148,7 @@ export const trainContentOnly = async () => {
     const brandFolders = await getFoldersInFolder(ROOT_DRIVE_FOLDER_ID);
     const iwFolder = brandFolders.find(f => f.name.toLowerCase().includes('i&w carnival') || f.name.toLowerCase().includes('i&w'));
     if (!iwFolder) throw new Error('Không tìm thấy thư mục I&W Carnival trong Drive!');
-    const skuFolders = await getFoldersInFolder(iwFolder.id);
+    const skuFolders = (await getFoldersInFolder(iwFolder.id)).filter(f => !f.name.toLowerCase().includes('review'));
     if (skuFolders.length === 0) throw new Error('Không tìm thấy thư mục SKU nào trong thư mục I&W Carnival!');
 
     checkAbort();
@@ -1176,7 +1324,7 @@ export const autoPublishRoutine = async () => {
     const brandFolders = await getFoldersInFolder(ROOT_DRIVE_FOLDER_ID);
     const iwFolder = brandFolders.find(f => f.name.toLowerCase().includes('i&w carnival') || f.name.toLowerCase().includes('i&w'));
     if (!iwFolder) throw new Error('Không tìm thấy thư mục I&W Carnival trong Drive!');
-    const skuFolders = await getFoldersInFolder(iwFolder.id);
+    const skuFolders = (await getFoldersInFolder(iwFolder.id)).filter(f => !f.name.toLowerCase().includes('review'));
     if (skuFolders.length === 0) throw new Error('Không tìm thấy thư mục SKU nào trong thư mục I&W Carnival!');
 
     const postedIds = await getPostedImageIds();
@@ -1237,6 +1385,18 @@ export const autoPublishRoutine = async () => {
 
     // Tìm ảnh/video chưa đăng
     for (const skuFolder of shuffledSkus) {
+      if (skuFolder.name.toUpperCase().includes('DAILY VLOG')) {
+        const mediaFiles = await getVideosInFolder(skuFolder.id);
+        const freshMedia = mediaFiles.filter(item => !postedIds.includes(item.id));
+        if (freshMedia.length > 0) {
+          selectedSku = skuFolder;
+          selectedImages = [freshMedia[Math.floor(Math.random() * freshMedia.length)]];
+          postMode = 'REELS';
+          break;
+        }
+        continue;
+      }
+
       // Trộn ngẫu nhiên thứ tự ưu tiên các loại thư mục
       const shuffledFolderTypes = [...folderTypes].sort(() => 0.5 - Math.random());
 
@@ -1370,6 +1530,47 @@ export const autoPublishRoutine = async () => {
       let aiGeneratedImagePaths = [];
       if (postMode === 'AI' && localFilePaths.length === 1) {
         try {
+          const isExperimentalAI = true; // BẬT CÔNG TẮC THỬ NGHIỆM
+
+          if (isExperimentalAI) {
+            console.log('🧪 Đang chạy chế độ AI thử nghiệm: 1 ảnh AVT + 1 ảnh mẫu, gộp prompt nhận diện tay.');
+            const numAiImages = 1;
+            const sampleImg = getRandomSampleImage();
+            if (sampleImg) liveLog(`🖼️ Dùng ảnh mẫu tham chiếu: ${path.basename(sampleImg)}`, 'highlight', 'ChatGPT');
+
+            const experimentalPrompt = `Dùng ảnh 1 làm sản phẩm chính. Thay chiếc đồng hồ trong ảnh 2 bằng đồng hồ ở ảnh 1.
+
+Quan sát thật kỹ ảnh 2. Nếu ảnh 2 KHÔNG CÓ tay hoặc cổ tay người mẫu, hãy áp dụng các Yêu cầu bắt buộc sau:
+- Giữ đúng hình dáng, tỷ lệ và phối cảnh của đồng hồ ảnh 1, không bóp méo.
+- Giữ nguyên logo/chữ trên mặt đồng hồ ảnh 1.
+- Giữ dây đồng hồ đầy đủ, không làm cụt dây.
+- Xóa toàn bộ logo, chữ, thương hiệu có sẵn trong ảnh 2, nhưng không xóa logo trên đồng hồ ảnh 1.
+- Giữ ánh sáng, bóng đổ, nền và bố cục tự nhiên như ảnh 2.
+- Kết quả phải giống ảnh chụp sản phẩm thật, không bị méo, không bị giả.
+- Ưu tiên bảo toàn sản phẩm ảnh 1 hơn việc sáng tạo lại để khớp bố cục.
+- Nếu có xung đột giữa bố cục ảnh 2 và hình dáng thật của đồng hồ ảnh 1, hãy giữ đúng hình dáng thật của đồng hồ ảnh 1.
+
+Nếu ảnh 2 CÓ tay hoặc cổ tay người mẫu, hãy áp dụng các Yêu cầu bắt buộc sau:
+- Giữ đúng hình dáng, tỷ lệ và phối cảnh của đồng hồ ảnh 1, không bóp méo.
+- Giữ nguyên logo/chữ trên mặt đồng hồ ảnh 1.
+- Giữ dây đồng hồ đầy đủ, không làm cụt dây.
+- Xóa toàn bộ logo, chữ, thương hiệu có sẵn trong ảnh 2, nhưng không xóa logo trên đồng hồ ảnh 1.
+- Giữ ánh sáng, bóng đổ, nền và bố cục tự nhiên như ảnh 2.
+- Kết quả phải giống ảnh chụp sản phẩm thật, không bị méo, không bị giả.
+- Ưu tiên bảo toàn sản phẩm ảnh 1 hơn việc sáng tạo lại để khớp bố cục.
+- Nếu có xung đột giữa bố cục ảnh 2 và hình dáng thật của đồng hồ ảnh 1, hãy giữ đúng hình dáng thật của đồng hồ ảnh 1.
+- Hãy giữ tay/cổ tay tự nhiên, đúng giải phẫu, không méo, không thừa hoặc thiếu ngón.
+- Giữ tư thế bàn tay, góc tay và cách đặt tay tự nhiên như ảnh 2.
+- Đồng hồ phải nằm đúng vị trí trên cổ tay/tay như trong ảnh 2, ôm tay tự nhiên, không lơ lửng, không chìm vào da.
+- Phần tiếp xúc giữa dây đồng hồ và cổ tay phải chân thực, đúng tỷ lệ, không bị biến dạng.
+- Không làm thay đổi màu da, hình dáng bàn tay hoặc phong cách tổng thể của ảnh 2 ngoài những gì cần thiết để thay đồng hồ.`;
+
+            const imgPromptsArray = Array(numAiImages).fill(experimentalPrompt);
+            const extraWatchImages = []; // Không gửi thêm ảnh tham khảo
+            
+            aiGeneratedImagePaths = await generateImageWithEngine(localFilePaths[0], imgPromptsArray, globalStopController.signal, sampleImg, false, extraWatchImages);
+          } else {
+
           // Đọc prompt từ file hướng dẫn .md (nếu có), fallback về prompt mặc định
           const promptGuidePath = path.join(__dirname, '../../config/gpt_image_prompt.md');
           let imgPrompt;
@@ -1471,6 +1672,7 @@ export const autoPublishRoutine = async () => {
           }
 
           aiGeneratedImagePaths = await generateImageWithEngine(localFilePaths[0], imgPromptsArray, globalStopController.signal, sampleImg, false, extraWatchImages);
+          }
 
           // Xóa ảnh gốc vì không cần thiết đăng ảnh gốc nữa
           if (fs.existsSync(localFilePaths[0])) fs.unlinkSync(localFilePaths[0]);
@@ -1528,10 +1730,13 @@ export const autoPublishRoutine = async () => {
             let fbPromptFinal = null;
             let reelsPromptFinal = null;
 
+            const originalFilename = selectedImages[0]?.name || '';
+            const selectedSkuInfo = parseColorsFromFilename(originalFilename, selectedSku.name);
+
             if (fs.existsSync(geminiTemplatePath)) {
               const templateRaw = fs.readFileSync(geminiTemplatePath, 'utf8');
               const fillTemplate = (tmpl) => tmpl
-                .replace(/\{\{SKU\}\}/g, selectedSku.name)
+                .replace(/\{\{SKU\}\}/g, selectedSkuInfo)
                 .replace(/\{\{PRODUCT_INFO\}\}/g, productInfoText || 'Không có thông tin')
                 .replace(/\{\{GENDER\}\}/g, genderLabel);
               const fbIgMatch = templateRaw.match(/## FB_AND_IG_PROMPT_TEMPLATE\s*\n([\s\S]*?)(?=\n---\n## |\n## REELS_|$)/);
@@ -1547,8 +1752,13 @@ export const autoPublishRoutine = async () => {
             }
 
             if (postMode === 'REELS') {
-              const reelsFallback = `Hãy đóng vai TikTok creator. Viết caption ngắn giật tít cho video Reels giới thiệu đồng hồ SKU ${selectedSku.name}. Chỉ trả về caption, dùng hashtag #iwcarnivalvietnam #iwcarnival #donghoiwcarnival và các hashtag trending.`;
-              const reelsPrompt = (reelsPromptFinal || reelsFallback) + getRandomToneAndPerspective();
+              let reelsPrompt = '';
+              if (selectedSku.name.toUpperCase().includes('DAILY VLOG')) {
+                 reelsPrompt = `Đây là một video Daily Vlog (hoạt động hằng ngày: đóng hàng, giao hàng, vệ sinh đồng hồ...). Hãy đóng vai nhân viên của I&W Carnival, viết một đoạn caption thật ngắn gọn, tự nhiên, vui vẻ, thân thiện. Tuyệt đối KHÔNG quảng cáo hay chèo kéo mua hàng. Chỉ dùng hashtag #iwcarnivalvietnam #iwcarnival #dailyvlog`;
+              } else {
+                 const reelsFallback = `Hãy đóng vai TikTok creator. Viết caption ngắn giật tít cho video Reels giới thiệu đồng hồ SKU ${selectedSku.name}. Chỉ trả về caption, dùng hashtag #iwcarnivalvietnam #iwcarnival #donghoiwcarnival và các hashtag trending.`;
+                 reelsPrompt = (reelsPromptFinal || reelsFallback) + getRandomToneAndPerspective();
+              }
 
               const sampleFolders = ['1_Anh_Hang', '2_Anh_Tu_Chup'];
               for (const sFolder of sampleFolders) {
@@ -1635,14 +1845,19 @@ export const autoPublishRoutine = async () => {
             let finalVideoPath = localFilePaths[0];
             const musicDir = path.join(process.cwd(), 'music_library');
             if (fs.existsSync(musicDir)) {
-              const musicFiles = fs.readdirSync(musicDir).filter(f => f.toLowerCase().endsWith('.mp3'));
-              if (musicFiles.length > 0) {
-                const randomMusic = musicFiles[Math.floor(Math.random() * musicFiles.length)];
-                const musicPath = path.join(musicDir, randomMusic);
-                const mixedVideoPath = finalVideoPath.replace('.mp4', `_mixed_${Date.now()}.mp4`);
-                try {
-                  finalVideoPath = await addMusicToVideo(finalVideoPath, musicPath, mixedVideoPath);
-                } catch (e) { }
+              const hasAudio = await hasAudioStream(finalVideoPath);
+              if (hasAudio) {
+                liveLog(`🎵 [${account.name}] Video đã có âm thanh gốc, bỏ qua chèn nhạc ngẫu nhiên.`, 'info', 'System');
+              } else {
+                const musicFiles = fs.readdirSync(musicDir).filter(f => f.toLowerCase().endsWith('.mp3'));
+                if (musicFiles.length > 0) {
+                  const randomMusic = musicFiles[Math.floor(Math.random() * musicFiles.length)];
+                  const musicPath = path.join(musicDir, randomMusic);
+                  const mixedVideoPath = finalVideoPath.replace('.mp4', `_mixed_${Date.now()}.mp4`);
+                  try {
+                    finalVideoPath = await addMusicToVideo(finalVideoPath, musicPath, mixedVideoPath);
+                  } catch (e) { }
+                }
               }
             }
 

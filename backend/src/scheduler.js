@@ -217,6 +217,8 @@ export const startScheduler = async () => {
   console.log('✅ Đã lên lịch Sync Ảnh Google Sheets lúc 03:00 sáng mỗi ngày.');
 
   // --- THÊM: Hẹn giờ đồng bộ CRM định kỳ 5 phút ---
+  // TẠM TẮT ĐỒNG BỘ TIN NHẮN TỰ ĐỘNG THEO YÊU CẦU
+  /*
   if (!global.crmInterval) {
     global.crmInterval = setInterval(async () => {
       try {
@@ -228,6 +230,7 @@ export const startScheduler = async () => {
     }, 5 * 60 * 1000);
     console.log('✅ Đã khởi động luồng đồng bộ CRM ngầm mỗi 5 phút.');
   }
+  */
 
   isSchedulerRunning = false; // Reset để cho phép gọi lại khi user thay đổi settings
 };

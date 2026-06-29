@@ -1,8 +1,26 @@
 import ffmpeg from 'fluent-ffmpeg';
 import ffmpegStatic from 'ffmpeg-static';
+import ffprobeStatic from '@ffprobe-installer/ffprobe';
 
-// Thiết lập đường dẫn tĩnh tới thư viện ffmpeg
+// Thiết lập đường dẫn tĩnh tới thư viện ffmpeg & ffprobe
 ffmpeg.setFfmpegPath(ffmpegStatic);
+ffmpeg.setFfprobePath(ffprobeStatic.path);
+
+/**
+ * Kiểm tra xem video có chứa luồng âm thanh (audio stream) hay không.
+ */
+export const hasAudioStream = (videoPath) => {
+  return new Promise((resolve, reject) => {
+    ffmpeg.ffprobe(videoPath, (err, metadata) => {
+      if (err) {
+        console.error(`❌ Lỗi khi đọc metadata video bằng ffprobe: ${err.message}`);
+        return resolve(false); // Coi như không có audio nếu lỗi
+      }
+      const audioStreams = metadata.streams.filter(s => s.codec_type === 'audio');
+      resolve(audioStreams.length > 0);
+    });
+  });
+};
 
 /**
  * Ghép nhạc MP3 vào Video MP4.
