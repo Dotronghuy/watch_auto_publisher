@@ -72,7 +72,15 @@ app.use((req, res, next) => {
   res.sendFile(path.join(frontendDistPath, 'index.html'));
 });
 
-startTelegramBot();
+// Global Express error handler — bắt tất cả lỗi từ route handlers không được catch
+app.use((err, req, res, next) => {
+  console.error('[Express Error]', err.message || err);
+  if (!res.headersSent) {
+    res.status(500).json({ error: 'Internal server error', message: err.message });
+  }
+});
+
+try { startTelegramBot(); } catch (e) { console.error('⚠️ Telegram bot lỗi khi khởi động:', e.message); }
 
 app.listen(PORT, async () => {
   console.log(`🚀 Server is running on http://localhost:${PORT}`);
@@ -88,7 +96,11 @@ app.listen(PORT, async () => {
 
   // 3. Khởi động Background Job để tracking Metrics
   setInterval(async () => {
-    console.log('📊 Đang chạy tiến trình quét tương tác bài viết (5 phút/lần)...');
-    await trackPostMetrics();
+    try {
+      console.log('📊 Đang chạy tiến trình quét tương tác bài viết (5 phút/lần)...');
+      await trackPostMetrics();
+    } catch (e) {
+      console.error('⚠️ Lỗi trackPostMetrics (bỏ qua):', e.message);
+    }
   }, 5 * 60 * 1000); // Mỗi 5 phút
 });

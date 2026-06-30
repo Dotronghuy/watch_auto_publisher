@@ -247,6 +247,10 @@ export const resetGlobalStop = () => {
 export const triggerGlobalStop = () => {
   globalStopController.abort();
 };
+export const forceResetRunningState = () => {
+  isRoutineRunning = false;
+  globalStopController = new AbortController();
+};
 
 const getSmartFilteredSkus = async (skuFolders, allProductsInfo) => {
   const sheetData = await readFromSheet();

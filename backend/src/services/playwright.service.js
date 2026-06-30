@@ -103,16 +103,15 @@ export const generateBackgroundOnChatGPT = async (imagePath, promptsArray, abort
     const userDataDir = path.join(__dirname, '../../chrome_data_chatgpt');
     
     console.log('🚀 Khởi động trình duyệt ảo (Sử dụng Persistent Profile)...');
-    // Hiển thị ra màn hình để theo dõi
-    const context = await chromium.launchPersistentContext(userDataDir, { 
-        headless: false,
-        args: ['--window-position=0,0', '--window-size=1280,720'],
-        viewport: { width: 1280, height: 720 }
-    });
-    
-    const page = context.pages().length > 0 ? context.pages()[0] : await context.newPage();
-    
+    let context = null;
+    let page = null;
     try {
+        context = await chromium.launchPersistentContext(userDataDir, {
+            headless: false,
+            args: ['--window-position=0,0', '--window-size=1280,720'],
+            viewport: { width: 1280, height: 720 }
+        });
+        page = context.pages().length > 0 ? context.pages()[0] : await context.newPage();
         let targetUrl = 'https://chatgpt.com/g/g-p-6a4240ccda448191a449beb0ad60cdab/project';
         let savedChatId = null;
         if (!isNewSession) {
@@ -197,6 +196,22 @@ export const generateBackgroundOnChatGPT = async (imagePath, promptsArray, abort
             if (i > 0) {
                 console.log('⏳ Đang nghỉ 30 giây để tránh bị ChatGPT chặn vì gửi liên tục...');
                 await page.waitForTimeout(30000);
+
+                // Làm mới promptLocator ở mỗi vòng để tránh stale reference sau 30s
+                promptLocator = null;
+                for (const sel of PROMPT_SELECTORS) {
+                    try {
+                        await page.waitForSelector(sel, { state: 'visible', timeout: 5000 });
+                        promptLocator = page.locator(sel).first();
+                        console.log(`✅ [Ảnh ${i + 1}] Đã làm mới promptLocator với selector: ${sel}`);
+                        break;
+                    } catch (e) {}
+                }
+                if (!promptLocator) {
+                    console.log(`⚠️ [Ảnh ${i + 1}] Không tìm thấy ô nhập liệu. Bỏ qua ảnh này.`);
+                    liveLog(`⚠️ Ảnh ${i + 1}: Không tìm thấy ô nhập liệu ChatGPT. Bỏ qua.`, 'error', 'ChatGPT');
+                    continue;
+                }
             }
 
             const currentPromptObj = promptsArray[i];
@@ -249,17 +264,30 @@ export const generateBackgroundOnChatGPT = async (imagePath, promptsArray, abort
             await page.waitForTimeout(4000);
 
             // Xử lý popup Duplicate File nếu có (tránh lỗi intercept pointer events)
+            // Dùng nhiều selector vì UI ChatGPT có thể thay đổi, timeout 3 giây thay vì 1 giây
             try {
-                const duplicateModal = page.locator('#modal-duplicate-file');
-                if (await duplicateModal.isVisible({ timeout: 1000 })) {
-                    console.log('⚠️ Phát hiện popup "Duplicate File", đang xử lý...');
-                    const confirmBtn = duplicateModal.locator('button.btn-primary');
-                    if (await confirmBtn.isVisible()) {
-                        await confirmBtn.click();
-                    } else {
-                        await page.keyboard.press('Escape');
-                    }
-                    await page.waitForTimeout(1000);
+                const duplicateSelectors = [
+                    '#modal-duplicate-file',
+                    '[data-testid="duplicate-file-modal"]',
+                    '[role="dialog"]:has-text("duplicate")',
+                    '[role="dialog"]:has-text("already")',
+                    '[role="alertdialog"]',
+                ];
+                for (const modalSel of duplicateSelectors) {
+                    try {
+                        const duplicateModal = page.locator(modalSel).first();
+                        if (await duplicateModal.isVisible({ timeout: 500 })) {
+                            console.log(`⚠️ Phát hiện popup chặn (${modalSel}), đang xử lý...`);
+                            const confirmBtn = duplicateModal.locator('button.btn-primary, button:has-text("Replace"), button:has-text("OK"), button:has-text("Confirm")').first();
+                            if (await confirmBtn.isVisible({ timeout: 1000 })) {
+                                await confirmBtn.click();
+                            } else {
+                                await page.keyboard.press('Escape');
+                            }
+                            await page.waitForTimeout(1500);
+                            break;
+                        }
+                    } catch (e) {}
                 }
             } catch (e) {}
 
@@ -373,57 +401,52 @@ CRITICAL RULES:
             console.log(`📍 Tọa độ Y thấp nhất của ảnh cũ: ${Math.round(maxY)} px`);
 
             let imageRetryCount = 0;
+            let lastTryAgainMs = 0; // Timestamp lần cuối click "Try again" - tránh React re-render tăng counter ảo
             for (let attempt = 0; attempt < 60; attempt++) {
                 if (abortSignal && abortSignal.aborted) throw new Error('Abort requested');
                 await page.waitForTimeout(5000);
-                
-                // ── Detect "Image generation failed" từ ChatGPT ──
-                try {
-                    // Không phụ thuộc vào thẻ assistant nữa vì UI ChatGPT có thể đặt thông báo lỗi ở ngoài
-                    const errorLocator = page.getByText('Image generation failed').last();
-                    if (await errorLocator.isVisible({ timeout: 500 })) {
-                        imageRetryCount++;
-                        if (imageRetryCount > 2) {
-                            console.log(`❌ Ảnh ${i + 1} đã thất bại sau ${imageRetryCount - 1} lần thử lại. Bỏ qua ảnh này.`);
-                            liveLog(`❌ Ảnh ${i + 1}: ChatGPT tạo ảnh thất bại sau 2 lần thử lại. Bỏ qua.`, 'error', 'ChatGPT');
-                            break;
-                        }
-                        console.log(`⚠️ ChatGPT báo "Image generation failed". Đang nhấn Try again... (lần ${imageRetryCount}/2)`);
-                        liveLog(`⚠️ Ảnh ${i + 1}: ChatGPT tạo ảnh thất bại. Đang thử lại lần ${imageRetryCount}/2...`, 'warning', 'ChatGPT');
-                        
-                        // Tìm và nhấn nút "Try again"
-                        try {
-                            const tryAgainBtn = page.getByText(/try again/i).last();
-                            if (await tryAgainBtn.isVisible()) {
-                                await tryAgainBtn.click();
-                                console.log('🔄 Đã nhấn "Try again". Chờ ChatGPT vẽ lại...');
-                                await page.waitForTimeout(3000);
-                            } else {
-                                console.log('⚠️ Không tìm thấy nút "Try again" bằng text. Thử selector khác...');
-                                const retryBtn = page.locator('button[aria-label*="etry"], button:has-text("Thử lại")').last();
-                                if (await retryBtn.isVisible()) {
-                                    await retryBtn.click();
-                                    console.log('🔄 Đã nhấn nút retry fallback.');
-                                    await page.waitForTimeout(3000);
-                                }
-                            }
-                        } catch (btnErr) {
-                            console.log('⚠️ Lỗi khi nhấn Try again:', btnErr.message);
-                        }
 
-                        // An toàn thay đổi textContent để không quét trúng vào lần lặp sau (không phá hủy DOM HTML)
-                        await page.evaluate(() => {
-                            const walk = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null, false);
-                            let node;
-                            while (node = walk.nextNode()) {
-                                if (node.nodeValue.includes('Image generation failed')) {
-                                    node.nodeValue = node.nodeValue.replace('Image generation failed', 'Đang đợi vẽ lại...');
-                                }
+                // ── Detect "Image generation failed" từ ChatGPT ──
+                // Chỉ kiểm tra sau 20 giây kể từ lần click "Try again" cuối cùng.
+                // React re-render sẽ phục hồi text lỗi sau click, dùng cooldown thay vì DOM masking.
+                if (Date.now() - lastTryAgainMs > 20000) {
+                    try {
+                        const errorLocator = page.getByText('Image generation failed').last();
+                        if (await errorLocator.isVisible({ timeout: 500 })) {
+                            imageRetryCount++;
+                            if (imageRetryCount > 2) {
+                                console.log(`❌ Ảnh ${i + 1} đã thất bại sau ${imageRetryCount - 1} lần thử lại. Bỏ qua ảnh này.`);
+                                liveLog(`❌ Ảnh ${i + 1}: ChatGPT tạo ảnh thất bại sau 2 lần thử lại. Bỏ qua.`, 'error', 'ChatGPT');
+                                break;
                             }
-                        });
-                        continue;
-                    }
-                } catch (e) {}
+                            console.log(`⚠️ ChatGPT báo "Image generation failed". Đang nhấn Try again... (lần ${imageRetryCount}/2)`);
+                            liveLog(`⚠️ Ảnh ${i + 1}: ChatGPT tạo ảnh thất bại. Đang thử lại lần ${imageRetryCount}/2...`, 'warning', 'ChatGPT');
+
+                            // Tìm và nhấn nút "Try again"
+                            try {
+                                const tryAgainBtn = page.getByText(/try again/i).last();
+                                if (await tryAgainBtn.isVisible()) {
+                                    await tryAgainBtn.click();
+                                    console.log('🔄 Đã nhấn "Try again". Chờ ChatGPT vẽ lại...');
+                                    lastTryAgainMs = Date.now();
+                                    await page.waitForTimeout(3000);
+                                } else {
+                                    console.log('⚠️ Không tìm thấy nút "Try again" bằng text. Thử selector khác...');
+                                    const retryBtn = page.locator('button[aria-label*="etry"], button:has-text("Thử lại")').last();
+                                    if (await retryBtn.isVisible()) {
+                                        await retryBtn.click();
+                                        console.log('🔄 Đã nhấn nút retry fallback.');
+                                        lastTryAgainMs = Date.now();
+                                        await page.waitForTimeout(3000);
+                                    }
+                                }
+                            } catch (btnErr) {
+                                console.log('⚠️ Lỗi khi nhấn Try again:', btnErr.message);
+                            }
+                            continue;
+                        }
+                    } catch (e) {}
+                }
                 
                 // Quét tìm ảnh có tọa độ Y lớn hơn ảnh cũ
                 try {
@@ -515,18 +538,16 @@ CRITICAL RULES:
         }
         
         console.log('✅ Hoàn thành tiến trình vẽ mẻ ảnh!');
-        await context.close();
-        
         return outputPaths;
-        
+
     } catch (error) {
         console.error('\n❌ LỖI TRONG TIẾN TRÌNH PLAYWRIGHT:');
         console.error(error.message);
-        if (page && !page.isClosed()) {
-            await page.waitForTimeout(20000);
-        }
-        await context.close();
         return [];
+    } finally {
+        if (context) {
+            try { await context.close(); } catch (e) { console.error('⚠️ Lỗi khi đóng browser:', e.message); }
+        }
     }
 };
 
@@ -554,15 +575,15 @@ export const generateContentOnChatGPT = async (prompt, type, imagePath = null) =
     const userDataDir = path.join(__dirname, '../../chrome_data_chatgpt');
     
     console.log('🚀 Khởi động trình duyệt ảo (ChatGPT Text Profile)...');
-    const context = await chromium.launchPersistentContext(userDataDir, { 
-        headless: false,
-        args: ['--window-position=0,0', '--window-size=1280,720'],
-        viewport: { width: 1280, height: 720 }
-    });
-    
-    const page = context.pages().length > 0 ? context.pages()[0] : await context.newPage();
-    
+    let context = null;
+    let page = null;
     try {
+        context = await chromium.launchPersistentContext(userDataDir, {
+            headless: false,
+            args: ['--window-position=0,0', '--window-size=1280,720'],
+            viewport: { width: 1280, height: 720 }
+        });
+        page = context.pages().length > 0 ? context.pages()[0] : await context.newPage();
         // Luôn sử dụng URL gốc của Dự án Content AI (Bảo đảm 100% chạy trong Dự án)
         let targetUrl = 'https://chatgpt.com/g/g-p-6a4240841f78819187a78013293677ad/project';
         
@@ -673,17 +694,19 @@ export const generateContentOnChatGPT = async (prompt, type, imagePath = null) =
                     return markdownDiv ? markdownDiv.innerText : el.innerText;
                 }, lastMsg);
                 console.log('✅ Đã lấy xong nội dung!');
-                await context.close();
                 return text.trim();
             }
         }
-        
+
         throw new Error('Timeout chờ text');
-        
+
     } catch (error) {
         console.error('❌ LỖI TRONG TIẾN TRÌNH PLAYWRIGHT TEXT:', error.message);
-        await context.close();
         return null;
+    } finally {
+        if (context) {
+            try { await context.close(); } catch (e) { console.error('⚠️ Lỗi khi đóng browser:', e.message); }
+        }
     }
 };
 

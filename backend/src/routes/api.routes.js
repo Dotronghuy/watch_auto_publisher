@@ -9,7 +9,7 @@ import { google } from 'googleapis';
 import multer from 'multer';
 import { spawn } from 'child_process';
 import { startScheduler } from '../scheduler.js';
-import { autoPublishRoutine, dryRunRoutine, resetGlobalStop, triggerGlobalStop, getIsRunning, trainImageOnly, trainContentOnly, getToneInstructionText } from '../services/publish.service.js';
+import { autoPublishRoutine, dryRunRoutine, resetGlobalStop, triggerGlobalStop, getIsRunning, forceResetRunningState, trainImageOnly, trainContentOnly, getToneInstructionText } from '../services/publish.service.js';
 import { getProductInfoBySku } from '../services/sheet.service.js';
 import { openLoginHelper, generateContentOnChatGPT, generateBackgroundOnChatGPT, analyzeNewSampleImages } from '../services/playwright.service.js';
 import { publishQueue } from '../workers/queue.js';
@@ -361,17 +361,27 @@ router.post('/stop-workflow', async (req, res) => {
 
   // Xóa sạch tất cả job đang chờ trong hàng đợi BullMQ
   try {
-    await publishQueue.drain(true); // Drain: hủy tất cả job đang chờ (waiting + delayed)
+    await publishQueue.drain(true);
     const active = await publishQueue.getActive();
     for (const job of active) {
-      await job.discard(); // Đánh dấu job đang chạy là thất bại ngay
+      await job.discard();
     }
     console.log('✅ Đã drain queue và discard tất cả active jobs.');
   } catch (e) {
     console.log('⚠️ Không thể drain queue:', e.message);
   }
 
+  // Sau 3 giây nếu routine vẫn chưa tự reset, force reset để tránh kẹt flag
+  setTimeout(() => { forceResetRunningState(); }, 3000);
+
   res.json({ success: true, message: 'Đã dừng toàn bộ ngay lập tức.' });
+});
+
+// Reset trạng thái khi bị kẹt mà không cần restart server
+router.post('/reset-state', (req, res) => {
+  forceResetRunningState();
+  console.log('🔄 Đã force reset trạng thái hệ thống.');
+  res.json({ success: true, message: 'Đã reset trạng thái. Bạn có thể chạy lại.' });
 });
 
 router.post('/train-image', async (req, res) => {
