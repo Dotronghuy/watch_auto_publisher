@@ -19,7 +19,7 @@ export default function AutoFillSheet() {
   useEffect(() => {
     checkStatus();
     
-    const eventSource = new EventSource('http://localhost:3000/api/autofill/log-stream');
+    const eventSource = new EventSource('/api/autofill/log-stream');
     eventSource.onmessage = (event) => {
       const data = JSON.parse(event.data);
       if (data.msg) {
@@ -38,7 +38,7 @@ export default function AutoFillSheet() {
 
   const checkStatus = async () => {
     try {
-      const res = await fetch('http://localhost:3000/api/autofill/status');
+      const res = await fetch('/api/autofill/status');
       const data = await res.json();
       setStatus(data.isRunning ? 'running' : 'idle');
       setHasCreds(data.hasCredentials);
@@ -55,7 +55,7 @@ export default function AutoFillSheet() {
     formData.append(type, file);
 
     try {
-      const res = await fetch('http://localhost:3000/api/autofill/upload', {
+      const res = await fetch('/api/autofill/upload', {
         method: 'POST',
         body: formData,
       });
@@ -74,7 +74,7 @@ export default function AutoFillSheet() {
 
     setLogs([]);
     try {
-      await fetch('http://localhost:3000/api/autofill/start', {
+      await fetch('/api/autofill/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sheetUrl, aiTone })
@@ -86,7 +86,7 @@ export default function AutoFillSheet() {
 
   const stopAutoFill = async () => {
     try {
-      await fetch('http://localhost:3000/api/autofill/stop', { method: 'POST' });
+      await fetch('/api/autofill/stop', { method: 'POST' });
     } catch (err) {
       alert('Lỗi khi dừng');
     }

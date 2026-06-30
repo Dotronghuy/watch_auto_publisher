@@ -68,6 +68,7 @@ const Workflow = () => {
   const [sampleImages, setSampleImages] = useState([]);
   const [sampleImgUploading, setSampleImgUploading] = useState(false);
   const [skuCode, setSkuCode] = useState('');
+  const [isAiIdle, setIsAiIdle] = useState(true);
   // Canvas transform state
   const [transform, setTransform] = useState({ x: 0, y: 0, scale: 1 });
   const terminalEndRef = useRef(null);
@@ -94,6 +95,25 @@ const Workflow = () => {
     fetchMdFiles('gemini');
     fetchSampleImages();
   }, [fetchMdFiles]);
+
+  useEffect(() => {
+    const checkHealth = async () => {
+      try {
+        const res = await fetch('/api/health');
+        if (res.ok) {
+          const data = await res.json();
+          setIsAiIdle(data.aiIdle);
+          if (data.aiIdle) {
+            setDryRunLoading(false);
+            setTrainMode(null);
+          }
+        }
+      } catch (e) {}
+    };
+    const timer = setInterval(checkHealth, 3000);
+    checkHealth();
+    return () => clearInterval(timer);
+  }, []);
 
   // ─── QUẢN LÝ ẢNH MẬu THAM CHIỪu ───
   const fetchSampleImages = async () => {
@@ -515,13 +535,17 @@ const Workflow = () => {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Training ảnh thất bại');
-      if (data.trainMode === 'image' && data.images.length === 0) {
+      if (data.status === 'started') {
         Swal.fire({ icon: 'success', title: 'Đã Bắt Đầu!', text: data.message, background: 'var(--color-surface)', color: 'white' });
-      } else {
+      } else if (data.trainMode === 'image' && data.images && data.images.length === 0) {
+        Swal.fire({ icon: 'success', title: 'Đã Bắt Đầu!', text: data.message, background: 'var(--color-surface)', color: 'white' });
+      } else if (data.images) {
         setDryRunResult(data);
         setDryRunImgIdx(0);
         setDryRunTab('fb');
         setShowDryRunModal(true);
+      } else {
+        Swal.fire({ icon: 'success', title: 'Thành Công!', text: data.message || 'Tiến trình hoàn tất', background: 'var(--color-surface)', color: 'white' });
       }
     } catch (err) {
       Swal.fire({
@@ -1057,8 +1081,8 @@ const Workflow = () => {
                     className="btn-dry-run"
                     onClick={(e) => { e.stopPropagation(); handleDryRun(); }}
                     onMouseDown={e => e.stopPropagation()}
-                    disabled={dryRunLoading}
-                    title="Chạy thử toàn bộ luồng AI nhưng KHÔNG đăng lên MXH"
+                    disabled={dryRunLoading || !isAiIdle}
+                    title={!isAiIdle ? "AI đang bận..." : "Chạy thử toàn bộ luồng AI nhưng KHÔNG đăng lên MXH"}
                     style={{flex: '1 1 100%'}}
                   >
                     {dryRunLoading && trainMode === 'full' ? (
@@ -1071,8 +1095,8 @@ const Workflow = () => {
                     className="btn-dry-run btn-train-image"
                     onClick={(e) => { e.stopPropagation(); handleTrainImage(); }}
                     onMouseDown={e => e.stopPropagation()}
-                    disabled={dryRunLoading}
-                    title="Chỉ tạo ảnh GPT để training AI"
+                    disabled={dryRunLoading || !isAiIdle}
+                    title={!isAiIdle ? "AI đang bận..." : "Chỉ tạo ảnh GPT để training AI"}
                     style={{flex: '1 1 45%'}}
                   >
                     {dryRunLoading && trainMode === 'image' ? (
@@ -1085,8 +1109,8 @@ const Workflow = () => {
                     className="btn-dry-run btn-train-content"
                     onClick={(e) => { e.stopPropagation(); handleTrainContent(); }}
                     onMouseDown={e => e.stopPropagation()}
-                    disabled={dryRunLoading}
-                    title="Chỉ tạo content để training AI"
+                    disabled={dryRunLoading || !isAiIdle}
+                    title={!isAiIdle ? "AI đang bận..." : "Chỉ tạo content để training AI"}
                     style={{flex: '1 1 45%'}}
                   >
                     {dryRunLoading && trainMode === 'content' ? (
@@ -1099,8 +1123,8 @@ const Workflow = () => {
                     className="btn-dry-run btn-train-content"
                     onClick={(e) => { e.stopPropagation(); handleTestTones(); }}
                     onMouseDown={e => e.stopPropagation()}
-                    disabled={showTestTonesModal}
-                    title="Test 6 phong cách hành văn AI"
+                    disabled={showTestTonesModal || !isAiIdle}
+                    title={!isAiIdle ? "AI đang bận..." : "Test 6 phong cách hành văn AI"}
                     style={{flex: '1 1 100%', marginTop: '6px', background: 'rgba(234, 179, 8, 0.1)', color: '#eab308', borderColor: 'rgba(234, 179, 8, 0.3)'}}
                   >
                     <><Zap size={13} /> Test Hành Văn AI</>

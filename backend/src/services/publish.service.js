@@ -26,6 +26,7 @@ const geminiTemplatePath = path.join(__dirname, '../../config/gemini-prompt-temp
 const N8N_WEBHOOK_URL = process.env.N8N_WEBHOOK_URL || 'http://127.0.0.1:5678/webhook-test/test-ai';
 const ROOT_DRIVE_FOLDER_ID = process.env.ROOT_DRIVE_FOLDER_ID || '1MFAy8z4kghRCT4Z8tGsvVAqk_I02UCHl';
 const SAMPLE_IMAGES_DIR = path.join(__dirname, '../../config/sample_images');
+const GPT_IMAGE_PROMPT_PATH = path.join(__dirname, '../../config/gpt_image_prompt.md');
 
 const generateImageWithEngine = async (imagePath, promptsArray, abortSignal, sampleImagePath, isNewSession, extraWatchImages) => {
     let engine = 'chatgpt';
@@ -233,6 +234,79 @@ const getRandomSampleImage = () => {
   if (files.length === 0) return null;
   const randomFile = files[Math.floor(Math.random() * files.length)];
   return path.join(SAMPLE_IMAGES_DIR, randomFile);
+};
+
+const detectSkuGenderTag = (skuName = '') => {
+  const skuUpper = String(skuName || '').toUpperCase();
+  if (/G\d*$|G[^A-Z]|\d+G/.test(skuUpper)) return 'MALE';
+  if (/L\d*$|L[^A-Z]|\d+L/.test(skuUpper)) return 'FEMALE';
+  return 'NEUTRAL';
+};
+
+const getAllSampleImageFiles = () => {
+  if (!fs.existsSync(SAMPLE_IMAGES_DIR)) return [];
+  const validExt = ['.jpg', '.jpeg', '.png', '.webp'];
+  return fs.readdirSync(SAMPLE_IMAGES_DIR)
+    .filter(f => validExt.includes(path.extname(f).toLowerCase()))
+    .map(f => path.join(SAMPLE_IMAGES_DIR, f));
+};
+
+const getPromptGuideSampleImages = (genderTag) => {
+  if (!fs.existsSync(GPT_IMAGE_PROMPT_PATH)) return [];
+  try {
+    const mdContent = fs.readFileSync(GPT_IMAGE_PROMPT_PATH, 'utf8');
+    const sectionRegex = new RegExp(`\\[${genderTag}\\][\\s\\S]*?(?=\\n## \\[|$)`, 'i');
+    const sectionMatch = mdContent.match(sectionRegex);
+    if (!sectionMatch) return [];
+
+    return [...sectionMatch[0].matchAll(/\*\*Sample Image:\*\*\s*(.+)/gi)]
+      .map(m => m[1].trim())
+      .filter(name => name && name !== 'N/A' && !name.startsWith('PLACEHOLDER'))
+      .map(name => path.join(SAMPLE_IMAGES_DIR, name))
+      .filter(samplePath => fs.existsSync(samplePath));
+  } catch (e) {
+    return [];
+  }
+};
+
+const pickHybridSampleImage = (skuName = '') => {
+  const genderTag = detectSkuGenderTag(skuName);
+  let source = `prompt-guide:${genderTag}`;
+  let candidates = getPromptGuideSampleImages(genderTag);
+
+  if (candidates.length === 0 && genderTag !== 'NEUTRAL') {
+    candidates = getPromptGuideSampleImages('NEUTRAL');
+    source = 'prompt-guide:NEUTRAL-fallback';
+  }
+
+  if (candidates.length === 0) {
+    candidates = getAllSampleImageFiles();
+    source = 'sample-images:fallback';
+  }
+
+  if (candidates.length === 0) {
+    return { imagePath: null, genderTag, sampleName: 'N/A', source: 'none' };
+  }
+
+  const imagePath = candidates[Math.floor(Math.random() * candidates.length)];
+  return {
+    imagePath,
+    genderTag,
+    sampleName: path.basename(imagePath),
+    source
+  };
+};
+
+const buildHybridSceneMetadata = (skuName, sampleInfo, index) => {
+  return [
+    '[Hybrid AI Scene]',
+    `SKU: ${skuName || 'Auto'}`,
+    `Image request: ${index + 1}`,
+    `Gender bucket: ${sampleInfo.genderTag}`,
+    `Sample image: ${sampleInfo.sampleName}`,
+    `Sample source: ${sampleInfo.source}`,
+    'Logic: replace the watch in sample image with the product watch'
+  ].join('\n');
 };
 
 let globalStopController = new AbortController();
@@ -539,13 +613,17 @@ export const dryRunRoutine = async () => {
         try {
           let imgPromptsArray = [];
           const isExperimentalAI = true;
-          let sampleImg = getRandomSampleImage();
+          let sampleInfo = pickHybridSampleImage(selectedSku?.name);
+          let sampleImg = sampleInfo.imagePath;
 
           if (isExperimentalAI) {
             console.log('🧪 Đang chạy chế độ AI thử nghiệm (DRY RUN): 1 ảnh AVT + 1 ảnh mẫu, gộp prompt nhận diện tay.');
             const numAiImages = 1;
+            const sampleInfos = Array.from({ length: numAiImages }, (_, idx) => idx === 0 ? sampleInfo : pickHybridSampleImage(selectedSku?.name));
+            sampleInfo = sampleInfos[0];
+            sampleImg = sampleInfo.imagePath;
             
-            if (sampleImg) liveLog(`🖼️ [DRY RUN] Dùng ảnh mẫu tham chiếu: ${path.basename(sampleImg)}`, 'highlight', 'ChatGPT');
+            if (sampleImg) liveLog(`🖼️ [DRY RUN] Dùng ảnh mẫu ${sampleInfo.genderTag}: ${sampleInfo.sampleName}`, 'highlight', 'ChatGPT');
             
             const experimentalPrompt = `Dùng ảnh 1 làm sản phẩm chính. Thay chiếc đồng hồ trong ảnh 2 bằng đồng hồ ở ảnh 1.
 
@@ -574,8 +652,12 @@ Nếu ảnh 2 CÓ tay hoặc cổ tay người mẫu, hãy áp dụng các Yêu 
 - Phần tiếp xúc giữa dây đồng hồ và cổ tay phải chân thực, đúng tỷ lệ, không bị biến dạng.
 - Không làm thay đổi màu da, hình dáng bàn tay hoặc phong cách tổng thể của ảnh 2 ngoài những gì cần thiết để thay đồng hồ.`;
 
-            imgPromptsArray = Array(numAiImages).fill(experimentalPrompt);
-            currentSceneTextsArray = Array(numAiImages).fill('Experimental Scene');
+            imgPromptsArray = sampleInfos.map(info => ({
+              prompt: experimentalPrompt,
+              sampleImage: info.imagePath,
+              mode: 'direct_two_image_edit'
+            }));
+            currentSceneTextsArray = sampleInfos.map((info, index) => buildHybridSceneMetadata(selectedSku?.name, info, index));
             const extraWatchImages = [];
             
             aiGeneratedImagePaths = await generateImageWithEngine(localFilePaths[0], imgPromptsArray, globalStopController.signal, sampleImg, false, extraWatchImages);
@@ -952,13 +1034,17 @@ export const startTelegramTrainingLoop = async (targetSku = null) => {
       let imgPromptsArray = [];
       let currentSceneTextsArray = [];
       const isExperimentalAI = true;
-      let sampleImg = getRandomSampleImage();
+      let sampleInfo = pickHybridSampleImage(selectedSku?.name);
+      let sampleImg = sampleInfo.imagePath;
 
       if (isExperimentalAI) {
         console.log('🧪 Đang chạy chế độ AI thử nghiệm (TRAIN ẢNH): 1 ảnh AVT + 1 ảnh mẫu, gộp prompt nhận diện tay.');
         const numAiImages = 10;
+        const sampleInfos = Array.from({ length: numAiImages }, (_, idx) => idx === 0 ? sampleInfo : pickHybridSampleImage(selectedSku?.name));
+        sampleInfo = sampleInfos[0];
+        sampleImg = sampleInfo.imagePath;
         
-        if (sampleImg) liveLog(`🖼️ [TRAIN ẢNH] Dùng ảnh mẫu tham chiếu: ${path.basename(sampleImg)}`, 'highlight', 'ChatGPT');
+        if (sampleImg) liveLog(`🖼️ [TRAIN ẢNH] Dùng ảnh mẫu ${sampleInfo.genderTag}: ${sampleInfo.sampleName}`, 'highlight', 'ChatGPT');
 
         const experimentalPrompt = `Dùng ảnh 1 làm sản phẩm chính. Thay chiếc đồng hồ trong ảnh 2 bằng đồng hồ ở ảnh 1.
 
@@ -987,8 +1073,12 @@ Nếu ảnh 2 CÓ tay hoặc cổ tay người mẫu, hãy áp dụng các Yêu 
 - Phần tiếp xúc giữa dây đồng hồ và cổ tay phải chân thực, đúng tỷ lệ, không bị biến dạng.
 - Không làm thay đổi màu da, hình dáng bàn tay hoặc phong cách tổng thể của ảnh 2 ngoài những gì cần thiết để thay đồng hồ.`;
 
-        imgPromptsArray = Array(numAiImages).fill(experimentalPrompt);
-        currentSceneTextsArray = Array(numAiImages).fill('Experimental Scene');
+        imgPromptsArray = sampleInfos.map(info => ({
+          prompt: experimentalPrompt,
+          sampleImage: info.imagePath,
+          mode: 'direct_two_image_edit'
+        }));
+        currentSceneTextsArray = sampleInfos.map((info, index) => buildHybridSceneMetadata(selectedSku?.name, info, index));
         const extraWatchImages = [];
 
         aiGeneratedImagePaths = await generateImageWithEngine(pathStr, imgPromptsArray, globalStopController.signal, sampleImg, false, extraWatchImages);
@@ -1091,6 +1181,10 @@ Nếu ảnh 2 CÓ tay hoặc cổ tay người mẫu, hãy áp dụng các Yêu 
             prompt: currentSceneTextsArray[i] || ''
           });
         }
+      }
+
+      if (imageUrls.length === 0) {
+        throw new Error('ChatGPT trả về 0 ảnh thành công. Ngừng tiến trình Train Ảnh để tránh treo hệ thống.');
       }
 
       liveLog('🎉 [TRAIN ẢNH] Đã vẽ xong! Đang đẩy ảnh qua Telegram...', 'success', 'System');
@@ -1323,6 +1417,8 @@ export const autoPublishRoutine = async () => {
   };
 
   let localFilePaths = [];
+  let finalPostId = "N/A";
+  let finalSkuName = "Unknown";
 
   try {
     const brandFolders = await getFoldersInFolder(ROOT_DRIVE_FOLDER_ID);
@@ -1539,8 +1635,9 @@ export const autoPublishRoutine = async () => {
           if (isExperimentalAI) {
             console.log('🧪 Đang chạy chế độ AI thử nghiệm: 1 ảnh AVT + 1 ảnh mẫu, gộp prompt nhận diện tay.');
             const numAiImages = 1;
-            const sampleImg = getRandomSampleImage();
-            if (sampleImg) liveLog(`🖼️ Dùng ảnh mẫu tham chiếu: ${path.basename(sampleImg)}`, 'highlight', 'ChatGPT');
+            const sampleInfo = pickHybridSampleImage(selectedSku?.name);
+            const sampleImg = sampleInfo.imagePath;
+            if (sampleImg) liveLog(`🖼️ Dùng ảnh mẫu ${sampleInfo.genderTag}: ${sampleInfo.sampleName}`, 'highlight', 'ChatGPT');
 
             const experimentalPrompt = `Dùng ảnh 1 làm sản phẩm chính. Thay chiếc đồng hồ trong ảnh 2 bằng đồng hồ ở ảnh 1.
 
@@ -1569,7 +1666,11 @@ Nếu ảnh 2 CÓ tay hoặc cổ tay người mẫu, hãy áp dụng các Yêu 
 - Phần tiếp xúc giữa dây đồng hồ và cổ tay phải chân thực, đúng tỷ lệ, không bị biến dạng.
 - Không làm thay đổi màu da, hình dáng bàn tay hoặc phong cách tổng thể của ảnh 2 ngoài những gì cần thiết để thay đồng hồ.`;
 
-            const imgPromptsArray = Array(numAiImages).fill(experimentalPrompt);
+            const imgPromptsArray = Array.from({ length: numAiImages }, () => ({
+              prompt: experimentalPrompt,
+              sampleImage: sampleImg,
+              mode: 'direct_two_image_edit'
+            }));
             const extraWatchImages = []; // Không gửi thêm ảnh tham khảo
             
             aiGeneratedImagePaths = await generateImageWithEngine(localFilePaths[0], imgPromptsArray, globalStopController.signal, sampleImg, false, extraWatchImages);
@@ -1678,6 +1779,10 @@ Nếu ảnh 2 CÓ tay hoặc cổ tay người mẫu, hãy áp dụng các Yêu 
           aiGeneratedImagePaths = await generateImageWithEngine(localFilePaths[0], imgPromptsArray, globalStopController.signal, sampleImg, false, extraWatchImages);
           }
 
+          if (!Array.isArray(aiGeneratedImagePaths) || aiGeneratedImagePaths.length === 0) {
+            throw new Error('ChatGPT trả về 0 ảnh AI. Dừng Auto Publish để tránh chạy tiếp khi chưa có ảnh tạo mới.');
+          }
+
           // Xóa ảnh gốc vì không cần thiết đăng ảnh gốc nữa
           if (fs.existsSync(localFilePaths[0])) fs.unlinkSync(localFilePaths[0]);
 
@@ -1689,7 +1794,8 @@ Nếu ảnh 2 CÓ tay hoặc cổ tay người mẫu, hãy áp dụng các Yêu 
             liveLog('⏹️ Đã dừng tiến trình theo yêu cầu.', 'error', 'System');
             throw pwError;
           }
-          console.log(`⚠️ Lỗi Playwright tạo ảnh: ${pwError.message}. Sẽ đăng ảnh gốc.`);
+          liveLog(`❌ [AUTO PUBLISH] Tạo ảnh AI thất bại: ${pwError.message}. Đã dừng để tránh đăng sai ảnh.`, 'error', 'ChatGPT');
+          throw pwError;
         }
       }
 
@@ -2012,6 +2118,8 @@ Nếu ảnh 2 CÓ tay hoặc cổ tay người mẫu, hãy áp dụng các Yêu 
       } // KẾT THÚC VÒNG LẶP CHO NHIỀU ACCOUNTS
 
       const postId = mainPostId || "N/A";
+      finalPostId = postId;
+      if (selectedSku) finalSkuName = selectedSku.name;
 
       // Đẩy lịch sử lên giao diện Dashboard
       addActivity(`Đăng thành công sản phẩm ${selectedSku.name} lên ${activeAccounts.length} Page!`, 'success');
@@ -2037,7 +2145,7 @@ Nếu ảnh 2 CÓ tay hoặc cổ tay người mẫu, hãy áp dụng các Yêu 
     // 7. Dọn sạch toàn bộ thư mục temp_images để tránh tích tụ file rác (ảnh gốc, rmbg, resize, chatgpt...)
     cleanTempDirectory();
 
-    return { success: true, postId: postId, sku: selectedSku.name };
+    return { success: true, postId: finalPostId, sku: finalSkuName };
 
   } catch (error) {
     // Dọn rác nếu lỗi

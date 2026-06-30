@@ -6,13 +6,13 @@
   "testInterval": "1",
   "igDelayMin": "1",
   "igDelayMax": "2",
-  "chatGptProjectUrl": "https://chatgpt.com/g/g-p-6a21019c9228819187d6284f9b4ff8f9-image-watch-ai/project",
+  "chatGptProjectUrl": "https://chatgpt.com/g/g-p-6a4240ccda448191a449beb0ad60cdab/project",
   "imageGenerationEngine": "chatgpt",
   "sdApiUrl": "http://127.0.0.1:8188",
   "googleSheetId": "1tWg6zzAw6F9_2vlvOFfPy_2tV88xFGPB-4f5NvbwS_M",
   "aiTasks": {
-    "fbChatUrl": "6a38a84a-5e24-83ec-becd-6c11be8e7fad",
-    "igChatUrl": "6a3172de-0f04-83ec-a85f-7a2812209208"
+    "fbChatUrl": "6a43484e-3aec-83ec-8231-3954d91523aa",
+    "igChatUrl": "6a434874-bb70-83ec-9014-92391c64191d"
   },
   "botPauseHours": 2,
   "botDelayMin": "10",

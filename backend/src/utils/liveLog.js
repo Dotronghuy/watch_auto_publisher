@@ -20,6 +20,7 @@ export const liveLog = (message, type = 'info', sender = 'System', extra = {}) =
     ...extra
   };
   console.log(`[${sender}] ${message}`);
+  payload._terminalLogged = true;
   logEmitter.emit('log', payload);
 };
 

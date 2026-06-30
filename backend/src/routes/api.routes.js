@@ -11,7 +11,7 @@ import { spawn } from 'child_process';
 import { startScheduler } from '../scheduler.js';
 import { autoPublishRoutine, dryRunRoutine, resetGlobalStop, triggerGlobalStop, getIsRunning, forceResetRunningState, trainImageOnly, trainContentOnly, getToneInstructionText } from '../services/publish.service.js';
 import { getProductInfoBySku } from '../services/sheet.service.js';
-import { openLoginHelper, generateContentOnChatGPT, generateBackgroundOnChatGPT, analyzeNewSampleImages } from '../services/playwright.service.js';
+import { openLoginHelper, generateContentOnChatGPT, generateBackgroundOnChatGPT, analyzeNewSampleImages, isAiIdle } from '../services/playwright.service.js';
 import { publishQueue } from '../workers/queue.js';
 import { recentActivities, addActivity } from '../utils/activity.js';
 import { getAllPostedHistory, getTodayEngagement } from '../utils/history.js';
@@ -104,10 +104,15 @@ export const broadcastCRM = (eventType, data) => {
 
 // Hàm gửi log tới tất cả các client đang xem Live Monitor
 export const sendLogToClients = (logData) => {
-  logHistory.push(logData);
+  const { _terminalLogged, ...clientLogData } = logData;
+  if (!_terminalLogged) {
+    console.log(`[${clientLogData.sender || 'System'}] ${clientLogData.message || ''}`);
+  }
+
+  logHistory.push(clientLogData);
   if (logHistory.length > 300) logHistory.shift(); // Giữ tối đa 300 sự kiện gần nhất
   clients.forEach(client => {
-    client.res.write(`data: ${JSON.stringify(logData)}\n\n`);
+    client.res.write(`data: ${JSON.stringify(clientLogData)}\n\n`);
   });
 };
 
@@ -117,6 +122,13 @@ logEmitter.on('log', (logData) => {
 });
 
 // 1. Dashboard Stats
+router.get('/health', (req, res) => {
+  res.json({
+    serverReady: true,
+    aiIdle: isAiIdle()
+  });
+});
+
 router.get('/dashboard', async (req, res) => {
   try {
     // A. Lấy tổng bài đã đăng từ lịch sử (đọc từ SQLite DB)
@@ -391,8 +403,10 @@ router.post('/train-image', async (req, res) => {
     addActivity('Bắt đầu Train Ảnh (GPT Vision)' + (sku ? ` - SKU: ${sku}` : ''), 'info');
     sendLogToClients({ time: new Date().toLocaleTimeString(), sender: 'System', message: '🚀 Bắt đầu luồng Train Ảnh...', type: 'info' });
     
-    const result = await trainImageOnly(sku);
-    res.json(result);
+    // Fire and forget (chạy nền)
+    trainImageOnly(sku).catch(console.error);
+    
+    res.json({ success: true, status: 'started', message: 'Tiến trình đang chạy nền, vui lòng xem log.' });
   } catch (err) {
     const isAborted = err.message?.includes('aborted') || err.name === 'AbortError';
     const msg = isAborted ? '⏹️ Train Ảnh bị dừng.' : `❌ Lỗi: ${err.message}`;
@@ -1107,28 +1121,12 @@ YÊU CẦU:
       const refImagePath = req.file.path;
       
       const generatedPaths = await generateBackgroundOnChatGPT(
-        refImagePath,
-        [{ prompt: feedbackMsg, sampleImage: refImagePath }],
-        null,   // no abort signal
-        null,   // no sample
-        false,  // continue existing session
-        []      // no extra images
-      );
-      
-      if (generatedPaths && generatedPaths.length > 0) {
-        // Trả về file path → convert sang URL
-        const filename = path.basename(generatedPaths[0]);
-        newImageUrl = `http://localhost:3000/temp_images/${filename}`;
-      }
-    } else {
-      // Không có ảnh tham chiếu → gửi text feedback
-      const generatedPaths = await generateBackgroundOnChatGPT(
-        null,
+        null,           // Không có imagePath (ảnh sản phẩm mới)
         [{ prompt: feedbackMsg }],
-        null,
-        null,
-        false,
-        []
+        null,           // No abort signal
+        refImagePath,   // Ảnh mẫu/tham chiếu cần upload
+        false,          // Không mở session mới
+        []              // Không có extra images
       );
       
       if (generatedPaths && generatedPaths.length > 0) {
