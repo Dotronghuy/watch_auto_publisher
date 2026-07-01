@@ -136,6 +136,19 @@ const isBrowserClosedError = (error) => {
     return /Target page, context or browser has been closed|Browser has been closed|Page closed|Context closed/i.test(error?.message || '');
 };
 
+const WATCH_STRAP_INTEGRITY_GUARD = `[MANDATORY WATCH STRAP INTEGRITY RULE]
+- First identify the exact bracelet/strap material, shape, width, stitching, texture, and color from Image 1. Preserve Image 1's bracelet/strap even if the scene/sample image shows a different steel bracelet, leather strap, rubber strap, or silicone strap.
+- If Image 1 has a leather, rubber, or silicone strap, render it as one continuous full-length strap from both lugs. Do not let the strap stop abruptly near the case, fade into the background, merge into fabric/skin, become a short stump, or get cropped by the frame.
+- For flat lay, table, fabric, product-only, or any non-wrist scene, show both strap halves naturally extended/resting on the surface with visible length beyond the case. If needed, zoom out or adjust placement so the strap ends remain inside the image.
+- For wrist scenes, both strap halves must attach cleanly, wrap naturally, and continue around the wrist without broken, cut, or missing sections.
+- Never copy the sample image's bracelet material over Image 1. Product accuracy from Image 1 has priority over matching the sample watch.`;
+
+const withWatchStrapIntegrityGuard = (prompt = '') => {
+    const text = String(prompt || '');
+    if (text.includes('[MANDATORY WATCH STRAP INTEGRITY RULE]')) return text;
+    return `${text}\n\n${WATCH_STRAP_INTEGRITY_GUARD}`;
+};
+
 export const generateBackgroundOnChatGPT = async (imagePath, promptsArray, abortSignal = null, sampleImagePath = null, isNewSession = true, extraWatchImages = []) => {
     // ── Toggle Check: Tạo Ảnh AI ──
     // BẬT (true) = Bỏ qua Playwright, dùng ảnh gốc (vì Gemini API không sinh ảnh được)
@@ -175,7 +188,7 @@ export const generateBackgroundOnChatGPT = async (imagePath, promptsArray, abort
             }
         });
         page = context.pages().length > 0 ? context.pages()[0] : await context.newPage();
-        let targetUrl = getSettingValue('chatGptProjectUrl') || 'https://chatgpt.com/g/g-p-6a4240ccda448191a449beb0ad60cdab/project';
+        let targetUrl = getSettingValue('chatGptProjectUrl') || 'https://chatgpt.com/g/g-p-6a447d8457788191af85c9d1055e2c0d/project';
         let savedChatId = null;
         if (!isNewSession) {
             savedChatId = getAiTaskUrl('imageChatUrl');
@@ -294,47 +307,82 @@ export const generateBackgroundOnChatGPT = async (imagePath, promptsArray, abort
                 currentSampleImage = getRandomSampleImageLocal();
             }
 
-            console.log('📤 Đang tìm nút Upload và tải ảnh lên...');
-            const inputs = await page.$$('input[type="file"]');
-            if (inputs.length > 0) {
-                const filesToUpload = [];
-                const copyToUniqueTemp = (srcPath) => {
-                    const ext = path.extname(srcPath);
-                    const newPath = path.join(__dirname, `../../temp_images/upload_${Date.now()}_${Math.floor(Math.random()*1000000)}${ext}`);
-                    fs.copyFileSync(srcPath, newPath);
-                    return newPath;
-                };
+            console.log('📤 Bắt đầu tải ảnh lên bằng cách mô phỏng click như người thật...');
+            const filesToUpload = [];
+            const copyToUniqueTemp = (srcPath) => {
+                const ext = path.extname(srcPath);
+                const newPath = path.join(__dirname, `../../temp_images/upload_${Date.now()}_${Math.floor(Math.random()*1000000)}${ext}`);
+                fs.copyFileSync(srcPath, newPath);
+                return newPath;
+            };
 
-                // Ảnh 1: Ảnh AVT sản phẩm (nền trắng/trong suốt)
-                if (imagePath && fs.existsSync(imagePath)) filesToUpload.push(copyToUniqueTemp(imagePath));
-                
-                // Ảnh 2-5: Ảnh tham khảo thực tế từ Drive (đủ 4 góc độ)
-                if (extraWatchImages && extraWatchImages.length > 0) {
-                    for (const extraImg of extraWatchImages) {
-                        if (fs.existsSync(extraImg)) {
-                            filesToUpload.push(copyToUniqueTemp(extraImg));
-                            console.log(`✅ Đã chọn kèm ảnh tham khảo Drive: ${path.basename(extraImg)}`);
-                        }
+            // Ảnh 1: Ảnh AVT sản phẩm (nền trắng/trong suốt)
+            if (imagePath && fs.existsSync(imagePath)) filesToUpload.push(copyToUniqueTemp(imagePath));
+            
+            // Ảnh 2-5: Ảnh tham khảo thực tế từ Drive (đủ 4 góc độ)
+            if (extraWatchImages && extraWatchImages.length > 0) {
+                for (const extraImg of extraWatchImages) {
+                    if (fs.existsSync(extraImg)) {
+                        filesToUpload.push(copyToUniqueTemp(extraImg));
+                        console.log(`✅ Đã chọn kèm ảnh tham khảo Drive: ${path.basename(extraImg)}`);
                     }
                 }
-                
-                // Ảnh 6: Ảnh bố cục mẫu (scene/background mẫu muốn tạo ra)
-                if (currentSampleImage && fs.existsSync(currentSampleImage)) {
-                    filesToUpload.push(copyToUniqueTemp(currentSampleImage));
-                    console.log(`✅ Đã chọn kèm ảnh bố cục mẫu (${path.basename(currentSampleImage)})`);
-                }
-                
-                if (filesToUpload.length > 0) {
-                    const activeInput = inputs[inputs.length - 1];
-                    await activeInput.setInputFiles(filesToUpload);
-                    console.log(`✅ Đã chọn ${filesToUpload.length} file ảnh xong.`);
-                }
-            } else {
-                console.log('⚠️ Không tìm thấy input file, có thể giao diện đổi.');
             }
             
-            // Chờ ảnh tải lên hiện thành thumbnail
-            await page.waitForTimeout(4000);
+            // Ảnh 6: Ảnh bố cục mẫu (scene/background mẫu muốn tạo ra)
+            if (currentSampleImage && fs.existsSync(currentSampleImage)) {
+                filesToUpload.push(copyToUniqueTemp(currentSampleImage));
+                console.log(`✅ Đã chọn kèm ảnh bố cục mẫu (${path.basename(currentSampleImage)})`);
+            }
+            
+            if (filesToUpload.length > 0) {
+                try {
+                    console.log('👆 Đang click nút (+) để chọn "Đính kèm ảnh & tệp"...');
+                    
+                    // Kích hoạt lắng nghe sự kiện mở File Chooser của hệ điều hành (thêm catch để tránh unhandled rejection)
+                    const fileChooserPromise = page.waitForEvent('filechooser', { timeout: 15000 }).catch(() => null);
+                    
+                    // Lắc chuột một chút để mô phỏng người
+                    try { await page.mouse.move(500, 500); await page.waitForTimeout(200); } catch (e) {}
+
+                    // Tìm và click nút (+)
+                    const attachBtn = page.locator('button[aria-label*="Attach"], button[aria-label*="Đính kèm"]').last();
+                    await attachBtn.waitFor({ state: 'visible', timeout: 5000 });
+                    await attachBtn.click();
+                    await page.waitForTimeout(800);
+                    
+                    // Tìm và click menu "Đính kèm ảnh & tệp" / "Upload from computer"
+                    const uploadMenu = page.locator('div[role="menuitem"]:has-text("Đính kèm ảnh & tệp"), div[role="menuitem"]:has-text("Upload from computer")').first();
+                    if (await uploadMenu.isVisible({ timeout: 5000 })) {
+                        await uploadMenu.click();
+                    } else {
+                        console.log('⚠️ Không thấy menu "Đính kèm ảnh", thử rà qua các menu con...');
+                        const fallbackMenu = page.locator('div[role="menuitem"]').first();
+                        if (await fallbackMenu.isVisible()) await fallbackMenu.click();
+                    }
+                    
+                    // Cung cấp file cho hộp thoại File Chooser bật lên
+                    const fileChooser = await fileChooserPromise;
+                    if (fileChooser) {
+                        await fileChooser.setFiles(filesToUpload);
+                        console.log(`✅ Đã đính kèm ${filesToUpload.length} file ảnh bằng cách click menu như người thật.`);
+                    } else {
+                        throw new Error('Không bắt được sự kiện chọn file.');
+                    }
+                    
+                } catch (err) {
+                    console.log(`⚠️ Lỗi click menu upload: ${err.message}. Đang chuyển về cách backup (nhét file ẩn)...`);
+                    const inputs = await page.$$('input[type="file"]');
+                    if (inputs.length > 0) {
+                        const activeInput = inputs[inputs.length - 1];
+                        await activeInput.setInputFiles(filesToUpload);
+                        console.log(`✅ Đã chọn ${filesToUpload.length} file ảnh bằng cách ẩn.`);
+                    }
+                }
+            }
+            
+            // Chờ ảnh tải lên hiện thành thumbnail (5 giây cho ổn định)
+            await page.waitForTimeout(5000);
 
             // Xử lý popup Duplicate File nếu có (tránh lỗi intercept pointer events)
             // Dùng nhiều selector vì UI ChatGPT có thể thay đổi, timeout 3 giây thay vì 1 giây
@@ -369,19 +417,9 @@ export const generateBackgroundOnChatGPT = async (imagePath, promptsArray, abort
             await page.waitForTimeout(300);
             
             let finalPrompt;
-            const isDirectTwoImageEditPrompt = promptMode === 'direct_two_image_edit' || currentPrompt.includes('Dùng ảnh 1 làm sản phẩm chính');
+            const isDirectTwoImageEditPrompt = promptMode === 'direct_two_image_edit';
             if (isDirectTwoImageEditPrompt) {
-                finalPrompt = `Use only the two images attached in this message.
-
-Image 1 is the exact product watch.
-Image 2 is only the scene, wrist, lighting, camera angle, and background reference.
-
-Remove the watch currently visible in Image 2 and replace it with the watch from Image 1.
-Preserve the watch from Image 1 as closely as possible: case shape, bezel, dial layout, hands, bracelet or strap style, color, and overall proportions.
-Do not copy the watch design from Image 2.
-Keep the watch at a realistic adult wristwatch size. On wrist shots, the watch case should look prominent and natural on the wrist, not tiny or miniature.
-Match Image 2's wrist position, perspective, lighting, shadows, and background so the final image looks like a real product photo.
-If scene fit conflicts with product accuracy, prioritize the watch design from Image 1.`;
+                finalPrompt = currentPrompt;
             } else {
                 const hasExtraRefs = (extraWatchImages && extraWatchImages.length > 0);
                 if (currentSampleImage && hasExtraRefs) {
@@ -426,22 +464,46 @@ CRITICAL RULES:
             }
             }
 
+            finalPrompt = withWatchStrapIntegrityGuard(finalPrompt);
+
             if (!isDirectTwoImageEditPrompt) {
                 finalPrompt += `\n\n[ANTI-DUPLICATE INSTRUCTION]: This is image request #${i + 1}. You MUST generate a completely NEW, UNIQUE image. Do NOT output the exact same image as previous generations. Vary the precise camera angle, lighting, or background element placement slightly to ensure uniqueness. Unique Seed: ${Date.now()}_${Math.floor(Math.random() * 1000000)}`;
             }
             
             await promptLocator.fill(''); // Xóa text cũ nếu có
             await page.waitForTimeout(200);
-            await page.keyboard.insertText(finalPrompt);
-            await page.waitForTimeout(1000);
             
-            // Nhấn phím Space rồi Backspace để kích hoạt sự kiện UI làm nút Send hiện ra
-            await page.keyboard.press('Space');
-            await page.waitForTimeout(100);
-            await page.keyboard.press('Backspace');
-            await page.waitForTimeout(500);
+            // Xử lý xuống dòng: Gõ từng dòng và dùng Shift+Enter để xuống dòng (tránh bị gửi nhầm do gõ Enter)
+            // NÂNG CẤP ANTI-BOT: Thêm di chuột ngẫu nhiên và tốc độ gõ chậm, ngẫu nhiên y hệt người thật
+            try {
+                const box = await promptLocator.boundingBox();
+                if (box) {
+                    await page.mouse.move(box.x + box.width / 2 + (Math.random() * 20 - 10), box.y + box.height / 2 + (Math.random() * 10 - 5));
+                    await page.waitForTimeout(300);
+                    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+                    await page.waitForTimeout(500);
+                }
+            } catch (e) {}
 
-            console.log('🚀 Nhấn nút Send gửi yêu cầu...');
+            // TỐI ƯU GÕ PHÍM: "Vừa gõ vừa paste" để tăng tốc
+            // Gõ chậm 150 ký tự đầu tiên để lừa bot, sau đó dán (paste) toàn bộ phần còn lại
+            const typeLen = Math.min(finalPrompt.length, 150);
+            const typingPortion = finalPrompt.substring(0, typeLen);
+            const pastingPortion = finalPrompt.substring(typeLen);
+            
+            for (const char of typingPortion) {
+                await page.keyboard.type(char);
+                await page.waitForTimeout(Math.floor(Math.random() * 40) + 20);
+            }
+            if (pastingPortion.length > 0) {
+                await page.waitForTimeout(500); // Ngập ngừng 1 chút rồi paste
+                await page.keyboard.insertText(pastingPortion);
+            }
+            
+            // Chờ 5s cho ổn định sau khi gõ xong
+            await page.waitForTimeout(5000);
+            
+            console.log('🚀 Nhấn phím Enter để gửi yêu cầu...');
             
             try {
                 if (!isNewSession && i === 0) {
@@ -454,16 +516,8 @@ CRITICAL RULES:
                 }
             } catch (e) {}
 
-            try {
-                const sendBtn = await page.waitForSelector('button[data-testid="send-button"]:not([disabled])', { timeout: 10000 });
-                if (sendBtn) {
-                    await sendBtn.click();
-                } else {
-                    await page.keyboard.press('Enter');
-                }
-            } catch (err) {
-                await page.keyboard.press('Enter');
-            }
+            // Chỉ dùng phím Enter theo yêu cầu
+            await page.keyboard.press('Enter');
             
             console.log(`⏳ Đang chờ ChatGPT vẽ ảnh ${i + 1} (có thể mất 60-100 giây)...`);
             
@@ -477,28 +531,22 @@ CRITICAL RULES:
                 await page.waitForTimeout(500);
             } catch (e) {}
             
-            // Tìm tọa độ Y tuyệt đối lớn nhất của các ảnh cũ
-            let maxY = globalMaxY; // Sử dụng giá trị tích lũy từ các ảnh trước
+            // Lấy src của ảnh cũ cuối cùng trong DOM để so sánh
+            let lastOldImageSrc = null;
             try {
                 const existingImages = await page.evaluate((minArea) => {
-                    return Array.from(document.images).map((img) => {
-                        const rect = img.getBoundingClientRect();
-                        const src = img.currentSrc || img.src || '';
-                        return {
-                            src,
-                            area: rect.width * rect.height,
-                            absoluteY: rect.top + window.scrollY
-                        };
-                    }).filter((img) => {
+                    const valid = Array.from(document.images).filter(img => {
                         const isUi = !img.src || img.src.includes('avatar') || img.src.includes('favicon') || img.src.startsWith('data:image/svg');
-                        return !isUi && img.area >= minArea;
+                        const rect = img.getBoundingClientRect();
+                        return !isUi && (rect.width * rect.height) >= minArea;
                     });
+                    return valid.map(img => img.currentSrc || img.src);
                 }, GENERATED_IMAGE_MIN_AREA);
-                for (const img of existingImages) {
-                    if (img.absoluteY > Math.round(maxY)) maxY = img.absoluteY;
+                if (existingImages.length > 0) {
+                    lastOldImageSrc = existingImages[existingImages.length - 1];
                 }
             } catch (e) {}
-            console.log(`📍 Tọa độ Y thấp nhất của ảnh cũ: ${Math.round(maxY)} px`);
+            console.log(`📍 Src ảnh cũ cuối cùng: ${lastOldImageSrc ? lastOldImageSrc.substring(0, 40) + '...' : 'Không có'}`);
 
             let imageRetryCount = 0;
             let lastTryAgainMs = 0;
@@ -619,49 +667,49 @@ CRITICAL RULES:
                         firstGeneratingMs = 0; // Reset nếu không còn generating
                     }
 
-                    const scanResult = await page.evaluate(({ minArea, minY }) => {
+                    const scanResult = await page.evaluate(({ minArea, oldSrc }) => {
                         const all = Array.from(document.images).map((img) => {
                             const rect = img.getBoundingClientRect();
                             const src = img.currentSrc || img.src || '';
                             const area = rect.width * rect.height;
-                            const absoluteY = rect.top + window.scrollY;
                             const isUi = !src || src.includes('avatar') || src.includes('favicon') || src.startsWith('data:image/svg');
                             return {
                                 src,
                                 area,
-                                absoluteY,
                                 width: rect.width,
                                 height: rect.height,
                                 isUi
                             };
                         });
 
-                        const candidates = all
-                            .filter((img) => !img.isUi && img.area >= minArea && img.absoluteY > minY)
-                            .sort((a, b) => b.absoluteY - a.absoluteY);
+                        const validImages = all.filter((img) => !img.isUi && img.area >= minArea);
 
-                        const bestVisible = all
-                            .filter((img) => !img.isUi)
-                            .sort((a, b) => b.area - a.area)[0] || null;
+                        // Lấy ảnh cuối cùng trong DOM (ảnh mới nhất luôn được append vào cuối)
+                        const lastValid = validImages.length > 0 ? validImages[validImages.length - 1] : null;
+
+                        let target = null;
+                        if (lastValid && lastValid.src !== oldSrc) {
+                            target = lastValid;
+                        }
 
                         return {
-                            target: candidates[0] || null,
+                            target,
                             total: all.length,
-                            validCount: candidates.length,
-                            bestVisible
+                            validCount: validImages.length,
+                            bestVisible: lastValid
                         };
                     }, {
                         minArea: GENERATED_IMAGE_MIN_AREA,
-                        minY: Math.round(maxY) + 10
+                        oldSrc: lastOldImageSrc
                     });
 
                     if (scanResult.target) {
                         targetImgSrc = scanResult.target.src;
-                        console.log(`✅ Đã chộp được ảnh mới vẽ ở vị trí Y: ${Math.round(scanResult.target.absoluteY)} (Kích thước: ${Math.round(scanResult.target.area)} px²)`);
+                        console.log(`✅ Đã chộp được ảnh mới vẽ (Kích thước: ${Math.round(scanResult.target.area)} px²)`);
                     } else if (attempt > 0 && attempt % 6 === 0) {
                         const best = scanResult.bestVisible;
-                        const bestText = best ? `${Math.round(best.width)}x${Math.round(best.height)} y=${Math.round(best.absoluteY)} area=${Math.round(best.area)}` : 'none';
-                        console.log(`🔎 Chưa thấy ảnh mới hợp lệ: total=${scanResult.total}, valid=${scanResult.validCount}, best=${bestText}`);
+                        const bestText = best ? `${Math.round(best.width)}x${Math.round(best.height)} area=${Math.round(best.area)}` : 'none';
+                        console.log(`🔎 Chưa thấy ảnh mới hợp lệ: total=${scanResult.total}, valid=${scanResult.validCount}, lastImg=${bestText}`);
                     }
                 } catch (e) {}
                 
@@ -724,23 +772,7 @@ CRITICAL RULES:
             
             outputPaths.push(outputPath);
             
-            // Cập nhật globalMaxY để ảnh tiếp theo không nhầm lẫn với ảnh cũ
-            try {
-                const latestY = await page.evaluate((minArea) => {
-                    let maxAbsY = 0;
-                    for (const img of document.images) {
-                        const rect = img.getBoundingClientRect();
-                        const src = img.currentSrc || img.src || '';
-                        const area = rect.width * rect.height;
-                        const absY = rect.top + window.scrollY;
-                        const isUi = !src || src.includes('avatar') || src.includes('favicon') || src.startsWith('data:image/svg');
-                        if (!isUi && area >= minArea && absY > maxAbsY) maxAbsY = absY;
-                    }
-                    return maxAbsY;
-                }, GENERATED_IMAGE_MIN_AREA);
-                globalMaxY = latestY;
-                console.log(`📍 Cập nhật globalMaxY = ${Math.round(globalMaxY)} px sau ảnh ${i + 1}`);
-            } catch (e) {}
+            // Không cần cập nhật globalMaxY nữa vì đã dùng thuộc tính src để quét ảnh mới
         }
         
         if (count > 0 && outputPaths.length === 0) {
@@ -803,7 +835,7 @@ export const generateContentOnChatGPT = async (prompt, type, imagePath = null) =
         });
         page = context.pages().length > 0 ? context.pages()[0] : await context.newPage();
         // Luôn sử dụng URL gốc của Dự án Content AI (Bảo đảm 100% chạy trong Dự án)
-        let targetUrl = 'https://chatgpt.com/g/g-p-6a4240841f78819187a78013293677ad/project';
+        let targetUrl = getSettingValue('chatGptContentProjectUrl') || 'https://chatgpt.com/g/g-p-6a447da7c82c81919922a6a302ca1aac/project';
         
         console.log(`🌐 Đang truy cập Dự án Content AI: ${targetUrl}...`);
         await page.goto(targetUrl, { waitUntil: 'domcontentloaded' });
@@ -1107,7 +1139,9 @@ IMPORTANT:
 - The prompt must describe where to PLACE a luxury watch in this scene
 - Include specific details: surface material, lighting direction, color temperature, props, camera angle
 - Keep it photorealistic commercial photography style
-- Do NOT mention any specific brand names in the prompt`;
+- Do NOT mention any specific brand names in the prompt
+- Leave enough composition room for the full watch bracelet/strap. The prompt must not crop, hide, shorten, or cut the strap ends.
+- If a future product watch has a leather, rubber, or silicone strap while this reference image shows a steel bracelet, the future product strap must still remain full-length, continuous, and uncropped.`;
 
                 await promptLocator.click();
                 await page.waitForTimeout(300);

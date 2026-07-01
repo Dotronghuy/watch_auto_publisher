@@ -243,6 +243,25 @@ const detectSkuGenderTag = (skuName = '') => {
   return 'NEUTRAL';
 };
 
+const getPromptGuidePromptOrThrow = (genderTag) => {
+  const promptGuidePath = path.join(__dirname, '../../config/gpt_image_prompt.md');
+  if (!fs.existsSync(promptGuidePath)) {
+    throw new Error('Khong tim thay backend/config/gpt_image_prompt.md');
+  }
+  const mdContent = fs.readFileSync(promptGuidePath, 'utf8');
+  const sectionRegex = new RegExp(`\\[${genderTag}\\][\\s\\S]*?(?=\\n## \\[|$)`, 'i');
+  const sectionMatch = mdContent.match(sectionRegex);
+  const searchContent = sectionMatch ? sectionMatch[0] : mdContent;
+
+  const sceneMatches = [...searchContent.matchAll(/\*\*English instruction for GPT:\*\*\s*>\s*([\s\S]*?)(?=\n---|\n###|\n## |$)/g)];
+  const validScenes = sceneMatches.map(m => m[1].trim()).filter(s => !s.startsWith('PLACEHOLDER'));
+
+  if (validScenes.length === 0) {
+    throw new Error(`Khong doc duoc prompt ${genderTag} tu backend/config/gpt_image_prompt.md`);
+  }
+  return validScenes[Math.floor(Math.random() * validScenes.length)];
+};
+
 const getAllSampleImageFiles = () => {
   if (!fs.existsSync(SAMPLE_IMAGES_DIR)) return [];
   const validExt = ['.jpg', '.jpeg', '.png', '.webp'];
@@ -1634,41 +1653,17 @@ export const autoPublishRoutine = async () => {
 
           if (isExperimentalAI) {
             console.log('🧪 Đang chạy chế độ AI thử nghiệm: 1 ảnh AVT + 1 ảnh mẫu, gộp prompt nhận diện tay.');
-            const numAiImages = 1;
-            const sampleInfo = pickHybridSampleImage(selectedSku?.name);
+            const numAiImages = Math.floor(Math.random() * 3) + 4; // Sinh 4-6 ảnh
+            let sampleInfo = pickHybridSampleImage(selectedSku?.name);
+            const sampleInfos = Array.from({ length: numAiImages }, (_, idx) => idx === 0 ? sampleInfo : pickHybridSampleImage(selectedSku?.name));
+            sampleInfo = sampleInfos[0];
             const sampleImg = sampleInfo.imagePath;
             if (sampleImg) liveLog(`🖼️ Dùng ảnh mẫu ${sampleInfo.genderTag}: ${sampleInfo.sampleName}`, 'highlight', 'ChatGPT');
 
-            const experimentalPrompt = `Dùng ảnh 1 làm sản phẩm chính. Thay chiếc đồng hồ trong ảnh 2 bằng đồng hồ ở ảnh 1.
-
-Quan sát thật kỹ ảnh 2. Nếu ảnh 2 KHÔNG CÓ tay hoặc cổ tay người mẫu, hãy áp dụng các Yêu cầu bắt buộc sau:
-- Giữ đúng hình dáng, tỷ lệ và phối cảnh của đồng hồ ảnh 1, không bóp méo.
-- Giữ nguyên logo/chữ trên mặt đồng hồ ảnh 1.
-- Giữ dây đồng hồ đầy đủ, không làm cụt dây.
-- Xóa toàn bộ logo, chữ, thương hiệu có sẵn trong ảnh 2, nhưng không xóa logo trên đồng hồ ảnh 1.
-- Giữ ánh sáng, bóng đổ, nền và bố cục tự nhiên như ảnh 2.
-- Kết quả phải giống ảnh chụp sản phẩm thật, không bị méo, không bị giả.
-- Ưu tiên bảo toàn sản phẩm ảnh 1 hơn việc sáng tạo lại để khớp bố cục.
-- Nếu có xung đột giữa bố cục ảnh 2 và hình dáng thật của đồng hồ ảnh 1, hãy giữ đúng hình dáng thật của đồng hồ ảnh 1.
-
-Nếu ảnh 2 CÓ tay hoặc cổ tay người mẫu, hãy áp dụng các Yêu cầu bắt buộc sau:
-- Giữ đúng hình dáng, tỷ lệ và phối cảnh của đồng hồ ảnh 1, không bóp méo.
-- Giữ nguyên logo/chữ trên mặt đồng hồ ảnh 1.
-- Giữ dây đồng hồ đầy đủ, không làm cụt dây.
-- Xóa toàn bộ logo, chữ, thương hiệu có sẵn trong ảnh 2, nhưng không xóa logo trên đồng hồ ảnh 1.
-- Giữ ánh sáng, bóng đổ, nền và bố cục tự nhiên như ảnh 2.
-- Kết quả phải giống ảnh chụp sản phẩm thật, không bị méo, không bị giả.
-- Ưu tiên bảo toàn sản phẩm ảnh 1 hơn việc sáng tạo lại để khớp bố cục.
-- Nếu có xung đột giữa bố cục ảnh 2 và hình dáng thật của đồng hồ ảnh 1, hãy giữ đúng hình dáng thật của đồng hồ ảnh 1.
-- Hãy giữ tay/cổ tay tự nhiên, đúng giải phẫu, không méo, không thừa hoặc thiếu ngón.
-- Giữ tư thế bàn tay, góc tay và cách đặt tay tự nhiên như ảnh 2.
-- Đồng hồ phải nằm đúng vị trí trên cổ tay/tay như trong ảnh 2, ôm tay tự nhiên, không lơ lửng, không chìm vào da.
-- Phần tiếp xúc giữa dây đồng hồ và cổ tay phải chân thực, đúng tỷ lệ, không bị biến dạng.
-- Không làm thay đổi màu da, hình dáng bàn tay hoặc phong cách tổng thể của ảnh 2 ngoài những gì cần thiết để thay đồng hồ.`;
-
-            const imgPromptsArray = Array.from({ length: numAiImages }, () => ({
-              prompt: experimentalPrompt,
-              sampleImage: sampleImg,
+            const imgPromptsArray = sampleInfos.map(info => ({
+              prompt: getPromptGuidePromptOrThrow(info.genderTag),
+              sampleImage: info.imagePath,
+              genderTag: info.genderTag,
               mode: 'direct_two_image_edit'
             }));
             const extraWatchImages = []; // Không gửi thêm ảnh tham khảo
