@@ -13,6 +13,43 @@ const __dirname = path.dirname(__filename);
 
 chromium.use(stealth());
 
+// ─── ANTI-BOT: Hành vi giả lập người thật ───
+const humanBehavior = {
+  // Di chuột ngẫu nhiên trên trang (giống người đọc nội dung)
+  async randomMouseMove(page) {
+    try {
+      const x = Math.floor(Math.random() * 900) + 100;
+      const y = Math.floor(Math.random() * 500) + 100;
+      await page.mouse.move(x, y, { steps: Math.floor(Math.random() * 5) + 3 });
+    } catch (e) {}
+  },
+  // Cuộn trang ngẫu nhiên lên/xuống
+  async randomScroll(page) {
+    try {
+      const direction = Math.random() > 0.3 ? 1 : -1; // 70% cuộn xuống
+      const distance = Math.floor(Math.random() * 300) + 50;
+      await page.mouse.wheel(0, direction * distance);
+      await page.waitForTimeout(Math.floor(Math.random() * 500) + 200);
+    } catch (e) {}
+  },
+  // Nghỉ ngơi giữa các ảnh (giả lập người xem kết quả)
+  async thinkingPause(page) {
+    const pauseMs = Math.floor(Math.random() * 5000) + 3000; // 3-8 giây
+    console.log(`🧠 [Anti-Bot] Nghỉ ${Math.round(pauseMs/1000)}s giữa các ảnh (giả lập xem kết quả)...`);
+    await page.waitForTimeout(pauseMs);
+    await humanBehavior.randomMouseMove(page);
+    await page.waitForTimeout(Math.floor(Math.random() * 1000) + 500);
+    await humanBehavior.randomScroll(page);
+  },
+  // Combo hành vi ngẫu nhiên trong lúc chờ ChatGPT vẽ
+  async idleBehavior(page) {
+    const roll = Math.random();
+    if (roll < 0.3) await humanBehavior.randomMouseMove(page);
+    else if (roll < 0.5) await humanBehavior.randomScroll(page);
+    // 50% không làm gì (như người thật ngồi chờ)
+  }
+};
+
 export class Mutex {
     constructor() {
         this.queue = [];
@@ -486,23 +523,39 @@ CRITICAL RULES:
                 }
             } catch (e) {}
 
-            // TỐI ƯU GÕ PHÍM: "Vừa gõ vừa paste" để tăng tốc
-            // Gõ chậm 150 ký tự đầu tiên để lừa bot, sau đó dán (paste) toàn bộ phần còn lại
-            const typeLen = Math.min(finalPrompt.length, 150);
+            // TỐI ƯU GÕ PHÍM: "Vừa gõ vừa paste" để tăng tốc nhưng vẫn tự nhiên
+            // Gõ chậm 120-200 ký tự đầu (random), sau đó dán (paste) phần còn lại
+            const typeLen = Math.min(finalPrompt.length, Math.floor(Math.random() * 80) + 120);
             const typingPortion = finalPrompt.substring(0, typeLen);
             const pastingPortion = finalPrompt.substring(typeLen);
             
+            // Gõ từng ký tự với tốc độ biến thiên giống người thật
+            // Người thật gõ: nhanh ở giữa từ, chậm khi bắt đầu từ mới, dừng lại suy nghĩ
+            let charIndex = 0;
             for (const char of typingPortion) {
                 await page.keyboard.type(char);
-                await page.waitForTimeout(Math.floor(Math.random() * 40) + 20);
+                charIndex++;
+                if (char === ' ' || char === '\n') {
+                    // Đầu từ mới: delay lâu hơn (50-120ms)
+                    await page.waitForTimeout(Math.floor(Math.random() * 70) + 50);
+                } else if (charIndex % 30 === 0 && Math.random() < 0.4) {
+                    // Mỗi ~30 ký tự, 40% xác suất dừng "suy nghĩ" (300-800ms)
+                    await page.waitForTimeout(Math.floor(Math.random() * 500) + 300);
+                } else {
+                    // Giữa từ: gõ nhanh (15-55ms), biến thiên tự nhiên
+                    await page.waitForTimeout(Math.floor(Math.random() * 40) + 15);
+                }
             }
             if (pastingPortion.length > 0) {
-                await page.waitForTimeout(500); // Ngập ngừng 1 chút rồi paste
+                // Dừng "suy nghĩ" 0.8-2s trước khi paste (giống người chuyển từ gõ sang paste)
+                await page.waitForTimeout(Math.floor(Math.random() * 1200) + 800);
                 await page.keyboard.insertText(pastingPortion);
             }
             
-            // Chờ 5s cho ổn định sau khi gõ xong
-            await page.waitForTimeout(5000);
+            // Chờ 3-7s cho ổn định sau khi gõ xong (random, không cố định)
+            await page.waitForTimeout(Math.floor(Math.random() * 4000) + 3000);
+            // Di chuột ngẫu nhiên trước khi gửi
+            await humanBehavior.randomMouseMove(page);
             
             console.log('🚀 Nhấn phím Enter để gửi yêu cầu...');
             
@@ -556,6 +609,8 @@ CRITICAL RULES:
             for (let attempt = 0; attempt < MAX_IMAGE_WAIT_ATTEMPTS; attempt++) {
                 if (abortSignal && abortSignal.aborted) throw new Error('Abort requested');
                 await page.waitForTimeout(5000);
+                // Anti-bot: Thỉnh thoảng di chuột/cuộn trang trong lúc chờ
+                if (attempt > 0 && attempt % 3 === 0) await humanBehavior.idleBehavior(page);
 
                 // ── Detect "Image generation failed" từ ChatGPT ──
                 // Chỉ kiểm tra sau 20 giây kể từ lần click "Try again" cuối cùng.
@@ -774,6 +829,11 @@ CRITICAL RULES:
             console.log(`✅ Đã lưu ảnh ${i + 1} thành công (đã xóa metadata AI): ${path.basename(outputPath)}`);
             
             outputPaths.push(outputPath);
+            
+            // Anti-bot: Nghỉ ngơi giữa các ảnh (nếu còn ảnh tiếp theo)
+            if (i < count - 1) {
+                await humanBehavior.thinkingPause(page);
+            }
             
             // Không cần cập nhật globalMaxY nữa vì đã dùng thuộc tính src để quét ảnh mới
         }
