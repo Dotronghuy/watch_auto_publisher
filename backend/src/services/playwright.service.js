@@ -15,12 +15,38 @@ chromium.use(stealth());
 
 // ─── ANTI-BOT: Hành vi giả lập người thật ───
 const humanBehavior = {
+  // Mô phỏng đường cong Bezier cho di chuột người thật
+  async bezierMouseMove(page, startX, startY, endX, endY) {
+    try {
+      const steps = Math.floor(Math.random() * 15) + 15; // 15-30 steps
+      const controlX = startX + (endX - startX) / 2 + (Math.random() * 200 - 100);
+      const controlY = startY + (endY - startY) / 2 + (Math.random() * 200 - 100);
+      
+      for (let i = 0; i <= steps; i++) {
+        const t = i / steps;
+        // Ease-out (giảm tốc khi đến đích)
+        const easeT = 1 - Math.pow(1 - t, 3);
+        const x = Math.pow(1 - easeT, 2) * startX + 2 * (1 - easeT) * easeT * controlX + Math.pow(easeT, 2) * endX;
+        const y = Math.pow(1 - easeT, 2) * startY + 2 * (1 - easeT) * easeT * controlY + Math.pow(easeT, 2) * endY;
+        await page.mouse.move(x, y);
+        await page.waitForTimeout(Math.floor(Math.random() * 10) + 5);
+      }
+      // Khựng lại/overshoot một chút
+      if (Math.random() > 0.7) {
+        await page.mouse.move(endX + (Math.random() * 10 - 5), endY + (Math.random() * 10 - 5));
+        await page.waitForTimeout(Math.floor(Math.random() * 50) + 50);
+        await page.mouse.move(endX, endY);
+      }
+    } catch (e) {}
+  },
   // Di chuột ngẫu nhiên trên trang (giống người đọc nội dung)
   async randomMouseMove(page) {
     try {
-      const x = Math.floor(Math.random() * 900) + 100;
-      const y = Math.floor(Math.random() * 500) + 100;
-      await page.mouse.move(x, y, { steps: Math.floor(Math.random() * 5) + 3 });
+      const startX = Math.floor(Math.random() * 800) + 100;
+      const startY = Math.floor(Math.random() * 400) + 100;
+      const endX = Math.floor(Math.random() * 900) + 100;
+      const endY = Math.floor(Math.random() * 500) + 100;
+      await this.bezierMouseMove(page, startX, startY, endX, endY);
     } catch (e) {}
   },
   // Cuộn trang ngẫu nhiên lên/xuống
@@ -226,6 +252,19 @@ export const generateBackgroundOnChatGPT = async (imagePath, promptsArray, abort
             }
         });
         page = context.pages().length > 0 ? context.pages()[0] : await context.newPage();
+        
+        // Anti-fingerprint nâng cao (Xóa Webdriver)
+        await page.addInitScript(() => {
+            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+            window.navigator.chrome = { runtime: {} };
+            const originalQuery = window.navigator.permissions.query;
+            window.navigator.permissions.query = (parameters) => (
+                parameters.name === 'notifications' ?
+                    Promise.resolve({ state: Notification.permission }) :
+                    originalQuery(parameters)
+            );
+        });
+        
         let targetUrl = getSettingValue('chatGptProjectUrl') || 'https://chatgpt.com/g/g-p-6a447d8457788191af85c9d1055e2c0d/project';
         let savedChatId = null;
         if (!isNewSession) {
@@ -519,9 +558,13 @@ CRITICAL RULES:
             try {
                 const box = await promptLocator.boundingBox();
                 if (box) {
-                    await page.mouse.move(box.x + box.width / 2 + (Math.random() * 20 - 10), box.y + box.height / 2 + (Math.random() * 10 - 5));
+                    const startX = Math.floor(Math.random() * 500) + 100;
+                    const startY = Math.floor(Math.random() * 300) + 100;
+                    const targetX = box.x + box.width / 2 + (Math.random() * 20 - 10);
+                    const targetY = box.y + box.height / 2 + (Math.random() * 10 - 5);
+                    await humanBehavior.bezierMouseMove(page, startX, startY, targetX, targetY);
                     await page.waitForTimeout(300);
-                    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+                    await page.mouse.click(targetX, targetY);
                     await page.waitForTimeout(500);
                 }
             } catch (e) {}
@@ -541,6 +584,15 @@ CRITICAL RULES:
                     // Bỏ qua hoàn toàn ký tự \r nếu còn sót lại
                     continue;
                 } else {
+                    // 1.5% Gõ sai (Typo) -> Xóa -> Gõ lại đúng
+                    if (Math.random() < 0.015 && char.match(/[a-zA-Z]/)) {
+                        const typos = 'qwertyuiopasdfghjklzxcvbnm';
+                        const randomTypo = typos[Math.floor(Math.random() * typos.length)];
+                        await page.keyboard.type(randomTypo);
+                        await page.waitForTimeout(Math.floor(Math.random() * 150) + 50); // Khựng lại nhận ra lỗi
+                        await page.keyboard.press('Backspace');
+                        await page.waitForTimeout(Math.floor(Math.random() * 100) + 50);
+                    }
                     await page.keyboard.type(char);
                 }
                 
@@ -693,6 +745,24 @@ CRITICAL RULES:
                             console.log('⚠️ Reload thất bại:', reloadErr.message);
                         }
                         continue;
+                    }
+                } catch (e) {}
+
+                // ── Detect lỗi từ chối Content Policy ──
+                try {
+                    // ChatGPT trả lời văn bản ở div cuối cùng thay vì vẽ ảnh
+                    const refusalTexts = ['i cannot', 'i\'m sorry', 'i am sorry', 'violate policy', 'i can\'t generate', 'không thể', 'xin lỗi', 'chính sách'];
+                    const assistantMessages = await page.$$('div[data-message-author-role="assistant"]');
+                    if (assistantMessages.length > 0) {
+                        const lastMsg = assistantMessages[assistantMessages.length - 1];
+                        const text = (await lastMsg.innerText() || '').toLowerCase();
+                        const isRefusal = refusalTexts.some(word => text.includes(word));
+                        if (isRefusal && text.length < 500 && !text.includes('đang tạo ảnh') && !text.includes('generating')) {
+                            console.log('⚠️ Phát hiện ChatGPT từ chối tạo ảnh (Content Policy/Safety):', text.substring(0, 100).replace(/\n/g, ' '));
+                            liveLog(`⚠️ Ảnh ${i + 1}: AI từ chối tạo ảnh: "${text.substring(0, 50).replace(/\n/g, ' ')}..."`, 'error', 'ChatGPT');
+                            chatgptFailureDetected = true;
+                            break; // Thoát vòng lặp chờ ảnh để skip mẻ này
+                        }
                     }
                 } catch (e) {}
                 
