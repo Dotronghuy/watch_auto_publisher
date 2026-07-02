@@ -29,6 +29,8 @@ If scene fit conflicts with product accuracy, prioritize the watch design from I
 **English instruction for GPT:**
 > Use only the two images attached in this message.
 
+CRITICAL DALL-E SAFETY RULE: To avoid copyright rejection, NEVER mention real-world watch brand names, logos, or trademarks (e.g., Rolex, Patek, Omega) when generating the image. Describe the watch generically (e.g., "high-end luxury mechanical watch with silver bracelet").
+
 Image 1 is the exact product watch.
 Image 2 is only the scene, wrist, lighting, camera angle, and background reference.
 
@@ -54,6 +56,8 @@ If scene fit conflicts with product accuracy, prioritize the watch design from I
 **English instruction for GPT:**
 > Use only the two images attached in this message.
 
+CRITICAL DALL-E SAFETY RULE: To avoid copyright rejection, NEVER mention real-world watch brand names, logos, or trademarks (e.g., Rolex, Patek, Omega) when generating the image. Describe the watch generically (e.g., "high-end luxury mechanical watch with silver bracelet").
+
 Image 1 is the exact product watch.
 Image 2 is only the scene, wrist, lighting, camera angle, and background reference.
 
@@ -78,6 +82,8 @@ If scene fit conflicts with product accuracy, prioritize the watch design from I
 **Sample Image:** N/A
 **English instruction for GPT:**
 > Use only the two images attached in this message.
+
+CRITICAL DALL-E SAFETY RULE: To avoid copyright rejection, NEVER mention real-world watch brand names, logos, or trademarks (e.g., Rolex, Patek, Omega) when generating the image. Describe the watch generically (e.g., "high-end luxury mechanical watch with silver bracelet").
 
 Image 1 is the exact product watch.
 Image 2 is only the scene, wrist, lighting, camera angle, and background reference.
