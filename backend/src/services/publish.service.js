@@ -644,32 +644,32 @@ export const dryRunRoutine = async () => {
             
             if (sampleImg) liveLog(`🖼️ [DRY RUN] Dùng ảnh mẫu ${sampleInfo.genderTag}: ${sampleInfo.sampleName}`, 'highlight', 'ChatGPT');
             
-            const experimentalPrompt = `Dùng ảnh 1 làm sản phẩm chính. Thay chiếc đồng hồ trong ảnh 2 bằng đồng hồ ở ảnh 1.
+            const experimentalPrompt = `Use Image 1 as the main product. Replace the watch in Image 2 with the watch from Image 1.
 
-Quan sát thật kỹ ảnh 2. Nếu ảnh 2 KHÔNG CÓ tay hoặc cổ tay người mẫu, hãy áp dụng các Yêu cầu bắt buộc sau:
-- Giữ đúng hình dáng, tỷ lệ và phối cảnh của đồng hồ ảnh 1, không bóp méo.
-- Giữ nguyên logo/chữ trên mặt đồng hồ ảnh 1.
-- Giữ dây đồng hồ đầy đủ, không làm cụt dây.
-- Xóa toàn bộ logo, chữ, thương hiệu có sẵn trong ảnh 2, nhưng không xóa logo trên đồng hồ ảnh 1.
-- Giữ ánh sáng, bóng đổ, nền và bố cục tự nhiên như ảnh 2.
-- Kết quả phải giống ảnh chụp sản phẩm thật, không bị méo, không bị giả.
-- Ưu tiên bảo toàn sản phẩm ảnh 1 hơn việc sáng tạo lại để khớp bố cục.
-- Nếu có xung đột giữa bố cục ảnh 2 và hình dáng thật của đồng hồ ảnh 1, hãy giữ đúng hình dáng thật của đồng hồ ảnh 1.
+Look closely at Image 2. If Image 2 DOES NOT have a human hand or wrist, apply these MANDATORY rules:
+- Keep the exact shape, proportions, and perspective of the watch in Image 1. Do not distort it.
+- Keep the logo/text on the watch face from Image 1 exactly as it is.
+- Keep the watch strap complete. Do not cut off or shorten the strap.
+- Remove all existing logos, text, or branding from Image 2, but do NOT remove the logo on the watch from Image 1.
+- Keep the lighting, shadows, background, and natural composition exactly as in Image 2.
+- The result must look like a real product photo, not distorted or fake.
+- Prioritize preserving the product from Image 1 over creatively adjusting it to fit the background.
+- If there is a conflict between the layout of Image 2 and the true shape of the watch in Image 1, keep the true shape of the watch in Image 1.
 
-Nếu ảnh 2 CÓ tay hoặc cổ tay người mẫu, hãy áp dụng các Yêu cầu bắt buộc sau:
-- Giữ đúng hình dáng, tỷ lệ và phối cảnh của đồng hồ ảnh 1, không bóp méo.
-- Giữ nguyên logo/chữ trên mặt đồng hồ ảnh 1.
-- Giữ dây đồng hồ đầy đủ, không làm cụt dây.
-- Xóa toàn bộ logo, chữ, thương hiệu có sẵn trong ảnh 2, nhưng không xóa logo trên đồng hồ ảnh 1.
-- Giữ ánh sáng, bóng đổ, nền và bố cục tự nhiên như ảnh 2.
-- Kết quả phải giống ảnh chụp sản phẩm thật, không bị méo, không bị giả.
-- Ưu tiên bảo toàn sản phẩm ảnh 1 hơn việc sáng tạo lại để khớp bố cục.
-- Nếu có xung đột giữa bố cục ảnh 2 và hình dáng thật của đồng hồ ảnh 1, hãy giữ đúng hình dáng thật của đồng hồ ảnh 1.
-- Hãy giữ tay/cổ tay tự nhiên, đúng giải phẫu, không méo, không thừa hoặc thiếu ngón.
-- Giữ tư thế bàn tay, góc tay và cách đặt tay tự nhiên như ảnh 2.
-- Đồng hồ phải nằm đúng vị trí trên cổ tay/tay như trong ảnh 2, ôm tay tự nhiên, không lơ lửng, không chìm vào da.
-- Phần tiếp xúc giữa dây đồng hồ và cổ tay phải chân thực, đúng tỷ lệ, không bị biến dạng.
-- Không làm thay đổi màu da, hình dáng bàn tay hoặc phong cách tổng thể của ảnh 2 ngoài những gì cần thiết để thay đồng hồ.`;
+If Image 2 HAS a human hand or wrist, apply these MANDATORY rules:
+- Keep the exact shape, proportions, and perspective of the watch in Image 1. Do not distort it.
+- Keep the logo/text on the watch face from Image 1 exactly as it is.
+- Keep the watch strap complete. Do not cut off or shorten the strap.
+- Remove all existing logos, text, or branding from Image 2, but do NOT remove the logo on the watch from Image 1.
+- Keep the lighting, shadows, background, and natural composition exactly as in Image 2.
+- The result must look like a real product photo, not distorted or fake.
+- Prioritize preserving the product from Image 1 over creatively adjusting it to fit the background.
+- If there is a conflict between the layout of Image 2 and the true shape of the watch in Image 1, keep the true shape of the watch in Image 1.
+- Keep the hand/wrist natural, anatomically correct, not distorted, with no extra or missing fingers.
+- Keep the hand posture, wrist angle, and hand placement exactly as natural as in Image 2.
+- The watch must sit at the correct position on the wrist/hand as in Image 2, wrapping naturally without floating or sinking into the skin.
+- The contact area between the watch strap and the wrist must be realistic, correctly proportioned, and not distorted.
+- Do not change the skin color, hand shape, or overall style of Image 2 beyond what is necessary to replace the watch.`;
 
             imgPromptsArray = sampleInfos.map(info => ({
               prompt: experimentalPrompt,
@@ -1065,32 +1065,32 @@ export const startTelegramTrainingLoop = async (targetSku = null) => {
         
         if (sampleImg) liveLog(`🖼️ [TRAIN ẢNH] Dùng ảnh mẫu ${sampleInfo.genderTag}: ${sampleInfo.sampleName}`, 'highlight', 'ChatGPT');
 
-        const experimentalPrompt = `Dùng ảnh 1 làm sản phẩm chính. Thay chiếc đồng hồ trong ảnh 2 bằng đồng hồ ở ảnh 1.
+        const experimentalPrompt = `Use Image 1 as the main product. Replace the watch in Image 2 with the watch from Image 1.
 
-Quan sát thật kỹ ảnh 2. Nếu ảnh 2 KHÔNG CÓ tay hoặc cổ tay người mẫu, hãy áp dụng các Yêu cầu bắt buộc sau:
-- Giữ đúng hình dáng, tỷ lệ và phối cảnh của đồng hồ ảnh 1, không bóp méo.
-- Giữ nguyên logo/chữ trên mặt đồng hồ ảnh 1.
-- Giữ dây đồng hồ đầy đủ, không làm cụt dây.
-- Xóa toàn bộ logo, chữ, thương hiệu có sẵn trong ảnh 2, nhưng không xóa logo trên đồng hồ ảnh 1.
-- Giữ ánh sáng, bóng đổ, nền và bố cục tự nhiên như ảnh 2.
-- Kết quả phải giống ảnh chụp sản phẩm thật, không bị méo, không bị giả.
-- Ưu tiên bảo toàn sản phẩm ảnh 1 hơn việc sáng tạo lại để khớp bố cục.
-- Nếu có xung đột giữa bố cục ảnh 2 và hình dáng thật của đồng hồ ảnh 1, hãy giữ đúng hình dáng thật của đồng hồ ảnh 1.
+Look closely at Image 2. If Image 2 DOES NOT have a human hand or wrist, apply these MANDATORY rules:
+- Keep the exact shape, proportions, and perspective of the watch in Image 1. Do not distort it.
+- Keep the logo/text on the watch face from Image 1 exactly as it is.
+- Keep the watch strap complete. Do not cut off or shorten the strap.
+- Remove all existing logos, text, or branding from Image 2, but do NOT remove the logo on the watch from Image 1.
+- Keep the lighting, shadows, background, and natural composition exactly as in Image 2.
+- The result must look like a real product photo, not distorted or fake.
+- Prioritize preserving the product from Image 1 over creatively adjusting it to fit the background.
+- If there is a conflict between the layout of Image 2 and the true shape of the watch in Image 1, keep the true shape of the watch in Image 1.
 
-Nếu ảnh 2 CÓ tay hoặc cổ tay người mẫu, hãy áp dụng các Yêu cầu bắt buộc sau:
-- Giữ đúng hình dáng, tỷ lệ và phối cảnh của đồng hồ ảnh 1, không bóp méo.
-- Giữ nguyên logo/chữ trên mặt đồng hồ ảnh 1.
-- Giữ dây đồng hồ đầy đủ, không làm cụt dây.
-- Xóa toàn bộ logo, chữ, thương hiệu có sẵn trong ảnh 2, nhưng không xóa logo trên đồng hồ ảnh 1.
-- Giữ ánh sáng, bóng đổ, nền và bố cục tự nhiên như ảnh 2.
-- Kết quả phải giống ảnh chụp sản phẩm thật, không bị méo, không bị giả.
-- Ưu tiên bảo toàn sản phẩm ảnh 1 hơn việc sáng tạo lại để khớp bố cục.
-- Nếu có xung đột giữa bố cục ảnh 2 và hình dáng thật của đồng hồ ảnh 1, hãy giữ đúng hình dáng thật của đồng hồ ảnh 1.
-- Hãy giữ tay/cổ tay tự nhiên, đúng giải phẫu, không méo, không thừa hoặc thiếu ngón.
-- Giữ tư thế bàn tay, góc tay và cách đặt tay tự nhiên như ảnh 2.
-- Đồng hồ phải nằm đúng vị trí trên cổ tay/tay như trong ảnh 2, ôm tay tự nhiên, không lơ lửng, không chìm vào da.
-- Phần tiếp xúc giữa dây đồng hồ và cổ tay phải chân thực, đúng tỷ lệ, không bị biến dạng.
-- Không làm thay đổi màu da, hình dáng bàn tay hoặc phong cách tổng thể của ảnh 2 ngoài những gì cần thiết để thay đồng hồ.`;
+If Image 2 HAS a human hand or wrist, apply these MANDATORY rules:
+- Keep the exact shape, proportions, and perspective of the watch in Image 1. Do not distort it.
+- Keep the logo/text on the watch face from Image 1 exactly as it is.
+- Keep the watch strap complete. Do not cut off or shorten the strap.
+- Remove all existing logos, text, or branding from Image 2, but do NOT remove the logo on the watch from Image 1.
+- Keep the lighting, shadows, background, and natural composition exactly as in Image 2.
+- The result must look like a real product photo, not distorted or fake.
+- Prioritize preserving the product from Image 1 over creatively adjusting it to fit the background.
+- If there is a conflict between the layout of Image 2 and the true shape of the watch in Image 1, keep the true shape of the watch in Image 1.
+- Keep the hand/wrist natural, anatomically correct, not distorted, with no extra or missing fingers.
+- Keep the hand posture, wrist angle, and hand placement exactly as natural as in Image 2.
+- The watch must sit at the correct position on the wrist/hand as in Image 2, wrapping naturally without floating or sinking into the skin.
+- The contact area between the watch strap and the wrist must be realistic, correctly proportioned, and not distorted.
+- Do not change the skin color, hand shape, or overall style of Image 2 beyond what is necessary to replace the watch.`;
 
         imgPromptsArray = sampleInfos.map(info => ({
           prompt: experimentalPrompt,
