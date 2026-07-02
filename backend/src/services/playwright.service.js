@@ -546,13 +546,16 @@ CRITICAL RULES:
                 
                 charIndex++;
                 if (char === ' ' || char === '\n') {
-                    // Đầu từ mới: delay lâu hơn (30-80ms)
-                    await page.waitForTimeout(Math.floor(Math.random() * 50) + 30);
-                } else if (charIndex % 35 === 0 && Math.random() < 0.4) {
-                    // Mỗi ~35 ký tự, 40% xác suất dừng "suy nghĩ" (200-500ms)
-                    await page.waitForTimeout(Math.floor(Math.random() * 300) + 200);
+                    // Cứ gặp dấu cách/xuống dòng: ngẫu nhiên nghỉ một chút (30-100ms)
+                    await page.waitForTimeout(Math.floor(Math.random() * 70) + 30);
+                } else if (Math.random() < 0.015) {
+                    // 1.5% xác suất ĐANG GÕ DỞ CÂU tự nhiên khựng lại "suy nghĩ" hoặc "nhìn phím" (300-900ms)
+                    await page.waitForTimeout(Math.floor(Math.random() * 600) + 300);
+                } else if (Math.random() < 0.05) {
+                    // 5% xác suất bị vấp nhẹ ngón tay (100-200ms)
+                    await page.waitForTimeout(Math.floor(Math.random() * 100) + 100);
                 } else {
-                    // Giữa từ: gõ cực nhanh (5-30ms) để bù lại thời gian gõ toàn bộ prompt
+                    // Tốc độ gõ phím liên tục: dao động cực nhạy 5-30ms
                     await page.waitForTimeout(Math.floor(Math.random() * 25) + 5);
                 }
             }
