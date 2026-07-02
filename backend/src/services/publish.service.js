@@ -631,7 +631,7 @@ export const dryRunRoutine = async () => {
       if (postMode === 'AI' && localFilePaths.length === 1) {
         try {
           let imgPromptsArray = [];
-          const isExperimentalAI = true;
+          const isExperimentalAI = false; // TẮT chế độ thử nghiệm để dùng luồng Prompt chuẩn
           let sampleInfo = pickHybridSampleImage(selectedSku?.name);
           let sampleImg = sampleInfo.imagePath;
 
