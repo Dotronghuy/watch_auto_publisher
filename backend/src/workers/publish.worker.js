@@ -13,7 +13,10 @@ export const worker = new Worker('publishQueue', async job => {
     resetGlobalStop();
     await autoPublishRoutine();
   }
-}, { connection });
+}, { 
+  connection,
+  lockDuration: 600000 // 10 minutes (600,000 ms)
+});
 
 worker.on('completed', job => {
   console.log(`[Worker] Job ${job.id} đã hoàn thành thành công!`);

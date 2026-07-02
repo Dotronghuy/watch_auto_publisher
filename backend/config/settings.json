@@ -6,13 +6,14 @@
   "testInterval": "1",
   "igDelayMin": "1",
   "igDelayMax": "2",
-  "chatGptProjectUrl": "https://chatgpt.com/g/g-p-6a4240ccda448191a449beb0ad60cdab/project",
+  "chatGptProjectUrl": "https://chatgpt.com/g/g-p-6a447d8457788191af85c9d1055e2c0d/project",
+  "chatGptContentProjectUrl": "https://chatgpt.com/g/g-p-6a447da7c82c81919922a6a302ca1aac/project",
   "imageGenerationEngine": "chatgpt",
   "sdApiUrl": "http://127.0.0.1:8188",
   "googleSheetId": "1tWg6zzAw6F9_2vlvOFfPy_2tV88xFGPB-4f5NvbwS_M",
   "aiTasks": {
-    "fbChatUrl": "6a43484e-3aec-83ec-8231-3954d91523aa",
-    "igChatUrl": "6a434874-bb70-83ec-9014-92391c64191d"
+    "fbChatUrl": "6a449906-9e10-83ec-ab97-bb97db0b12a2",
+    "igChatUrl": "6a448075-64cc-83ec-8ab3-b461a8fa2539"
   },
   "botPauseHours": 2,
   "botDelayMin": "10",
