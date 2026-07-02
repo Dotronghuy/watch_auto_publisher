@@ -4,6 +4,7 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { liveLog } from '../utils/liveLog.js';
+import sharp from 'sharp';
 import { PrismaClient } from '@prisma/client';
 
 const prisma = new PrismaClient();
@@ -765,10 +766,12 @@ CRITICAL RULES:
             }, targetImgSrc);
             
             const base64Data = imageResponse.split(',')[1];
-            const buffer = Buffer.from(base64Data, 'base64');
+            const rawBuffer = Buffer.from(base64Data, 'base64');
             const outputPath = path.join(__dirname, `../../temp_images/chatgpt_gen_${Date.now()}.png`);
-            fs.writeFileSync(outputPath, buffer);
-            console.log(`✅ Đã lưu ảnh ${i + 1} thành công: ${path.basename(outputPath)}`);
+            // Xóa sạch metadata AI (C2PA/IPTC/EXIF) để Facebook không gắn tag "Có dùng AI"
+            const cleanBuffer = await sharp(rawBuffer).png().toBuffer();
+            fs.writeFileSync(outputPath, cleanBuffer);
+            console.log(`✅ Đã lưu ảnh ${i + 1} thành công (đã xóa metadata AI): ${path.basename(outputPath)}`);
             
             outputPaths.push(outputPath);
             

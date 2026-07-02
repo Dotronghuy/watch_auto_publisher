@@ -98,7 +98,7 @@ export const startScheduler = async () => {
       const intervalMinutes = parseInt(settings.testInterval) || 5;
       const cronPattern = `*/${intervalMinutes} * * * *`;
       await publishQueue.add('autoPublishJob', {}, {
-        repeat: { pattern: cronPattern }
+        repeat: { pattern: cronPattern, tz: 'Asia/Ho_Chi_Minh' }
       });
       console.log(`✅ [Chế Độ TEST] Đã lên lịch tự động đăng bài mỗi ${intervalMinutes} phút (Cron: ${cronPattern})`);
     } else {
@@ -117,7 +117,7 @@ export const startScheduler = async () => {
         const cronPattern = `${parseInt(minute)} ${parseInt(hour)} * * *`;
 
         await publishQueue.add('autoPublishJob', {}, {
-          repeat: { pattern: cronPattern }
+          repeat: { pattern: cronPattern, tz: 'Asia/Ho_Chi_Minh' }
         });
         console.log(`✅ Đã lên lịch đăng bài cho Khung giờ: ${timeStr} (Cron: ${cronPattern})`);
       }
