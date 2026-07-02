@@ -533,7 +533,13 @@ CRITICAL RULES:
             // Người thật gõ: nhanh ở giữa từ, chậm khi bắt đầu từ mới, dừng lại suy nghĩ
             let charIndex = 0;
             for (const char of typingPortion) {
-                await page.keyboard.type(char);
+                if (char === '\n') {
+                    // Để xuống dòng trong ChatGPT mà không gửi tin nhắn, phải dùng Shift+Enter
+                    await page.keyboard.press('Shift+Enter');
+                } else {
+                    await page.keyboard.type(char);
+                }
+                
                 charIndex++;
                 if (char === ' ' || char === '\n') {
                     // Đầu từ mới: delay lâu hơn (50-120ms)
