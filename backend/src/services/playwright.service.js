@@ -679,7 +679,10 @@ CRITICAL RULES:
                         const errorLocator = page.getByText(/Image generation failed|Something went wrong|Tạo ảnh không thành công|Đã ngừng suy nghĩ|unable to generate the image|encountered an error|we experienced an error|stopped thinking/i).last();
                         const retryButtonCandidates = [
                             page.getByRole('button', { name: /try again|regenerate|thử lại|tạo lại/i }).last(),
-                            page.locator('button:has-text("Try again"), button:has-text("Regenerate"), button:has-text("Thử lại"), button[aria-label*="Try again"], button[aria-label*="Regenerate"], button[aria-label*="Thử lại"], button[data-testid*="regenerate"], button[data-testid*="retry"]').last()
+                            page.locator('button:has-text("Try again"), button:has-text("Regenerate"), button:has-text("Thử lại"), button[aria-label*="Try again"], button[aria-label*="Regenerate"], button[aria-label*="Thử lại"], button[data-testid*="regenerate"], button[data-testid*="retry"]').last(),
+                            // Nhắm chính xác vào biểu tượng mũi tên xoay tròn (Reload/Regenerate) bằng hình dạng SVG hoặc nút cuối cùng trong tin nhắn
+                            page.locator('button:has(svg path[d*="17.65"]), button:has(svg.icon-md-refresh), button:has(svg path[d^="M12 4V1L7.5 5.5"])').last(),
+                            page.locator('[data-message-author-role="assistant"]').last().locator('button').last()
                         ];
                         let tryAgainBtn = null;
                         for (const candidate of retryButtonCandidates) {
