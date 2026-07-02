@@ -508,6 +508,9 @@ CRITICAL RULES:
                 finalPrompt += `\n\n[ANTI-DUPLICATE INSTRUCTION]: This is image request #${i + 1}. You MUST generate a completely NEW, UNIQUE image. Do NOT output the exact same image as previous generations. Vary the precise camera angle, lighting, or background element placement slightly to ensure uniqueness. Unique Seed: ${Date.now()}_${Math.floor(Math.random() * 1000000)}`;
             }
             
+            // XÓA BỎ KÝ TỰ \r (Carriage Return) ĐỂ TRÁNH LỖI ẤN ENTER SỚM TRÊN WINDOWS
+            finalPrompt = finalPrompt.replace(/\r/g, '');
+            
             await promptLocator.fill(''); // Xóa text cũ nếu có
             await page.waitForTimeout(200);
             
