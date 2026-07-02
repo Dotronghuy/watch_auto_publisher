@@ -535,8 +535,8 @@ CRITICAL RULES:
             let charIndex = 0;
             for (const char of typingPortion) {
                 if (char === '\n') {
-                    // Dùng insertText('\n') an toàn tuyệt đối hơn Shift+Enter trên một số hệ điều hành
-                    await page.keyboard.insertText('\n');
+                    // PHẢI dùng Shift+Enter để xuống dòng trong ChatGPT. Tuyệt đối không dùng insertText hay ký tự \n vì ChatGPT sẽ tưởng là ấn gửi.
+                    await page.keyboard.press('Shift+Enter');
                 } else if (char === '\r') {
                     // Bỏ qua hoàn toàn ký tự \r nếu còn sót lại
                     continue;
