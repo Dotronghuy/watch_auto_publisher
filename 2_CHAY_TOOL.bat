@@ -25,12 +25,15 @@ if %errorlevel% neq 0 (
 :: BUOC 1: Cap nhat code moi nhat tu GitHub
 :: ============================================
 echo [1/4] Dang cap nhat code moi nhat tu GitHub...
-git pull origin master 2>nul
+git config core.autocrlf true 2>nul
+git config core.safecrlf false 2>nul
+git pull origin master >nul 2>nul
 if %errorlevel% neq 0 (
     echo    [CANH BAO] Khong the cap nhat code. Co the khong co mang hoac chua cau hinh git.
     echo    Tiep tuc khoi dong voi code hien tai...
+) else (
+    echo    [OK] Code da cap nhat thanh cong tu GitHub.
 )
-echo    [OK] Code da cap nhat.
 
 :: ============================================
 :: BUOC 2: Kiem tra va cai dat thu vien moi (neu co)
