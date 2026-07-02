@@ -526,39 +526,35 @@ CRITICAL RULES:
                 }
             } catch (e) {}
 
-            // TỐI ƯU GÕ PHÍM: "Vừa gõ vừa paste" để tăng tốc nhưng vẫn tự nhiên
-            // Gõ chậm 120-200 ký tự đầu (random), sau đó dán (paste) phần còn lại
-            const typeLen = Math.min(finalPrompt.length, Math.floor(Math.random() * 80) + 120);
-            const typingPortion = finalPrompt.substring(0, typeLen);
-            const pastingPortion = finalPrompt.substring(typeLen);
+            // TỐI ƯU GÕ PHÍM: Chuyển sang gõ tay 100% toàn bộ prompt (không paste)
+            // Để đảm bảo an toàn tuyệt đối trước mọi cơ chế bot-detection
+            const typingPortion = finalPrompt;
             
             // Gõ từng ký tự với tốc độ biến thiên giống người thật
             // Người thật gõ: nhanh ở giữa từ, chậm khi bắt đầu từ mới, dừng lại suy nghĩ
             let charIndex = 0;
             for (const char of typingPortion) {
                 if (char === '\n') {
-                    // Để xuống dòng trong ChatGPT mà không gửi tin nhắn, phải dùng Shift+Enter
-                    await page.keyboard.press('Shift+Enter');
+                    // Dùng insertText('\n') an toàn tuyệt đối hơn Shift+Enter trên một số hệ điều hành
+                    await page.keyboard.insertText('\n');
+                } else if (char === '\r') {
+                    // Bỏ qua hoàn toàn ký tự \r nếu còn sót lại
+                    continue;
                 } else {
                     await page.keyboard.type(char);
                 }
                 
                 charIndex++;
                 if (char === ' ' || char === '\n') {
-                    // Đầu từ mới: delay lâu hơn (50-120ms)
-                    await page.waitForTimeout(Math.floor(Math.random() * 70) + 50);
-                } else if (charIndex % 30 === 0 && Math.random() < 0.4) {
-                    // Mỗi ~30 ký tự, 40% xác suất dừng "suy nghĩ" (300-800ms)
-                    await page.waitForTimeout(Math.floor(Math.random() * 500) + 300);
+                    // Đầu từ mới: delay lâu hơn (30-80ms)
+                    await page.waitForTimeout(Math.floor(Math.random() * 50) + 30);
+                } else if (charIndex % 35 === 0 && Math.random() < 0.4) {
+                    // Mỗi ~35 ký tự, 40% xác suất dừng "suy nghĩ" (200-500ms)
+                    await page.waitForTimeout(Math.floor(Math.random() * 300) + 200);
                 } else {
-                    // Giữa từ: gõ nhanh (15-55ms), biến thiên tự nhiên
-                    await page.waitForTimeout(Math.floor(Math.random() * 40) + 15);
+                    // Giữa từ: gõ cực nhanh (5-30ms) để bù lại thời gian gõ toàn bộ prompt
+                    await page.waitForTimeout(Math.floor(Math.random() * 25) + 5);
                 }
-            }
-            if (pastingPortion.length > 0) {
-                // Dừng "suy nghĩ" 0.8-2s trước khi paste (giống người chuyển từ gõ sang paste)
-                await page.waitForTimeout(Math.floor(Math.random() * 1200) + 800);
-                await page.keyboard.insertText(pastingPortion);
             }
             
             // Chờ 3-7s cho ổn định sau khi gõ xong (random, không cố định)
