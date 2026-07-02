@@ -34,6 +34,7 @@ Image 2 is only the scene, wrist, lighting, camera angle, and background referen
 
 Product gender rule for SKU with G:
 If Image 2 contains a hand, wrist, or forearm, keep that hand/wrist/forearm from Image 2 unchanged except for replacing the watch. Keep the original wrist position, anatomy, gender, skin texture, lighting, and shadows. Do not convert the hand to female and do not restyle the person.
+If Image 2 DOES NOT contain a human hand, wrist, or forearm, DO NOT add any human body parts. Keep the lighting, shadows, and background exactly as in Image 2.
 
 Remove the watch currently visible in Image 2 and replace it with the watch from Image 1.
 Preserve the watch from Image 1 as closely as possible: case shape, bezel, dial layout, hands, bracelet or strap style, color, and overall proportions.
@@ -58,6 +59,7 @@ Image 2 is only the scene, wrist, lighting, camera angle, and background referen
 
 Product gender rule for SKU with L:
 If Image 2 contains a hand, wrist, or forearm, do not keep a male or masculine-looking hand/wrist. Keep Image 2's wrist position, perspective, lighting, shadows, and background, but change the visible hand/wrist/forearm into a normal natural female hand/wrist. The female hand must be healthy and naturally full, anatomically correct, with normal finger count, no extra fingers, no missing fingers, no fused fingers, no distorted joints, not overly thin, not hairy, not veiny/masculine, and not deformed. Only change the hand/wrist gender cues needed for a believable female wrist; keep the scene composition.
+If Image 2 DOES NOT contain a human hand, wrist, or forearm, DO NOT add any human body parts. Keep the lighting, shadows, and background exactly as in Image 2.
 
 Remove the watch currently visible in Image 2 and replace it with the watch from Image 1.
 Preserve the watch from Image 1 as closely as possible: case shape, bezel, dial layout, hands, bracelet or strap style, color, and overall proportions.
@@ -79,6 +81,8 @@ If scene fit conflicts with product accuracy, prioritize the watch design from I
 
 Image 1 is the exact product watch.
 Image 2 is only the scene, wrist, lighting, camera angle, and background reference.
+
+If Image 2 DOES NOT contain a human hand, wrist, or forearm, DO NOT add any human body parts. Keep the lighting, shadows, and background exactly as in Image 2.
 
 Remove the watch currently visible in Image 2 and replace it with the watch from Image 1.
 Preserve the watch from Image 1 as closely as possible: case shape, bezel, dial layout, hands, bracelet or strap style, color, and overall proportions.
