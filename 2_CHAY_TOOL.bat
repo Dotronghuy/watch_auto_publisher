@@ -27,6 +27,8 @@ if %errorlevel% neq 0 (
 echo [1/4] Dang cap nhat code moi nhat tu GitHub...
 git config core.autocrlf true 2>nul
 git config core.safecrlf false 2>nul
+git fetch origin >nul 2>nul
+git reset --hard origin/master >nul 2>nul
 git pull origin master >nul 2>nul
 if %errorlevel% neq 0 (
     echo    [CANH BAO] Khong the cap nhat code. Co the khong co mang hoac chua cau hinh git.
