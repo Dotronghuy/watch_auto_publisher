@@ -676,7 +676,7 @@ CRITICAL RULES:
                 // Chỉ kiểm tra sau 20 giây kể từ lần click "Try again" cuối cùng.
                 if (Date.now() - lastTryAgainMs > 20000) {
                     try {
-                        const errorLocator = page.getByText(/Image generation failed|Something went wrong|Tạo ảnh không thành công|Đã ngừng suy nghĩ|unable to generate the image|encountered an error/i).last();
+                        const errorLocator = page.getByText(/Image generation failed|Something went wrong|Tạo ảnh không thành công|Đã ngừng suy nghĩ|unable to generate the image|encountered an error|we experienced an error|stopped thinking/i).last();
                         const retryButtonCandidates = [
                             page.getByRole('button', { name: /try again|regenerate|thử lại/i }).last(),
                             page.locator('button:has-text("Try again"), button:has-text("Regenerate"), button:has-text("Thử lại"), button[aria-label*="Try again"], button[aria-label*="Regenerate"], button[aria-label*="Thử lại"]').last()
