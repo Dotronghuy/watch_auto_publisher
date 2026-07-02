@@ -726,8 +726,9 @@ If Image 2 HAS a human hand or wrist, apply these MANDATORY rules:
                   if (fs.existsSync(checkPath)) sImgPath = checkPath;
                 }
                 return {
-                  prompt: `This is a luxury watch with transparent background (background already removed). Composite this exact watch into the following lifestyle scene:\n\n${s.text}\n\n${genderNote}\n\nCRITICAL RULES:\n- IGNORE ALL PREVIOUS WATCH IMAGES in this chat history. YOU MUST ONLY USE THE IMAGE ATTACHED TO THIS CURRENT MESSAGE!\n- Do NOT redraw, redesign, or modify the watch in any way.\n- STRICT STRAP RULE: Identify the exact strap material from the attached image (Metal/Steel, Leather, or Rubber). You MUST draw the exact same strap material and design. DO NOT change a steel bracelet into leather/rubber, and vice versa.\n- Keep the watch dial, hands, case, bracelet, brand text, and colors EXACTLY as in the provided image.\n- Lighting must be consistent between the watch and the environment.\n- Output: photorealistic, 4K commercial product photography quality.`,
-                  sampleImage: sImgPath
+                  prompt: `${s.text}\n\n${genderNote}\n\nCRITICAL RULES:\n- STRICT STRAP RULE: Identify the exact strap material from the attached image (Metal/Steel, Leather, or Rubber). You MUST draw the exact same strap material and design. DO NOT change a steel bracelet into leather/rubber, and vice versa.\n- Keep the watch dial, hands, case, bracelet, brand text, and colors EXACTLY as in the provided image.\n- Lighting must be consistent between the watch and the environment.\n- Output: photorealistic, 4K commercial product photography quality.`,
+                  sampleImage: sImgPath,
+                  mode: 'direct_two_image_edit'
                 };
               });
             } else {
