@@ -342,6 +342,7 @@ export const generateBackgroundOnChatGPT = async (imagePath, promptsArray, abort
         let globalMaxY = 0;
         
         const count = promptsArray.length;
+        let fullRetryCountForImage = 0;
         for (let i = 0; i < count; i++) {
             console.log(`\n--- VẼ ẢNH ${i + 1}/${count} ---`);
             if (abortSignal?.aborted) throw new Error('aborted');
@@ -758,24 +759,12 @@ CRITICAL RULES:
                             console.log(`⏳ ChatGPT vẫn đang render ảnh ${i + 1} ("One last tweak...") đã ${stuckSeconds}s. Tiếp tục chờ...`);
                         }
                         
-                        // Nếu kẹt quá 3 phút → reload và thử lại
+                        // Nếu kẹt quá 3 phút → Hủy chờ, tạo chat mới
                         if (stuckSeconds > 180 && Date.now() - lastTryAgainMs > 30000) {
-                            imageRetryCount++;
-                            if (imageRetryCount > 2) {
-                                chatgptFailureDetected = true;
-                                console.log(`❌ Ảnh ${i + 1} bị kẹt "One last tweak" quá lâu sau ${imageRetryCount - 1} lần thử. Dừng mẻ ảnh.`);
-                                liveLog(`❌ Ảnh ${i + 1}: ChatGPT bị kẹt tạo ảnh quá lâu. Đã dừng mẻ ảnh.`, 'error', 'ChatGPT');
-                                break;
-                            }
-                            console.log(`⚠️ ChatGPT bị kẹt "One last tweak" ${stuckSeconds}s. Đang reload trang... (lần ${imageRetryCount}/2)`);
-                            liveLog(`⚠️ Ảnh ${i + 1}: ChatGPT bị kẹt tạo ảnh ${stuckSeconds}s. Tự động reload...`, 'warning', 'ChatGPT');
-                            lastTryAgainMs = Date.now();
-                            firstGeneratingMs = 0; // Reset timer
-                            try {
-                                await page.reload({ waitUntil: 'domcontentloaded' });
-                                await page.waitForTimeout(8000);
-                            } catch (e) {}
-                            continue;
+                            chatgptFailureDetected = true;
+                            console.log(`❌ Ảnh ${i + 1} bị kẹt "One last tweak" quá 3 phút. Dừng chờ để tạo Chat mới...`);
+                            liveLog(`⚠️ Ảnh ${i + 1}: Kẹt tiến trình vẽ quá lâu. Chuẩn bị tạo Chat mới...`, 'warning', 'ChatGPT');
+                            break;
                         }
                     } else {
                         firstGeneratingMs = 0; // Reset nếu không còn generating
@@ -831,37 +820,48 @@ CRITICAL RULES:
             }
             
             if (!targetImgSrc) {
-                const reason = chatgptFailureDetected
-                    ? 'ChatGPT báo lỗi tạo ảnh sau 2 lần thử lại'
-                    : imageRetryCount > 0 
-                    ? `ChatGPT tạo ảnh thất bại sau ${imageRetryCount} lần thử` 
-                    : 'Không tìm thấy ảnh sau 8 phút chờ';
-                console.log(`❌ Dừng mẻ ảnh tại ảnh ${i + 1}: ${reason}`);
-                liveLog(`❌ Ảnh ${i + 1}: ${reason}. Đã dừng mẻ ảnh để tránh tự động gõ prompt tiếp theo.`, 'error', 'ChatGPT');
-                
-                // Tải lại trang để reset trạng thái của ChatGPT (khắc phục lỗi khóa nút gửi ảnh tiếp theo)
-                try {
-                    await page.reload({ waitUntil: 'domcontentloaded' });
-                    await page.waitForTimeout(10000); // Chờ 10 giây để trang tải xong hoàn toàn
+                if (fullRetryCountForImage < 1) { // Cho phép thử lại toàn bộ 1 lần
+                    fullRetryCountForImage++;
+                    console.log(`❌ Ảnh ${i + 1} bị lỗi/kẹt. Đang mở CHAT MỚI để thử lại từ đầu (Lần 2)...`);
+                    liveLog(`⚠️ Ảnh ${i + 1} lỗi. Đang tạo Chat mới và gửi lại yêu cầu vẽ ảnh...`, 'warning', 'ChatGPT');
                     
-                    // Cập nhật lại promptLocator vì trang vừa reload
-                    promptLocator = null;
-                    for (let retry = 0; retry < 5; retry++) {
-                        for (const sel of PROMPT_SELECTORS) {
-                            try {
-                                await page.waitForSelector(sel, { state: 'visible', timeout: 5000 });
-                                promptLocator = page.locator(sel).first();
-                                break;
-                            } catch (e) {}
+                    try {
+                        await page.goto(targetUrl, { waitUntil: 'domcontentloaded' });
+                        await page.waitForTimeout(8000); // Chờ chat mới tải
+                        
+                        // Tìm lại ô nhập liệu
+                        promptLocator = null;
+                        for (let retry = 0; retry < 5; retry++) {
+                            for (const sel of PROMPT_SELECTORS) {
+                                try {
+                                    await page.waitForSelector(sel, { state: 'visible', timeout: 5000 });
+                                    promptLocator = page.locator(sel).first();
+                                    break;
+                                } catch (e) {}
+                            }
+                            if (promptLocator) break;
+                            await page.waitForTimeout(3000);
                         }
-                        if (promptLocator) break;
-                        await page.waitForTimeout(3000);
+                    } catch (e) {
+                        console.log('⚠️ Lỗi khi mở chat mới:', e.message);
                     }
-                } catch (e) {
-                    console.log('⚠️ Lỗi khi tải lại trang:', e.message);
+                    
+                    i--; // Lùi biến i để vòng lặp chạy lại đúng ảnh này
+                    continue; // Bỏ qua đoạn lưu ảnh bên dưới, quay lại đầu vòng lặp
+                } else {
+                    const reason = chatgptFailureDetected
+                        ? 'ChatGPT báo lỗi tạo ảnh sau nhiều lần thử lại'
+                        : imageRetryCount > 0 
+                        ? `ChatGPT tạo ảnh thất bại sau ${imageRetryCount} lần thử` 
+                        : 'Không tìm thấy ảnh sau 8 phút chờ';
+                    console.log(`❌ Dừng mẻ ảnh tại ảnh ${i + 1}: ${reason}`);
+                    liveLog(`❌ Ảnh ${i + 1}: ${reason}. Đã tạo chat mới nhưng vẫn thất bại. Dừng mẻ ảnh.`, 'error', 'ChatGPT');
+                    throw new Error(`Dừng mẻ ảnh tại ảnh ${i + 1}: ${reason}`);
                 }
-                throw new Error(`Dừng mẻ ảnh tại ảnh ${i + 1}: ${reason}`);
             }
+            
+            // Nếu thành công, reset biến đếm retry để dùng cho ảnh tiếp theo
+            fullRetryCountForImage = 0;
             
             // Wait to fully load
             await page.waitForTimeout(2000);
