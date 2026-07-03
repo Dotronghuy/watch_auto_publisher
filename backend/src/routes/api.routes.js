@@ -803,7 +803,7 @@ router.post('/settings', async (req, res) => {
     fs.writeFileSync(settingsPath, JSON.stringify(mergedSettings, null, 2));
     
     // Khởi động lại Scheduler để áp dụng Khung giờ vàng mới (nếu có update)
-    await startScheduler();
+    await startScheduler(true);
     
     if (newSettings.timeSlots) {
       sendLogToClients({ time: new Date().toLocaleTimeString(), sender: 'System', message: `✅ Đã cập nhật lại lịch đăng bài (${newSettings.timeSlots.join(', ')}). Hệ thống đếm ngược đã khởi động lại.`, type: 'success' });

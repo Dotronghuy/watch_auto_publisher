@@ -40,7 +40,7 @@ const startHeartbeat = () => {
   heartbeatInterval = setInterval(beat, 10000);
 };
 
-export const startScheduler = async () => {
+export const startScheduler = async (isSettingsUpdate = false) => {
   if (isSchedulerRunning) {
     console.log('⚠️ Scheduler đang chạy, bỏ qua lần gọi thứ 2.');
     return;
@@ -49,7 +49,7 @@ export const startScheduler = async () => {
 
   // === PHÂN BIỆT HOT RELOAD vs COLD START ===
   // QUAN TRỌNG: Phải check TRƯỚC khi ghi heartbeat mới
-  const hotReload = isHotReload();
+  const hotReload = isSettingsUpdate ? false : isHotReload();
 
   // Bắt đầu ghi nhịp tim (sau khi đã check)
   startHeartbeat();
@@ -61,25 +61,38 @@ export const startScheduler = async () => {
     // Các repeatable jobs vẫn còn nguyên trong Redis, Worker mới sẽ tự pick up
     console.log('🔥 [Hot Reload] Phát hiện server vừa restart nhanh (do sửa code). GIỮ NGUYÊN toàn bộ lịch đăng bài trong Redis!');
   } else {
-    // COLD START: Server tắt lâu → Xóa sạch và tạo lịch mới
-    console.log('❄️ [Cold Start] Phát hiện server khởi động lạnh. Đang dọn sạch lịch cũ và tạo mới...');
-    try {
-      await publishQueue.obliterate({ force: true });
-      console.log('🧹 Đã obliterate toàn bộ queue (xóa kể cả active jobs cũ).');
-    } catch (e) {
+    // COLD START or SETTINGS UPDATE: Xóa lịch cũ và tạo lịch mới
+    if (isSettingsUpdate) {
+      console.log('⚙️ [Settings Update] Đang cập nhật lịch đăng bài mới...');
       try {
         const repeatableJobs = await publishQueue.getRepeatableJobs();
         for (const job of repeatableJobs) {
           await publishQueue.removeRepeatableByKey(job.key);
         }
-        await publishQueue.drain(true);
-        await publishQueue.clean(0, 1000, 'delayed');
-        await publishQueue.clean(0, 1000, 'wait');
-        await publishQueue.clean(0, 1000, 'failed');
-        await publishQueue.clean(0, 1000, 'completed');
-        console.log('🧹 Đã dọn sạch toàn bộ job cũ trong hàng đợi (fallback).');
-      } catch (e2) {
-        console.log('⚠️ Lỗi khi dọn dẹp queue:', e2.message);
+        console.log('🧹 Đã gỡ bỏ các lịch đăng bài cũ (giữ nguyên job đang chạy).');
+      } catch (e) {
+        console.log('⚠️ Lỗi khi gỡ lịch cũ:', e.message);
+      }
+    } else {
+      console.log('❄️ [Cold Start] Phát hiện server khởi động lạnh. Đang dọn sạch lịch cũ và tạo mới...');
+      try {
+        await publishQueue.obliterate({ force: true });
+        console.log('🧹 Đã obliterate toàn bộ queue (xóa kể cả active jobs cũ).');
+      } catch (e) {
+        try {
+          const repeatableJobs = await publishQueue.getRepeatableJobs();
+          for (const job of repeatableJobs) {
+            await publishQueue.removeRepeatableByKey(job.key);
+          }
+          await publishQueue.drain(true);
+          await publishQueue.clean(0, 1000, 'delayed');
+          await publishQueue.clean(0, 1000, 'wait');
+          await publishQueue.clean(0, 1000, 'failed');
+          await publishQueue.clean(0, 1000, 'completed');
+          console.log('🧹 Đã dọn sạch toàn bộ job cũ trong hàng đợi (fallback).');
+        } catch (e2) {
+          console.log('⚠️ Lỗi khi dọn dẹp queue:', e2.message);
+        }
       }
     }
 
