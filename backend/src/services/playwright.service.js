@@ -574,44 +574,54 @@ CRITICAL RULES:
             // Để đảm bảo an toàn tuyệt đối trước mọi cơ chế bot-detection
             const typingPortion = finalPrompt;
             
-            // Gõ từng ký tự với tốc độ biến thiên giống người thật
-            // Người thật gõ: nhanh ở giữa từ, chậm khi bắt đầu từ mới, dừng lại suy nghĩ
-            let charIndex = 0;
-            for (const char of typingPortion) {
-                if (char === '\n') {
-                    // PHẢI dùng Shift+Enter để xuống dòng trong ChatGPT. Tuyệt đối không dùng insertText hay ký tự \n vì ChatGPT sẽ tưởng là ấn gửi.
-                    await page.keyboard.press('Shift+Enter');
-                } else if (char === '\r') {
-                    // Bỏ qua hoàn toàn ký tự \r nếu còn sót lại
-                    continue;
-                } else {
-                    // 1.5% Gõ sai (Typo) -> Xóa -> Gõ lại đúng
-                    if (Math.random() < 0.015 && char.match(/[a-zA-Z]/)) {
-                        const typos = 'qwertyuiopasdfghjklzxcvbnm';
-                        const randomTypo = typos[Math.floor(Math.random() * typos.length)];
-                        await page.keyboard.type(randomTypo);
-                        await page.waitForTimeout(Math.floor(Math.random() * 150) + 50); // Khựng lại nhận ra lỗi
-                        await page.keyboard.press('Backspace');
-                        await page.waitForTimeout(Math.floor(Math.random() * 100) + 50);
+            if (fullRetryCountForImage > 0) {
+                console.log(`⏩ Đang paste nhanh prompt vì đây là lần thử lại...`);
+                await promptLocator.fill(typingPortion);
+                await page.waitForTimeout(500);
+                // Gõ thêm 1 dấu cách để kích hoạt event listener của React (phòng hờ fill không nhận dạng sự kiện)
+                await page.keyboard.type(' ');
+                await page.waitForTimeout(500);
+            } else {
+                // Gõ từng ký tự với tốc độ biến thiên giống người thật
+                // Người thật gõ: nhanh ở giữa từ, chậm khi bắt đầu từ mới, dừng lại suy nghĩ
+                let charIndex = 0;
+                for (const char of typingPortion) {
+                    if (char === '\n') {
+                        // PHẢI dùng Shift+Enter để xuống dòng trong ChatGPT. Tuyệt đối không dùng insertText hay ký tự \n vì ChatGPT sẽ tưởng là ấn gửi.
+                        await page.keyboard.press('Shift+Enter');
+                    } else if (char === '\r') {
+                        // Bỏ qua hoàn toàn ký tự \r nếu còn sót lại
+                        continue;
+                    } else {
+                        // 1.5% Gõ sai (Typo) -> Xóa -> Gõ lại đúng
+                        if (Math.random() < 0.015 && char.match(/[a-zA-Z]/)) {
+                            const typos = 'qwertyuiopasdfghjklzxcvbnm';
+                            const randomTypo = typos[Math.floor(Math.random() * typos.length)];
+                            await page.keyboard.type(randomTypo);
+                            await page.waitForTimeout(Math.floor(Math.random() * 150) + 50); // Khựng lại nhận ra lỗi
+                            await page.keyboard.press('Backspace');
+                            await page.waitForTimeout(Math.floor(Math.random() * 100) + 50);
+                        }
+                        await page.keyboard.type(char);
                     }
-                    await page.keyboard.type(char);
-                }
-                
-                charIndex++;
-                if (char === ' ' || char === '\n') {
-                    // Cứ gặp dấu cách/xuống dòng: ngẫu nhiên nghỉ một chút (30-100ms)
-                    await page.waitForTimeout(Math.floor(Math.random() * 70) + 30);
-                } else if (Math.random() < 0.015) {
-                    // 1.5% xác suất ĐANG GÕ DỞ CÂU tự nhiên khựng lại "suy nghĩ" hoặc "nhìn phím" (300-900ms)
-                    await page.waitForTimeout(Math.floor(Math.random() * 600) + 300);
-                } else if (Math.random() < 0.05) {
-                    // 5% xác suất bị vấp nhẹ ngón tay (100-200ms)
-                    await page.waitForTimeout(Math.floor(Math.random() * 100) + 100);
-                } else {
-                    // Tốc độ gõ phím liên tục: dao động cực nhạy 5-30ms
-                    await page.waitForTimeout(Math.floor(Math.random() * 25) + 5);
+                    
+                    charIndex++;
+                    if (char === ' ' || char === '\n') {
+                        // Cứ gặp dấu cách/xuống dòng: ngẫu nhiên nghỉ một chút (30-100ms)
+                        await page.waitForTimeout(Math.floor(Math.random() * 70) + 30);
+                    } else if (Math.random() < 0.015) {
+                        // 1.5% xác suất ĐANG GÕ DỞ CÂU tự nhiên khựng lại "suy nghĩ" hoặc "nhìn phím" (300-900ms)
+                        await page.waitForTimeout(Math.floor(Math.random() * 600) + 300);
+                    } else if (Math.random() < 0.05) {
+                        // 5% xác suất bị vấp nhẹ ngón tay (100-200ms)
+                        await page.waitForTimeout(Math.floor(Math.random() * 100) + 100);
+                    } else {
+                        // Tốc độ gõ phím liên tục: dao động cực nhạy 5-30ms
+                        await page.waitForTimeout(Math.floor(Math.random() * 25) + 5);
+                    }
                 }
             }
+
             
             // Chờ 3-7s cho ổn định sau khi gõ xong (random, không cố định)
             await page.waitForTimeout(Math.floor(Math.random() * 4000) + 3000);
