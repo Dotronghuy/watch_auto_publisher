@@ -265,7 +265,7 @@ export const generateBackgroundOnChatGPT = async (imagePath, promptsArray, abort
             );
         });
         
-        let targetUrl = getSettingValue('chatGptProjectUrl') || 'https://chatgpt.com/g/g-p-6a447d8457788191af85c9d1055e2c0d/project';
+        let targetUrl = getSettingValue('chatGptProjectUrl') || 'https://chatgpt.com/g/g-p-6a472fac29a08191bc9914d5a8c451ac/project';
         let savedChatId = null;
         if (!isNewSession) {
             savedChatId = getAiTaskUrl('imageChatUrl');
@@ -979,7 +979,7 @@ export const generateContentOnChatGPT = async (prompt, type, imagePath = null) =
         });
         page = context.pages().length > 0 ? context.pages()[0] : await context.newPage();
         // Luôn sử dụng URL gốc của Dự án Content AI (Bảo đảm 100% chạy trong Dự án)
-        let targetUrl = getSettingValue('chatGptContentProjectUrl') || 'https://chatgpt.com/g/g-p-6a447da7c82c81919922a6a302ca1aac/project';
+        let targetUrl = getSettingValue('chatGptContentProjectUrl') || 'https://chatgpt.com/g/g-p-6a472f6b41d48191a7d769ade350641d-content-watch-ai/project';
         
         console.log(`🌐 Đang truy cập Dự án Content AI: ${targetUrl}...`);
         await page.goto(targetUrl, { waitUntil: 'domcontentloaded' });
