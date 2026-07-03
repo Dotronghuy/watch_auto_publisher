@@ -727,29 +727,6 @@ CRITICAL RULES:
                     } catch (e) {}
                 }
 
-                // ── Detect lỗi "Kết nối bị gián đoạn" / "network error" từ ChatGPT ──
-                try {
-                    const networkErrorLocator = page.getByText(/Kết nối bị gián đoạn|network error|connection interrupted|an error occurred/i).last();
-                    const hasNetworkError = await networkErrorLocator.isVisible({ timeout: 500 }).catch(() => false);
-                    if (hasNetworkError && Date.now() - lastTryAgainMs > 20000) {
-                        console.log('⚠️ Phát hiện lỗi mạng/stream bị ngắt. Đang reload trang và gửi lại prompt...');
-                        liveLog(`⚠️ Ảnh ${i + 1}: ChatGPT bị ngắt kết nối. Đang tự động reload và thử lại...`, 'warning', 'ChatGPT');
-                        lastTryAgainMs = Date.now();
-                        imageRetryCount++;
-                        if (imageRetryCount > 2) {
-                            chatgptFailureDetected = true;
-                            console.log(`❌ Ảnh ${i + 1} đã thất bại sau ${imageRetryCount - 1} lần thử lại (lỗi mạng). Dừng mẻ ảnh.`);
-                            break;
-                        }
-                        try {
-                            await page.reload({ waitUntil: 'domcontentloaded' });
-                            await page.waitForTimeout(8000);
-                        } catch (reloadErr) {
-                            console.log('⚠️ Reload thất bại:', reloadErr.message);
-                        }
-                        continue;
-                    }
-                } catch (e) {}
 
                 // ── Detect lỗi từ chối Content Policy ──
                 try {
