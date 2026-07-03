@@ -855,8 +855,15 @@ CRITICAL RULES:
                         ? `ChatGPT tạo ảnh thất bại sau ${imageRetryCount} lần thử` 
                         : 'Không tìm thấy ảnh sau 8 phút chờ';
                     console.log(`❌ Dừng mẻ ảnh tại ảnh ${i + 1}: ${reason}`);
-                    liveLog(`❌ Ảnh ${i + 1}: ${reason}. Đã tạo chat mới nhưng vẫn thất bại. Dừng mẻ ảnh.`, 'error', 'ChatGPT');
-                    throw new Error(`Dừng mẻ ảnh tại ảnh ${i + 1}: ${reason}`);
+                    
+                    if (outputPaths.length > 0) {
+                        console.log(`⚠️ Đã tạo thành công ${outputPaths.length} ảnh trước đó. Bỏ qua các ảnh lỗi và sử dụng số ảnh này để tiếp tục đăng bài...`);
+                        liveLog(`⚠️ Đã tạo được ${outputPaths.length}/${count} ảnh. Chấp nhận kết quả và đi tiếp...`, 'info', 'System');
+                        break; // Thoát vòng lặp tạo ảnh, trả về các ảnh đã thành công
+                    } else {
+                        liveLog(`❌ Ảnh ${i + 1}: ${reason}. Đã tạo chat mới nhưng vẫn thất bại. Dừng mẻ ảnh.`, 'error', 'ChatGPT');
+                        throw new Error(`Dừng mẻ ảnh tại ảnh ${i + 1}: ${reason}`);
+                    }
                 }
             }
             
