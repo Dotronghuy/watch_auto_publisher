@@ -342,15 +342,15 @@ export const generateBackgroundOnChatGPT = async (imagePath, promptsArray, abort
         let globalMaxY = 0;
         
         const count = promptsArray.length;
-        const IMAGE_BATCH_DELAY_MS = 90000;
         for (let i = 0; i < count; i++) {
             console.log(`\n--- VẼ ẢNH ${i + 1}/${count} ---`);
             if (abortSignal?.aborted) throw new Error('aborted');
 
             // Nghỉ lâu hơn giữa các ảnh để giảm lỗi nghẽn/rate limit của ChatGPT image tool.
             if (i > 0) {
-                console.log(`⏳ Đang nghỉ ${Math.round(IMAGE_BATCH_DELAY_MS / 1000)} giây để tránh bị ChatGPT chặn vì gửi liên tục...`);
-                await page.waitForTimeout(IMAGE_BATCH_DELAY_MS);
+                const delayMs = Math.floor(Math.random() * (110000 - 70000 + 1)) + 70000; // Random 70s - 110s
+                console.log(`⏳ Đang nghỉ ngẫu nhiên ${Math.round(delayMs / 1000)} giây để tránh bị ChatGPT chặn vì gửi liên tục...`);
+                await page.waitForTimeout(delayMs);
 
                 // Làm mới promptLocator ở mỗi vòng để tránh stale reference sau thời gian chờ
                 promptLocator = null;
