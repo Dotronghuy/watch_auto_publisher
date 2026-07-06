@@ -16,6 +16,7 @@ const SocialConnections = () => {
   const [testInterval, setTestInterval] = useState(5);
   const [igDelayMin, setIgDelayMin] = useState(10);
   const [igDelayMax, setIgDelayMax] = useState(20);
+  const [prioritySkus, setPrioritySkus] = useState('');
   
   // AI Chatbot Settings
   const [botEnabled, setBotEnabled] = useState(false);
@@ -69,6 +70,7 @@ const SocialConnections = () => {
         setTimeSlots(Array.isArray(data.timeSlots) ? data.timeSlots : []);
         setIgDelayMin(data.igDelayMin || 10);
         setIgDelayMax(data.igDelayMax || 20);
+        setPrioritySkus(data.prioritySkus || '');
         
         setBotEnabled(data.botEnabled || false);
         setBotPauseHours(data.botPauseHours || 2);
@@ -426,6 +428,23 @@ const SocialConnections = () => {
                     <input className="delay-input" type="number" autoComplete="off" value={igDelayMax} onChange={e => setIgDelayMax(e.target.value)} onBlur={() => autoSaveSettings({ igDelayMax })} min="0" disabled={mode === 'test'} />
                     <span className="delay-label">Phút</span>
                   </div>
+                </div>
+              </div>
+
+              <div className="schedule-panel" style={{ marginTop: '20px' }}>
+                <h4>⭐ SKUs Ưu Tiên Mới Về</h4>
+                <p className="panel-desc">
+                  Nhập danh sách mã SKU (cách nhau bởi dấu phẩy) muốn ưu tiên đăng trước. Hệ thống sẽ chọn đăng mã này trước tiên, với chu kỳ vòng lặp 2 ngày.
+                </p>
+                <div style={{ marginTop: '10px' }}>
+                  <input 
+                    type="text" 
+                    value={prioritySkus} 
+                    onChange={e => setPrioritySkus(e.target.value)} 
+                    onBlur={() => autoSaveSettings({ prioritySkus })}
+                    style={{ width: '100%', padding: '10px', background: 'var(--color-surface-light)', border: '1px solid var(--color-border)', color: 'white', borderRadius: '6px' }} 
+                    placeholder="VD: CADISEN-123, BINGO-456" 
+                  />
                 </div>
               </div>
 

@@ -68,6 +68,7 @@ const Workflow = () => {
   const [sampleImages, setSampleImages] = useState([]);
   const [sampleImgUploading, setSampleImgUploading] = useState(false);
   const [skuCode, setSkuCode] = useState('');
+  const [prioritySkus, setPrioritySkus] = useState('');
   const [isAiIdle, setIsAiIdle] = useState(true);
   // Canvas transform state
   const [transform, setTransform] = useState({ x: 0, y: 0, scale: 1 });
@@ -94,7 +95,40 @@ const Workflow = () => {
     fetchMdFiles('gpt');
     fetchMdFiles('gemini');
     fetchSampleImages();
+    fetch('/api/settings').then(res => res.json()).then(data => {
+      if (data.prioritySkus) setPrioritySkus(data.prioritySkus);
+    }).catch(e => console.error(e));
   }, [fetchMdFiles]);
+
+  const autoSaveSettings = async (updates) => {
+    try {
+      await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updates)
+      });
+    } catch (e) {
+      console.error('Lỗi auto save:', e);
+    }
+  };
+
+  const handleRunNow = async () => {
+    try {
+      Swal.fire({
+        title: 'Đang khởi chạy',
+        text: 'Đang bắt đầu tiến trình đăng bài thật...',
+        icon: 'info',
+        toast: true,
+        position: 'top-end',
+        showConfirmButton: false,
+        timer: 2000
+      });
+      await fetch('/api/trigger-workflow', { method: 'POST' });
+    } catch (e) {
+      console.error(e);
+      Swal.fire('Lỗi', 'Không thể khởi chạy luồng công việc', 'error');
+    }
+  };
 
   useEffect(() => {
     const checkHealth = async () => {
@@ -1075,7 +1109,29 @@ const Workflow = () => {
                     <span className="tag ig">IG</span>
                   </div>
                 </div>
+                <div className="field" style={{marginTop: '10px'}}>
+                  <label>Mã SKU ưu tiên (Cách nhau bằng dấu phẩy)</label>
+                  <input
+                    type="text"
+                    value={prioritySkus}
+                    onChange={(e) => setPrioritySkus(e.target.value)}
+                    onBlur={() => autoSaveSettings({ prioritySkus })}
+                    style={{ width: '100%', padding: '6px 10px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: 'white', borderRadius: '4px', fontSize: '12px', marginTop: '4px' }}
+                    placeholder="VD: CADISEN-123, BINGO-456"
+                    onMouseDown={e => e.stopPropagation()}
+                  />
+                </div>
                 <div className="field" style={{marginTop: '10px', display: 'flex', gap: '6px', flexWrap: 'wrap'}}>
+                  <button
+                    className="btn-dry-run"
+                    onClick={(e) => { e.stopPropagation(); handleRunNow(); }}
+                    onMouseDown={e => e.stopPropagation()}
+                    disabled={!isAiIdle}
+                    title={!isAiIdle ? "AI đang bận..." : "Chạy đăng bài thật NGAY LẬP TỨC"}
+                    style={{flex: '1 1 100%', background: 'linear-gradient(to right, #10b981, #059669)', color: 'white', borderColor: '#059669', marginBottom: '6px'}}
+                  >
+                    <><Share2 size={13} /> Chạy Thật Ngay!</>
+                  </button>
                   <button
                     id="btn-dry-run"
                     className="btn-dry-run"

@@ -146,7 +146,7 @@ export const getAllProductsPostInfo = async () => {
           sku: row[skuIndex],
           postId: postIdIndex !== -1 ? row[postIdIndex] : null,
           postDate: dateIndex !== -1 ? row[dateIndex] : null,
-          cycleMinutes: cycleIndex !== -1 && row[cycleIndex] ? parseInt(row[cycleIndex], 10) : 5, // Mặc định 5 phút
+          cycleMinutes: cycleIndex !== -1 && row[cycleIndex] ? parseInt(row[cycleIndex], 10) : 2880, // Mặc định 2 ngày (2880 phút)
         });
       }
     }

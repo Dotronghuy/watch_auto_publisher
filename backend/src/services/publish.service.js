@@ -348,6 +348,16 @@ export const forceResetRunningState = () => {
 const getSmartFilteredSkus = async (skuFolders, allProductsInfo) => {
   const sheetData = await readFromSheet();
 
+  let prioritySkus = [];
+  try {
+    if (fs.existsSync(settingsPath)) {
+      const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+      if (settings.prioritySkus) {
+        prioritySkus = settings.prioritySkus.split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
+      }
+    }
+  } catch(e) {}
+
   if (!sheetData || sheetData.length === 0) {
     liveLog('⚠️ [Smart Filter] Không đọc được Google Sheets, chuyển về chế độ ngẫu nhiên.', 'warning', 'System');
     return skuFolders.sort(() => 0.5 - Math.random());
@@ -370,8 +380,8 @@ const getSmartFilteredSkus = async (skuFolders, allProductsInfo) => {
   };
 
   // Phân nhóm SKU theo cột "Tập Trung" (cột H)
-  // 1 = bán chạy (80%), 2 = bán ít (15%), 0 = chưa bán (5%)
-  let groups = { '1': [], '2': [], '0': [] };
+  // P = Ưu tiên, 1 = bán chạy (80%), 2 = bán ít (15%), 0 = chưa bán (5%)
+  let groups = { 'P': [], '1': [], '2': [], '0': [] };
 
   for (const skuFolder of skuFolders) {
     // Cooldown check
@@ -388,8 +398,9 @@ const getSmartFilteredSkus = async (skuFolders, allProductsInfo) => {
     );
 
     if (sheetRow) {
+      const isPriority = prioritySkus.includes(skuFolder.name.toUpperCase());
       const priority = String(sheetRow['Tập Trung'] || '0').trim();
-      const group = ['1', '2', '0'].includes(priority) ? priority : '0';
+      const group = isPriority ? 'P' : (['1', '2', '0'].includes(priority) ? priority : '0');
       groups[group].push({
         folder: skuFolder,
         hasMultipleMedia: (sheetRow['1_Anh_Hang'] === 'OK' || sheetRow['2_Anh_Tu_Chup'] === 'OK') ? 2 : 1
@@ -401,14 +412,17 @@ const getSmartFilteredSkus = async (skuFolders, allProductsInfo) => {
   if (!getSmartFilteredSkus._nonGroup1Count) getSmartFilteredSkus._nonGroup1Count = 0;
 
   // Weighted random: quay xổ số mỗi lần chọn SKU
-  // 80% nhóm 1 (bán chạy) → 15% nhóm 2 (bán ít) → 5% nhóm 0 (chưa bán)
   const roll = Math.random() * 100;
   let selectedGroup;
 
   // Bảo hiểm: nếu đã 2 lần liên tiếp không phải nhóm 1 → ép nhóm 1
   const forceGroup1 = getSmartFilteredSkus._nonGroup1Count >= 2 && groups['1'].length > 0;
 
-  if (forceGroup1) {
+  if (groups['P'].length > 0) {
+    selectedGroup = 'P';
+    getSmartFilteredSkus._nonGroup1Count = 0;
+    liveLog('⭐ [Smart Filter] Có mã SKU Ưu Tiên mới về, đăng trước!', 'highlight', 'System');
+  } else if (forceGroup1) {
     selectedGroup = '1';
     getSmartFilteredSkus._nonGroup1Count = 0;
     liveLog('🔒 [Smart Filter] Bảo hiểm: ép chọn nhóm 1 sau 2 lần liên tiếp nhóm khác', 'info', 'System');
@@ -428,9 +442,9 @@ const getSmartFilteredSkus = async (skuFolders, allProductsInfo) => {
     getSmartFilteredSkus._nonGroup1Count = selectedGroup === '1' ? 0 : getSmartFilteredSkus._nonGroup1Count + 1;
   }
 
-  const groupLabels = { '1': 'Bán chạy', '2': 'Bán ít', '0': 'Chưa bán' };
+  const groupLabels = { 'P': 'Ưu Tiên Mới Về', '1': 'Bán chạy', '2': 'Bán ít', '0': 'Chưa bán' };
   liveLog(`🎯 [Smart Filter] Quay xổ số → Nhóm ${selectedGroup} (${groupLabels[selectedGroup]}) | ` +
-    `Tổng: 1:${groups['1'].length} | 2:${groups['2'].length} | 0:${groups['0'].length}`,
+    `Tổng: P:${groups['P'].length} | 1:${groups['1'].length} | 2:${groups['2'].length} | 0:${groups['0'].length}`,
     'info', 'System');
 
   // Nhóm được chọn lên đầu (shuffle nội bộ), các nhóm khác xếp sau
