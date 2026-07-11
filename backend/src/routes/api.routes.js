@@ -18,10 +18,11 @@ import { getAllPostedHistory, getTodayEngagement } from '../utils/history.js';
 import { trackPostMetrics } from '../services/tracking.service.js';
 import logEmitter from '../utils/liveLog.js';
 import { getFoldersInFolder, getImagesInFolder, getFolderIdByName, downloadFileFromDrive } from '../services/drive.service.js';
-import { initCRMDB, getConversations, getMessagesByConversation, saveMessage, markConversationAsRead, getConversationById, getCustomerProfile, updateCustomerProfile, updateBotPausedStatus } from '../utils/crm.db.js';
+import { initCRMDB, getConversations, getMessagesByConversation, saveMessage, markConversationAsRead, markConversationAsApproved, getConversationById, getCustomerProfile, updateCustomerProfile, updateBotPausedStatus } from '../utils/crm.db.js';
 import { syncAllCRM, replyCRM } from '../services/crm.service.js';
 import { autoTagAllConversations } from '../services/autotag.service.js';
 import { syncHashesFromSheets } from '../services/image-hash.service.js';
+import { startArena, stopArena, getArenaStatus, arenaEmitter } from '../services/ai_arena.service.js';
 
 // Khởi tạo bảng CRM DB nếu chưa có
 initCRMDB().then(() => console.log('✅ Đã khởi tạo CRM SQLite DB')).catch(e => console.error('Lỗi CRM DB:', e));
@@ -1336,6 +1337,17 @@ router.post('/crm/conversations/:id/read', async (req, res) => {
   }
 });
 
+// Duyệt cuộc hội thoại để đưa vào Dataset (Fine-tune)
+router.post('/crm/conversations/:id/approve', async (req, res) => {
+  try {
+    const { id } = req.params;
+    await markConversationAsApproved(id);
+    res.json({ success: true, message: 'Đã đưa vào danh sách huấn luyện (Fine-tune)' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // --- CRM Profile Endpoints ---
 
 router.get('/crm/customers/:id', async (req, res) => {
@@ -1382,6 +1394,93 @@ router.post('/crm/bot/sync-images', async (req, res) => {
   } catch (err) {
     console.error('Lỗi API sync-images:', err);
   }
+});
+
+// Endpoint giả lập tin nhắn đến để test luồng Bot AI (mà không cần webhook thực từ Facebook)
+router.post('/crm/bot/test', async (req, res) => {
+  try {
+    const { message } = req.body;
+    // Giả lập thông tin một user test cố định
+    const fakeSenderId = 'TEST_USER_9999';
+    const fakePageId = 'PAGE_TEST_001';
+    
+    // Gọi trực tiếp hàm handleIncomingMessage mà bình thường Webhook gọi
+    await handleIncomingMessage(fakeSenderId, message, 'test_user', fakePageId, 'facebook');
+    
+    res.json({ success: true, message: 'Đã gửi tin nhắn test vào luồng xử lý AI' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Helper mở mobile emulator để login Facebook thủ công
+router.post('/facebook/mobile-login-helper', async (req, res) => {
+  try {
+    const { chromium } = await import('playwright-extra');
+    const path = await import('path');
+    const { fileURLToPath } = await import('url');
+    const __filename = fileURLToPath(import.meta.url);
+    const __dirname = path.dirname(__filename);
+    const userDataDir = path.join(__dirname, '../../chrome_data_facebook');
+    
+    // Launch với cấu hình mobile giống hàm attachShopeeLinkMobile
+    const context = await chromium.launchPersistentContext(userDataDir, {
+      headless: false,
+      userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 14_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0.3 Mobile/15E148 Safari/604.1',
+      viewport: { width: 390, height: 844 },
+      deviceScaleFactor: 3,
+      isMobile: true,
+      hasTouch: true,
+      args: ['--disable-dev-shm-usage', '--disable-gpu', '--no-sandbox']
+    });
+    
+    const page = context.pages().length > 0 ? context.pages()[0] : await context.newPage();
+    await page.goto('https://m.facebook.com', { waitUntil: 'domcontentloaded' });
+    
+    console.log('\n\n=== HÃY ĐĂNG NHẬP FACEBOOK TRÊN CỬA SỔ MOBILE NÀY RỒI ĐÓNG LẠI ===\n\n');
+    res.json({ success: true, message: 'Đã mở cửa sổ login Facebook. Vui lòng thao tác trên máy chủ.' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// --- AI Arena Endpoints ---
+
+let arenaClients = [];
+arenaEmitter.on('arena_event', (data) => {
+  const payload = JSON.stringify({ ...data, time: Date.now() });
+  arenaClients.forEach(client => {
+    client.res.write(`data: ${payload}\n\n`);
+  });
+});
+
+router.post('/arena/start', (req, res) => {
+  const started = startArena();
+  if (started) res.json({ success: true, message: 'Đấu trường đã bắt đầu' });
+  else res.json({ success: false, message: 'Đấu trường đang chạy rồi' });
+});
+
+router.post('/arena/stop', (req, res) => {
+  const stopped = stopArena();
+  res.json({ success: stopped, message: stopped ? 'Đã dừng Đấu trường' : 'Đấu trường không chạy' });
+});
+
+router.get('/arena/status', (req, res) => {
+  res.json({ isRunning: getArenaStatus() });
+});
+
+router.get('/arena/stream', (req, res) => {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders();
+  
+  const client = { id: Date.now(), res };
+  arenaClients.push(client);
+  
+  req.on('close', () => {
+    arenaClients = arenaClients.filter(c => c.id !== client.id);
+  });
 });
 
 export default router;

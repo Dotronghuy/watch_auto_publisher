@@ -45,6 +45,7 @@ const Sidebar = () => {
     { name: 'Luồng công việc', path: '/workflow', icon: Workflow, permission: 'workflow' },
     { name: 'Lịch đăng', path: '/calendar', icon: Calendar, permission: 'calendar' },
     { name: 'Hộp thư (CRM)', path: '/inbox', icon: MessageCircle, permission: 'inbox' },
+    { name: 'Đấu trường AI', path: '/arena', icon: Users, permission: 'inbox' },
     { name: 'Shopee Manager', path: '/shopee', icon: ShoppingBag, permission: 'shopee' },
     { name: 'Dữ liệu SP', path: '/database', icon: Database, permission: 'database' },
     { name: 'Zalo Auto Post', path: '/zenwatch/zalo', icon: Send, permission: 'zalo' },

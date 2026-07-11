@@ -1,9 +1,9 @@
-import React, { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { 
   Send, RefreshCw, MessageCircle, MessageSquare, Search, 
   Filter, Phone, Video, MoreVertical, Plus, Smile, 
-  Mail, Link as LinkIcon, Crown, Paperclip, CheckCheck, X,
-  ChevronLeft, ChevronRight, MapPin
+  Mail, Link as LinkIcon, CheckCheck, X,
+  ChevronLeft, ChevronRight, MapPin, ThumbsUp, ThumbsDown
 } from 'lucide-react';
 import EmojiPicker from 'emoji-picker-react';
 import { Facebook, Instagram } from '../components/SocialIcons';
@@ -21,7 +21,7 @@ const InboxCRM = () => {
   const [isSending, setIsSending] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [accounts, setAccounts] = useState([]);
-  const [prevLastMsgId, setPrevLastMsgId] = useState(null);
+  const prevLastMsgIdRef = useRef(null);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [filterType, setFilterType] = useState('inbox'); // 'inbox' | 'comment'
   const [lightboxIndex, setLightboxIndex] = useState(-1); // -1 = đóng
@@ -33,8 +33,11 @@ const InboxCRM = () => {
   const [filterTag, setFilterTag] = useState(null); // null = tất cả, string = filter theo tag
   const [showTagFilter, setShowTagFilter] = useState(false);
   const [filterAccount, setFilterAccount] = useState(null); // null = tất cả, string = account_id
+  const [feedbackSavingId, setFeedbackSavingId] = useState(null);
   const [showAccountFilter, setShowAccountFilter] = useState(false);
   const [customerTagsMap, setCustomerTagsMap] = useState({}); // { senderId: [tags] }
+  const [isTesting, setIsTesting] = useState(false);
+  const [testMessage, setTestMessage] = useState('');
 
   const predefinedTags = ['Khách mới', 'Đã đặt', 'Bảo hành', 'Quan tâm', 'Khách buôn', 'Khách VIP'];
   
@@ -51,13 +54,75 @@ const InboxCRM = () => {
   const chatMessagesRef = useRef(null);
   const emojiPickerRef = useRef(null);
   const activeConvRef = useRef(activeConv);
+
+  const fetchConversations = useCallback(async () => {
+    try {
+      const res = await fetch('/api/crm/conversations');
+      const data = await res.json();
+      setConversations(data);
+    } catch (e) {
+      console.error('Lỗi fetch conversations', e);
+    }
+  }, []);
+
+  const fetchAccounts = useCallback(async () => {
+    try {
+      const res = await fetch('/api/accounts');
+      const data = await res.json();
+      setAccounts(data);
+    } catch (e) {
+      console.error('Lỗi fetch accounts', e);
+    }
+  }, []);
+
+  const fetchMessages = useCallback(async (convId) => {
+    try {
+      const res = await fetch(`/api/crm/conversations/${encodeURIComponent(convId)}/messages`);
+      const data = await res.json();
+      setMessages(data);
+    } catch (e) {
+      console.error('Lỗi fetch messages', e);
+    }
+  }, []);
+
+  const scrollToBottom = useCallback(() => {
+    if (chatMessagesRef.current) {
+      chatMessagesRef.current.scrollTop = chatMessagesRef.current.scrollHeight;
+    }
+  }, []);
+
+  const handleUpdateProfile = useCallback(async (updates) => {
+    if (!customerProfile || !activeConv) return;
+    
+    setCustomerProfile(prev => ({ ...prev, ...updates }));
+
+    const payload = {};
+    for (const [k, v] of Object.entries(updates)) {
+      payload[k] = (k === 'tags' || k === 'notes') ? JSON.stringify(v) : v;
+    }
+
+    try {
+      await fetch(`/api/crm/customers/${encodeURIComponent(activeConv.sender_id)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+    } catch(e) {
+      console.error('Lỗi lưu profile', e);
+    }
+  }, [activeConv, customerProfile]);
   
   // Keep ref in sync so SSE callback can read latest activeConv
   useEffect(() => { activeConvRef.current = activeConv; }, [activeConv]);
 
   useEffect(() => {
-    fetchConversations();
-    fetchAccounts();
+    let didCancel = false;
+    queueMicrotask(() => {
+      if (!didCancel) {
+        fetchConversations();
+        fetchAccounts();
+      }
+    });
 
     // SSE: Kết nối realtime stream
     const eventSource = new EventSource('/api/crm/stream');
@@ -80,7 +145,7 @@ const InboxCRM = () => {
           // Cũng refresh danh sách conversations để cập nhật snippet
           fetchConversations();
         }
-      } catch (e) {
+      } catch {
         // ignore parse errors
       }
     };
@@ -89,19 +154,24 @@ const InboxCRM = () => {
       // Reconnect tự động bởi browser, ko cần xử lý
     };
 
-    // Background auto-sync: gọi sync API mỗi 30 giây để backend fetch data mới từ FB/IG
+    // Background auto-sync: gọi sync API mỗi 5 giây để backend fetch data mới từ FB/IG
     const syncInterval = setInterval(async () => {
-      try { await fetch('/api/crm/sync', { method: 'POST' }); } catch(e) {}
-    }, 30000);
+      try {
+        await fetch('/api/crm/sync', { method: 'POST' });
+      } catch {
+        // Background sync will retry on the next interval.
+      }
+    }, 5000);
 
     // Trigger sync lần đầu
     fetch('/api/crm/sync', { method: 'POST' }).catch(() => {});
 
     return () => {
+      didCancel = true;
       eventSource.close();
       clearInterval(syncInterval);
     };
-  }, []);
+  }, [fetchAccounts, fetchConversations, fetchMessages]);
 
   // Fetch tags for all conversations to display in sidebar
   useEffect(() => {
@@ -113,16 +183,16 @@ const InboxCRM = () => {
           const res = await fetch(`/api/crm/customers/${encodeURIComponent(conv.sender_id)}`);
           const data = await res.json();
           let tags = [];
-          try { tags = typeof data.tags === 'string' ? JSON.parse(data.tags) : (data.tags || []); } catch(e) {}
+          try { tags = typeof data.tags === 'string' ? JSON.parse(data.tags) : (data.tags || []); } catch { tags = []; }
           tagsMap[conv.sender_id] = tags;
-        } catch(e) { tagsMap[conv.sender_id] = []; }
+        } catch { tagsMap[conv.sender_id] = []; }
       }
       if (Object.keys(tagsMap).length > 0) {
         setCustomerTagsMap(prev => ({ ...prev, ...tagsMap }));
       }
     };
     if (conversations.length > 0) fetchAllTags();
-  }, [conversations]);
+  }, [conversations, customerTagsMap]);
 
   // Handle clicking outside to close emoji picker
   useEffect(() => {
@@ -137,19 +207,19 @@ const InboxCRM = () => {
 
   useEffect(() => {
     if (activeConv) {
-      fetchMessages(activeConv.id);
+      queueMicrotask(() => fetchMessages(activeConv.id));
       
       // Fetch Customer Profile
       fetch(`/api/crm/customers/${encodeURIComponent(activeConv.sender_id)}`)
         .then(res => res.json())
         .then(data => {
-          try { data.tags = typeof data.tags === 'string' ? JSON.parse(data.tags) : []; } catch(e) { data.tags = []; }
-          try { data.notes = typeof data.notes === 'string' ? JSON.parse(data.notes) : []; } catch(e) { data.notes = []; }
+          try { data.tags = typeof data.tags === 'string' ? JSON.parse(data.tags) : []; } catch { data.tags = []; }
+          try { data.notes = typeof data.notes === 'string' ? JSON.parse(data.notes) : []; } catch { data.notes = []; }
           setCustomerProfile(data);
         })
         .catch(err => console.error('Lỗi lấy profile:', err));
     }
-  }, [activeConv]);
+  }, [activeConv, fetchMessages]);
 
   // Auto extract phone from messages if missing
   useEffect(() => {
@@ -159,37 +229,13 @@ const InboxCRM = () => {
         if (!msg.is_from_page && msg.message) {
           const match = msg.message.match(phoneRegex);
           if (match) {
-            handleUpdateProfile({ phone: match[0] });
+            queueMicrotask(() => handleUpdateProfile({ phone: match[0] }));
             break;
           }
         }
       }
     }
-  }, [messages, customerProfile]);
-
-  // Profile update helpers
-  const handleUpdateProfile = async (updates) => {
-    if (!customerProfile || !activeConv) return;
-    
-    // Optimistic update
-    setCustomerProfile(prev => ({ ...prev, ...updates }));
-
-    // Prepare payload
-    const payload = {};
-    for (const [k, v] of Object.entries(updates)) {
-      payload[k] = (k === 'tags' || k === 'notes') ? JSON.stringify(v) : v;
-    }
-
-    try {
-      await fetch(`/api/crm/customers/${encodeURIComponent(activeConv.sender_id)}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-    } catch(e) {
-      console.error('Lỗi lưu profile', e);
-    }
-  };
+  }, [messages, customerProfile, handleUpdateProfile]);
 
   const addTag = (e) => {
     if (e.key === 'Enter' && newTag.trim()) {
@@ -265,17 +311,17 @@ const InboxCRM = () => {
   useEffect(() => {
     if (messages.length > 0) {
       const currentLastId = messages[messages.length - 1].id;
-      if (currentLastId !== prevLastMsgId) {
+      if (currentLastId !== prevLastMsgIdRef.current) {
         scrollToBottom();
-        setPrevLastMsgId(currentLastId);
       }
-    } else if (messages.length === 0 && prevLastMsgId !== null) {
-      setPrevLastMsgId(null);
+      prevLastMsgIdRef.current = currentLastId;
+    } else {
+      prevLastMsgIdRef.current = null;
     }
-  }, [messages]);
+  }, [messages, scrollToBottom]);
 
   // Lấy tất cả ảnh từ messages hiện tại
-  const allImages = messages.reduce((acc, msg) => {
+  const allImages = useMemo(() => messages.reduce((acc, msg) => {
     if (!msg.message) return acc;
     const matches = msg.message.match(/\[IMAGE: (.*?)\]/g);
     if (matches) {
@@ -285,7 +331,7 @@ const InboxCRM = () => {
       });
     }
     return acc;
-  }, []);
+  }, []), [messages]);
 
   // Keyboard: ESC đóng, Left/Right chuyển ảnh
   useEffect(() => {
@@ -302,12 +348,6 @@ const InboxCRM = () => {
   const openLightbox = (url) => {
     const idx = allImages.indexOf(url);
     setLightboxIndex(idx >= 0 ? idx : 0);
-  };
-
-  const scrollToBottom = () => {
-    if (chatMessagesRef.current) {
-      chatMessagesRef.current.scrollTop = chatMessagesRef.current.scrollHeight;
-    }
   };
 
   const renderMessageText = (text) => {
@@ -347,26 +387,6 @@ const InboxCRM = () => {
     });
   };
 
-  const fetchConversations = async () => {
-    try {
-      const res = await fetch('/api/crm/conversations');
-      const data = await res.json();
-      setConversations(data);
-    } catch (e) {
-      console.error('Lỗi fetch conversations', e);
-    }
-  };
-
-  const fetchAccounts = async () => {
-    try {
-      const res = await fetch('/api/accounts');
-      const data = await res.json();
-      setAccounts(data);
-    } catch (e) {
-      console.error('Lỗi fetch accounts', e);
-    }
-  };
-
   const getAccountName = (accountId) => {
     const acc = accounts.find(a => a.id === accountId);
     return acc ? acc.name : 'Unknown Page';
@@ -375,16 +395,6 @@ const InboxCRM = () => {
   const getAccountPageId = (accountId) => {
     const acc = accounts.find(a => a.id === accountId);
     return acc ? acc.fbPageId?.trim() : null;
-  };
-
-  const fetchMessages = async (convId) => {
-    try {
-      const res = await fetch(`/api/crm/conversations/${convId}/messages`);
-      const data = await res.json();
-      setMessages(data);
-    } catch (e) {
-      console.error('Lỗi fetch messages', e);
-    }
   };
 
   const handleSync = async () => {
@@ -402,7 +412,7 @@ const InboxCRM = () => {
           timer: 2000
         });
       }
-    } catch (e) {
+    } catch {
       Swal.fire('Lỗi', 'Không thể đồng bộ', 'error');
     }
     setIsSyncing(false);
@@ -447,6 +457,84 @@ const InboxCRM = () => {
       setMessages(prev => prev.filter(m => m.id !== tempMsg.id));
     }
     setIsSending(false);
+  };
+
+  const handleBotFeedback = async (msg, rating) => {
+    if (!activeConv || !msg?.id) return;
+
+    let note = '';
+    if (rating === 'rejected') {
+      const result = await Swal.fire({
+        title: 'Góp ý cho AI',
+        input: 'textarea',
+        inputPlaceholder: 'Ví dụ: không báo giá khi chưa chắc mã, cần hỏi thêm size/màu...',
+        showCancelButton: true,
+        confirmButtonText: 'Lưu feedback',
+        cancelButtonText: 'Hủy'
+      });
+
+      if (!result.isConfirmed) return;
+      note = result.value || '';
+    }
+
+    const savingKey = `${msg.id}_${rating}`;
+    setFeedbackSavingId(savingKey);
+
+    try {
+      const res = await fetch('/api/crm/bot/feedback', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          conversationId: activeConv.id,
+          messageId: msg.id,
+          originalReply: msg.message,
+          rating,
+          note
+        })
+      });
+
+      if (!res.ok) throw new Error('Failed to save feedback');
+
+      Swal.fire({
+        toast: true,
+        position: 'top-end',
+        icon: 'success',
+        title: rating === 'approved' ? 'Đã lưu câu trả lời tốt' : 'Đã lưu feedback cho AI',
+        showConfirmButton: false,
+        timer: 1800
+      });
+    } catch (error) {
+      console.error(error);
+      Swal.fire('Lỗi', 'Không thể lưu feedback cho AI', 'error');
+    } finally {
+      setFeedbackSavingId(null);
+    }
+  };
+
+  // Hàm giả lập tin nhắn khách để test AI chatbot
+  const handleTestBot = async () => {
+    if (!activeConv || !testMessage.trim()) return;
+    setIsTesting(true);
+    try {
+      const res = await fetch('/api/crm/bot/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          conversationId: activeConv.id,
+          message: testMessage.trim()
+        })
+      });
+      if (!res.ok) throw new Error('Failed');
+      setTestMessage('');
+      Swal.fire({
+        toast: true, position: 'top-end', icon: 'info',
+        title: '🤖 AI đang xử lý tin nhắn test...',
+        showConfirmButton: false, timer: 3000
+      });
+    } catch (e) {
+      Swal.fire('Lỗi', 'Không thể gửi tin test: ' + e.message, 'error');
+    }
+    setIsTesting(false);
   };
 
   const formatTime = (isoString) => {
@@ -824,7 +912,9 @@ const InboxCRM = () => {
                         showConfirmButton: false, timer: 1500
                       });
                       fetchConversations(); // Reload list
-                    } catch(e) {}
+                    } catch (e) {
+                      console.error('Lỗi cập nhật chế độ bot:', e);
+                    }
                   }}
                   style={{
                     display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer',
@@ -855,6 +945,29 @@ const InboxCRM = () => {
                     {formatTime(msg.created_time)} {msg.is_from_page && <span style={{color: '#4ade80', fontSize: '10px'}}>✓</span>}
                   </div>
                   
+                  {msg.is_from_page && (
+                    <div className="message-feedback-actions">
+                      <button
+                        type="button"
+                        className="message-feedback-button"
+                        title="Lưu là câu trả lời tốt"
+                        disabled={feedbackSavingId === `${msg.id}_approved`}
+                        onClick={() => handleBotFeedback(msg, 'approved')}
+                      >
+                        <ThumbsUp size={14} />
+                      </button>
+                      <button
+                        type="button"
+                        className="message-feedback-button"
+                        title="Góp ý câu trả lời chưa ổn"
+                        disabled={feedbackSavingId === `${msg.id}_rejected`}
+                        onClick={() => handleBotFeedback(msg, 'rejected')}
+                      >
+                        <ThumbsDown size={14} />
+                      </button>
+                    </div>
+                  )}
+
                   {/* Read Receipts */}
                   {index === messages.length - 1 && (
                     <div className="message-readers" style={{ display: 'flex', justifyContent: msg.is_from_page ? 'flex-end' : 'flex-start', gap: '4px', marginTop: '4px', paddingRight: msg.is_from_page ? '15px' : '0' }}>
@@ -903,6 +1016,46 @@ const InboxCRM = () => {
                 </div>
                 <button className="btn-send" onClick={handleSend} disabled={!replyText.trim() || isSending || !hasPermission('inbox.reply')}>
                   <Send size={18} />
+                </button>
+              </div>
+
+              {/* === TEST BOT BAR === */}
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: '8px',
+                marginTop: '8px', padding: '8px 12px',
+                background: 'rgba(99,102,241,0.08)',
+                border: '1px dashed rgba(99,102,241,0.4)',
+                borderRadius: '10px'
+              }}>
+                <span style={{ fontSize: '12px', color: '#818cf8', whiteSpace: 'nowrap', fontWeight: 600 }}>
+                  🧪 Test AI:
+                </span>
+                <input
+                  type="text"
+                  placeholder="Nhập tin nhắn giả lập từ khách → AI sẽ reply ngay..."
+                  value={testMessage}
+                  onChange={e => setTestMessage(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && handleTestBot()}
+                  style={{
+                    flex: 1, padding: '6px 10px', borderRadius: '8px',
+                    border: '1px solid rgba(99,102,241,0.3)',
+                    background: 'rgba(99,102,241,0.1)', color: '#e2e8f0',
+                    fontSize: '13px', outline: 'none'
+                  }}
+                />
+                <button
+                  onClick={handleTestBot}
+                  disabled={!testMessage.trim() || isTesting}
+                  style={{
+                    padding: '6px 14px', borderRadius: '8px', border: 'none',
+                    background: isTesting ? '#4b5563' : 'linear-gradient(135deg, #6366f1, #818cf8)',
+                    color: '#fff', fontWeight: 700, fontSize: '12px',
+                    cursor: isTesting ? 'not-allowed' : 'pointer',
+                    whiteSpace: 'nowrap', opacity: isTesting ? 0.7 : 1,
+                    transition: 'all 0.2s'
+                  }}
+                >
+                  {isTesting ? '⏳...' : '▶ Gửi'}
                 </button>
               </div>
             </div>

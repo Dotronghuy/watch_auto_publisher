@@ -217,17 +217,20 @@ export const syncProductCatalog = async () => {
     for (let i = 1; i < rows.length; i++) {
       const row = rows[i];
       if (row[skuIndex] && row[nameIndex]) {
-        catalog.push({
-          sku: row[skuIndex],
-          name: row[nameIndex],
-          brand: brandIndex !== -1 ? row[brandIndex] : '',
-          color: colorIndex !== -1 ? row[colorIndex] : '',
-          strap: strapIndex !== -1 ? row[strapIndex] : '',
-          case: caseIndex !== -1 ? row[caseIndex] : '',
-          style: styleIndex !== -1 ? row[styleIndex] : '',
-          category: style2Index !== -1 ? row[style2Index] : '',
-          desc: descIndex !== -1 ? row[descIndex] : ''
-        });
+        const prod = {};
+        for (let j = 0; j < headers.length; j++) {
+          if (headers[j] && row[j]) {
+            prod[headers[j]] = row[j];
+          }
+        }
+        // Đảm bảo có imageUrl để tương thích nếu cột Tên là Ảnh sản phẩm/Ảnh/Video
+        const imageHeader = headers.find(h => h && h.toLowerCase().includes('ảnh'));
+        if (imageHeader && row[headers.indexOf(imageHeader)]) {
+          prod.imageUrl = row[headers.indexOf(imageHeader)];
+        } else if (row[4]) {
+          prod.imageUrl = row[4]; // Fallback cột E
+        }
+        catalog.push(prod);
       }
     }
 

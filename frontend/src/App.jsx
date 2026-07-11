@@ -14,6 +14,7 @@ import UserManagement from './pages/UserManagement';
 import InboxCRM from './pages/InboxCRM';
 import ShopeeManager from './pages/ShopeeManager';
 import ZenwatchZalo from './pages/ZenwatchZalo';
+import AiArena from './pages/AiArena';
 
 function App() {
   return (
@@ -45,6 +46,7 @@ function App() {
 
             <Route element={<ProtectedRoute permission="inbox" />}>
               <Route path="inbox" element={<InboxCRM />} />
+              <Route path="arena" element={<AiArena />} />
             </Route>
 
             <Route element={<ProtectedRoute permission="shopee" />}>

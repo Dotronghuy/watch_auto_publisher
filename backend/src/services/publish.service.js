@@ -9,6 +9,8 @@ import { getPostedImageIds, addPostedImageId, addPostMetric } from '../utils/his
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { generateBackgroundOnChatGPT, generateContentOnChatGPT } from './playwright.service.js';
+import { PrismaClient } from '@prisma/client';
+const prisma = new PrismaClient();
 import { generateBackgroundOnSD } from './sd.service.js';
 import { telegramEvents, sendBatchToTelegram } from './telegram.service.js';
 import { publishToInstagram, publishCarouselToInstagram, publishFBReels, publishIGReels, publishThreadChain } from './meta.service.js';
@@ -2032,6 +2034,20 @@ export const autoPublishRoutine = async () => {
                   await addPostMetric('facebook', postId, selectedSku.name, postContent);
                   liveLog(`✅ [${account.name}] Đăng FB 1 ảnh thành công! (ID: ${postId})`, 'success', 'Facebook');
 
+                  // --- MOBILE EMULATOR: TỰ ĐỘNG GẮN LINK SHOPEE ---
+                  try {
+                    let shopeeLinkToAttach = `https://shopee.vn/search?keyword=${selectedSku.name}`;
+                    const variant = await prisma.variant.findUnique({ where: { sku: selectedSku.name } });
+                    if (variant && variant.shopeeProductId) {
+                       shopeeLinkToAttach = `https://shopee.vn/product/0/${variant.shopeeProductId}`; // Format chuẩn nếu có ID
+                    }
+                    liveLog(`🤖 [Mobile Emulator] Bắt đầu tiến trình gắn link Shopee...`, 'typing', 'Facebook');
+                    // await attachShopeeLinkMobile(postId, shopeeLinkToAttach);
+                  } catch (e) {
+                    console.error('Lỗi khi gọi giả lập mobile gắn link:', e);
+                  }
+                  // ------------------------------------------------
+
                   // Lớp 1: Lưu hash ảnh vừa đăng vào DB
                   try {
                     const imgBuffer = fs.readFileSync(localFilePaths[0]);
@@ -2095,6 +2111,20 @@ export const autoPublishRoutine = async () => {
                   postId = feedRes.data.id;
                   await addPostMetric('facebook', postId, selectedSku.name, postContent);
                   liveLog(`✅ [${account.name}] Đăng Album FB thành công! (ID: ${postId})`, 'success', 'Facebook');
+
+                  // --- MOBILE EMULATOR: TỰ ĐỘNG GẮN LINK SHOPEE ---
+                  try {
+                    let shopeeLinkToAttach = `https://shopee.vn/search?keyword=${selectedSku.name}`;
+                    const variant = await prisma.variant.findUnique({ where: { sku: selectedSku.name } });
+                    if (variant && variant.shopeeProductId) {
+                       shopeeLinkToAttach = `https://shopee.vn/product/0/${variant.shopeeProductId}`;
+                    }
+                    liveLog(`🤖 [Mobile Emulator] Bắt đầu tiến trình gắn link Shopee...`, 'typing', 'Facebook');
+                    // await attachShopeeLinkMobile(postId, shopeeLinkToAttach);
+                  } catch (e) {
+                    console.error('Lỗi khi gọi giả lập mobile gắn link:', e);
+                  }
+                  // ------------------------------------------------
 
                   // Lớp 1: Lưu hash các ảnh trong album vừa đăng
                   for (let idx = 0; idx < localFilePaths.length; idx++) {

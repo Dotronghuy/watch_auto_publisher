@@ -9,6 +9,8 @@ import { replyCRM } from './crm.service.js';
 import { broadcastCRM } from '../routes/api.routes.js';
 import dotenv from 'dotenv';
 import { PrismaClient } from '@prisma/client';
+import { searchKnowledge } from '../utils/vector_search.js';
+import { buildMemoryContext } from './chatbot-memory.service.js';
 
 dotenv.config();
 const prisma = new PrismaClient();
@@ -27,7 +29,7 @@ const getGeminiModels = () => {
   if (modelsEnv) {
     return modelsEnv.split(',').map(m => m.trim()).filter(m => m);
   }
-  return ['gemini-3.5-flash', 'gemini-3-flash', 'gemini-2.5-flash', 'gemini-flash-latest'];
+  return ['gemini-3.5-flash', 'gemini-2.5-flash', 'gemini-flash-latest'];
 };
 
 const runWithModelFallback = async (content, requireJSON = false) => {
@@ -65,7 +67,7 @@ const getKnowledgeText = () => {
       return fs.readFileSync(KNOWLEDGE_PATH, 'utf8');
     }
   } catch (e) {}
-  return "Bạn là trợ lý ảo tư vấn đồng hồ của cửa hàng I&W Carnival.";
+  return "Bạn là trợ lý ảo tư vấn đồng hồ.";
 };
 
 const getImageReplyTemplate = () => {
@@ -221,22 +223,177 @@ Chỉ trả về JSON định dạng: { "sku": "Mã SKU khớp" }. Nếu hoàn t
 /**
  * Xử lý Bot trả lời bằng Text (Gemini)
  */
-const runGeminiText = async (history, newMessage) => {
+const clipPromptText = (value, maxChars = 5000) => {
+  const text = String(value || '').trim();
+  return text.length > maxChars ? text.slice(0, maxChars) : text;
+};
+
+const cleanJSONResponse = (text) => {
+  const raw = String(text || '').trim();
+  const withoutFence = raw
+    .replace(/^```json\s*/i, '')
+    .replace(/^```\s*/i, '')
+    .replace(/```$/i, '')
+    .trim();
+  const match = withoutFence.match(/\{[\s\S]*\}/);
+  if (!match) return null;
+
+  try {
+    return JSON.parse(match[0]);
+  } catch {
+    return null;
+  }
+};
+
+const cleanReplyText = (text) => {
+  return String(text || '')
+    .replace(/^```[a-z]*\s*/i, '')
+    .replace(/```$/i, '')
+    .trim();
+};
+
+const evaluateBotReply = async ({ customerMessage, draftReply, knowledgeText, memoryContext }) => {
+  const fallback = {
+    total_score: 8,
+    truth_score: 8,
+    tone_score: 8,
+    safety_score: 8,
+    problems: [],
+    need_rewrite: false
+  };
+
+  try {
+    const prompt = `Ban la bo phan QA cho chatbot ban dong ho.
+Hay cham diem cau tra loi truoc khi gui cho khach.
+
+NGUYEN TAC:
+- Khong duoc bia gia, ton kho, bao hanh, phi ship, thanh toan neu khong co trong kien thuc.
+- Neu khong chac, phai chuyen sang: "shop se co nhan vien kiem tra lai".
+- Cau tra loi phai ngan gon, lich su, dung tieng Viet, khong lap y.
+- Khong tu y hua chot don, giu hang, giam gia neu khong co thong tin.
+
+KIEN THUC:
+${clipPromptText(knowledgeText)}
+
+MEMORY/FEEDBACK:
+${clipPromptText(memoryContext || 'Khong co memory phu hop.')}
+
+TIN NHAN KHACH:
+${clipPromptText(customerMessage, 1200)}
+
+CAU TRA LOI NHAP:
+${clipPromptText(draftReply, 1200)}
+
+Chi tra ve JSON:
+{
+  "total_score": 0-10,
+  "truth_score": 0-10,
+  "tone_score": 0-10,
+  "safety_score": 0-10,
+  "problems": ["van de neu co"],
+  "need_rewrite": true/false
+}`;
+
+    const result = await runWithModelFallback(prompt, true);
+    const parsed = cleanJSONResponse(result.response.text()) || {};
+    const evaluation = {
+      total_score: Number(parsed.total_score ?? fallback.total_score),
+      truth_score: Number(parsed.truth_score ?? fallback.truth_score),
+      tone_score: Number(parsed.tone_score ?? fallback.tone_score),
+      safety_score: Number(parsed.safety_score ?? fallback.safety_score),
+      problems: Array.isArray(parsed.problems) ? parsed.problems.slice(0, 5) : [],
+      need_rewrite: Boolean(parsed.need_rewrite)
+    };
+
+    evaluation.need_rewrite = evaluation.need_rewrite
+      || evaluation.total_score < 8
+      || evaluation.truth_score < 7
+      || evaluation.safety_score < 8;
+
+    return evaluation;
+  } catch (error) {
+    console.warn('Bot evaluator skipped:', error.message);
+    return fallback;
+  }
+};
+
+const rewriteBotReply = async ({ customerMessage, draftReply, evaluation, knowledgeText, memoryContext }) => {
+  try {
+    const prompt = `Sua lai cau tra loi chatbot cho khach hang dong ho.
+Muc tieu: dung su that, ngan gon, than thien, tieng Viet tu nhien. KHONG DICH SANG TIENG ANH. KHONG THEM GHI CHU TIENG ANH.
+TUYET DOI KHONG BIA DAT cac tinh nang nhu Bluetooth, AI, Smartwatch, ket noi mang. Đay la dong ho co/pin truyen thong.
+Neu ban gioi thieu san pham, BAT BUOC phai chi ra 1 MA SKU CU THE va chen link anh vao cuoi cau bang cu phap: ![Anh san pham](Link_anh)
+
+Neu thieu thong tin ve gia/ton kho/bao hanh/ship/thanh toan, khong duoc doan. Hay noi shop se co nhan vien kiem tra lai.
+
+KIEN THUC:
+${clipPromptText(knowledgeText)}
+
+MEMORY/FEEDBACK:
+${clipPromptText(memoryContext || 'Khong co memory phu hop.')}
+
+TIN NHAN KHACH:
+${clipPromptText(customerMessage, 1200)}
+
+CAU TRA LOI CU:
+${clipPromptText(draftReply, 1200)}
+
+LOI CAN SUA:
+${clipPromptText((evaluation?.problems || []).join('; ') || 'Can lam cau tra loi chac chan hon.', 1000)}
+
+Chi tra ve JSON: { "reply": "cau tra loi da sua" }`;
+
+    const result = await runWithModelFallback(prompt, true);
+    const parsed = cleanJSONResponse(result.response.text()) || {};
+    return cleanReplyText(parsed.reply || draftReply);
+  } catch (error) {
+    console.warn('Bot rewriter skipped:', error.message);
+    return cleanReplyText(draftReply);
+  }
+};
+
+export const runGeminiText = async (history, newMessage) => {
   try {
     const modelName = getGeminiModels()[0];
-    const model = genAI.getGenerativeModel({ model: modelName });
-    const systemPrompt = `Bạn là trợ lý ảo tư vấn đồng hồ của I&W Carnival.
+    
+    // RAG: Tìm kiếm thông tin liên quan từ vector store
+    const [relevantKnowledge, memoryContext] = await Promise.all([
+      searchKnowledge(newMessage, 3).catch((error) => {
+        console.warn('Knowledge search skipped:', error.message);
+        return [];
+      }),
+      buildMemoryContext(newMessage).catch((error) => {
+        console.warn('Bot memory search skipped:', error.message);
+        return '';
+      })
+    ]);
+    // Fallback: nếu không tìm thấy, lấy toàn bộ hoặc lấy base (hoặc file gốc chưa có RAG)
+    let knowledgeText = relevantKnowledge.length > 0 ? relevantKnowledge.join('\n\n') : getKnowledgeText();
+    if (memoryContext) {
+      knowledgeText += `\n\n---\nKINH NGHIEM/FEEDBACK BOT DA HOC:\n${memoryContext}\n---`;
+    }
+
+    const systemPrompt = `Bạn là trợ lý ảo tư vấn đồng hồ của shop.
 Hãy trả lời lịch sự, thân thiện, dùng emoji hợp lý. Không bịa đặt thông tin.
-Dưới đây là thông tin cửa hàng:
+LƯU Ý QUAN TRỌNG:
+1. NGÔN NGỮ CHÍNH LÀ TIẾNG VIỆT. Bạn có thể dùng một số từ Tiếng Anh thông dụng trong thương mại (như: Shop, Sale, Size, Freeship, Fullbox, SKU). BẠN KHÔNG BIẾT VÀ KHÔNG ĐƯỢC PHÉP DÙNG BẤT KỲ NGÔN NGỮ NÀO KHÁC. KHÔNG DỊCH THUẬT.
+2. TUYỆT ĐỐI KHÔNG TỰ BỊA ĐẶT TÍNH NĂNG (như Bluetooth, AI, Smartwatch, đo nhịp tim...) nếu không có trong dữ liệu. Đồng hồ ở đây là đồng hồ cơ/pin truyền thống.
+3. KHI GIỚI THIỆU SẢN PHẨM: Bạn BẮT BUỘC phải chỉ ra 1 MÃ SKU cụ thể (VD: C8053G-T1). ĐỒNG THỜI, BẮT BUỘC chèn Link ảnh của sản phẩm vào cuối câu giới thiệu theo đúng cú pháp Markdown: ![Ảnh sản phẩm](Link_ảnh) (lấy Link_ảnh từ dữ liệu cung cấp).
+4. CHỈ TRẢ VỀ ĐÚNG NỘI DUNG CẦN TRẢ LỜI KHÁCH HÀNG.
+
+Dưới đây là thông tin cửa hàng và chính sách liên quan:
 ---
-${getKnowledgeText()}
+${knowledgeText}
 ---
 `;
-    // Build history format for Gemini
-    let chatHistory = [];
-    let expectedRole = "user";
 
-    // Prepare messages: combine sequential messages of the same role
+    // Tạo model với systemInstruction
+    const model = genAI.getGenerativeModel({ 
+      model: modelName,
+      systemInstruction: { parts: [{ text: systemPrompt }] }
+    });
+
+    // Build history format cho Gemini SDK startChat
     const groupedMessages = [];
     let currentGroup = null;
 
@@ -255,30 +412,50 @@ ${getKnowledgeText()}
 
     // Ensure the first message is "user"
     if (groupedMessages.length > 0 && groupedMessages[0].role !== "user") {
-      groupedMessages.shift(); // Remove the leading 'model' message if there is one
+      groupedMessages.shift();
     }
 
     // Ensure the last message in history is "model" (because newMessage is "user")
     if (groupedMessages.length > 0 && groupedMessages[groupedMessages.length - 1].role !== "model") {
-      // If the last message is "user", we can just append it to the newMessage and remove it from history
       const lastMsg = groupedMessages.pop();
       newMessage = lastMsg.text + "\n" + newMessage;
     }
 
-    chatHistory = groupedMessages.map(g => ({
+    const chatHistory = groupedMessages.map(g => ({
       role: g.role,
       parts: [{ text: g.text }]
     }));
 
-    const chat = model.startChat({
-      history: chatHistory,
-      systemInstruction: { role: "system", parts: [{ text: systemPrompt }] }
+    // Sử dụng startChat + sendMessage (đúng chuẩn Gemini SDK)
+    const chat = model.startChat({ history: chatHistory });
+    const result = await chat.sendMessage(newMessage);
+    const draftReply = cleanReplyText(result.response.text());
+    
+    if (!draftReply) {
+      return "Dạ shop đã nhận được tin nhắn. Sẽ có nhân viên hỗ trợ anh/chị ngay ạ!";
+    }
+
+    const evaluation = await evaluateBotReply({
+      customerMessage: newMessage,
+      draftReply,
+      knowledgeText,
+      memoryContext
     });
 
-    const result = await chat.sendMessage(newMessage);
-    return result.response.text();
+    if (evaluation.need_rewrite) {
+      return rewriteBotReply({
+        customerMessage: newMessage,
+        draftReply,
+        evaluation,
+        knowledgeText,
+        memoryContext
+      });
+    }
+
+    return draftReply;
   } catch (error) {
     console.error("Lỗi Gemini Text:", error.message);
+    fs.appendFileSync('debug_log.txt', `[runGeminiText] Error: ${error.stack}\n`);
     return "Dạ shop đã nhận được tin nhắn. Sẽ có nhân viên hỗ trợ anh/chị ngay ạ!";
   }
 };
@@ -344,7 +521,9 @@ const processConversation = async (conversationId, messageText, imageUrl, settin
 
     let replyMessage = "";
 
-    // 2. Xử lý tin nhắn CÓ ẢNH
+    // 2. Xử lý tin nhắn CÓ ẢNH & TEXT GỘP CHUNG
+    let systemImageContext = "";
+
     if (imageUrl) {
       console.log(`🤖 Bot đang xử lý ảnh từ khách...`);
       
@@ -367,13 +546,9 @@ const processConversation = async (conversationId, messageText, imageUrl, settin
           const price = productInfo["Giá sale"] || productInfo["Giá gốc"] || "Đang cập nhật";
           const name = productInfo["Tên sản phẩm"] || skuFound;
           
-          const template = getImageReplyTemplate();
-          replyMessage = template
-            .replace(/\{\{PRODUCT_NAME\}\}/g, name)
-            .replace(/\{\{SKU\}\}/g, skuFound)
-            .replace(/\{\{PRICE\}\}/g, price);
+          systemImageContext = `[HỆ THỐNG PHÂN TÍCH ẢNH: Hệ thống nhận diện ảnh khách gửi là mẫu "${name}" (Mã: ${skuFound}), Giá: ${price}. Dựa vào thông tin này, hãy tư vấn cho khách.]\n\n`;
         } else {
-          replyMessage = `Dạ mẫu anh/chị gửi có mã là **${skuFound}**. Anh/chị đợi chút để nhân viên shop kiểm tra tồn kho nha!`;
+          systemImageContext = `[HỆ THỐNG PHÂN TÍCH ẢNH: Ảnh khách gửi có mã ${skuFound} nhưng chưa có thông tin giá. Hãy báo khách đợi nhân viên kiểm tra.]\n\n`;
         }
       } else {
         // Lớp 3: Gemini Vision (2-Stage Verification)
@@ -387,36 +562,43 @@ const processConversation = async (conversationId, messageText, imageUrl, settin
              if (productInfo) {
                const price = productInfo["Giá sale"] || productInfo["Giá gốc"] || "Đang cập nhật";
                const name = productInfo["Tên sản phẩm"] || layer3Result.sku;
-               const template = getImageReplyTemplate();
-               replyMessage = template
-                 .replace(/\{\{PRODUCT_NAME\}\}/g, name)
-                 .replace(/\{\{SKU\}\}/g, layer3Result.sku)
-                 .replace(/\{\{PRICE\}\}/g, price);
+               
+               systemImageContext = `[HỆ THỐNG PHÂN TÍCH ẢNH: Hệ thống nhận diện ảnh khách gửi là mẫu "${name}" (Mã: ${layer3Result.sku}), Giá: ${price}. Dựa vào thông tin này, hãy tư vấn cho khách.]\n\n`;
              } else {
-               replyMessage = layer3Result.message;
+               systemImageContext = `[HỆ THỐNG PHÂN TÍCH ẢNH: Nhận diện ảnh: ${layer3Result.message}]\n\n`;
              }
            } else {
              // Lớp 3 không chốt được mã
-             replyMessage = layer3Result.message;
+             systemImageContext = `[HỆ THỐNG PHÂN TÍCH ẢNH: Nhận diện ảnh: ${layer3Result.message}]\n\n`;
            }
         } else {
-           replyMessage = "Dạ mẫu này bên shop cần nhân viên kiểm tra lại chút xíu, anh/chị đợi lát nha!";
+           systemImageContext = `[HỆ THỐNG PHÂN TÍCH ẢNH: Không nhận diện được ảnh. Hãy báo khách đợi nhân viên kiểm tra.]\n\n`;
         }
       }
     } 
-    // 3. Xử lý tin nhắn CHỈ CÓ TEXT
-    else {
-      if (!isAiAllowed) {
-        console.log(`🤖 Bot đang xử lý Text nhưng API AI BỊ TẮT -> Fallback kịch bản gốc.`);
-        replyMessage = "Dạ hiện tại hệ thống AI đang tạm ngưng, anh/chị cần tư vấn thêm cứ để lại tin nhắn, nhân viên shop sẽ phản hồi sớm nhất nha!";
+
+    // 3. Xử lý Logic Text Chung (Bao gồm cả khi có ảnh)
+    if (!isAiAllowed) {
+      console.log(`🤖 API AI BỊ TẮT -> Fallback kịch bản gốc.`);
+      if (imageUrl && !systemImageContext.includes("Không nhận diện được") && !systemImageContext.includes("Nhận diện ảnh")) {
+         // Trích xuất mã để trả lời nhanh nếu tắt AI nhưng vẫn dò ra ở lớp 1, 2
+         const matchSku = systemImageContext.match(/Mã: ([^)]+)/);
+         if (matchSku) {
+             replyMessage = `Dạ mẫu anh/chị gửi có mã là **${matchSku[1]}**. Anh/chị đợi chút để nhân viên shop kiểm tra tồn kho nha!`;
+         } else {
+             replyMessage = "Dạ shop đã nhận được ảnh. Nhân viên shop sẽ phản hồi sớm nhất nha!";
+         }
       } else {
-        console.log(`🤖 Bot đang xử lý Text bằng Gemini...`);
-        // Lấy lịch sử 10 tin nhắn gần nhất
-        const historyRows = await getMessagesByConversation(conversationId);
-        const recentHistory = historyRows.slice(-10); // Không gửi quá dài để đỡ token
-        
-        replyMessage = await runGeminiText(recentHistory, messageText || '');
+         replyMessage = "Dạ hiện tại hệ thống AI đang tạm ngưng, anh/chị cần tư vấn thêm cứ để lại tin nhắn, nhân viên shop sẽ phản hồi sớm nhất nha!";
       }
+    } else {
+      console.log(`🤖 Bot đang xử lý Ngữ cảnh bằng Gemini...`);
+      // Lấy lịch sử 10 tin nhắn gần nhất
+      const historyRows = await getMessagesByConversation(conversationId);
+      const recentHistory = historyRows.slice(-10); // Không gửi quá dài để đỡ token
+      
+      const finalPrompt = systemImageContext + (messageText || '');
+      replyMessage = await runGeminiText(recentHistory, finalPrompt);
     }
 
     // 4. Delay tự nhiên và Gửi Reply

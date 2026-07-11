@@ -51,7 +51,7 @@ export const fetchFacebookInbox = async (pageToken, accountId, fbPageId) => {
       if (!sender && participants.length > 0) sender = participants[0];
       if (!sender) sender = { name: 'Unknown', id: '0' };
       
-      await saveConversation(conv.id, 'facebook', 'inbox', sender.name, sender.id, conv.snippet, conv.updated_time, accountId);
+      await saveConversation(conv.id, 'facebook', 'inbox', sender.name, sender.id, conv.snippet, conv.updated_time, accountId, { mergeExisting: true });
       
       let hasNewCustomerMessage = false;
       let textToProcess = '';
@@ -93,7 +93,9 @@ export const fetchFacebookInbox = async (pageToken, accountId, fbPageId) => {
             try {
               const { handleIncomingMessage } = await import('./chatbot.service.js');
               handleIncomingMessage(conv.id, textToProcess, imageUrlToProcess).catch(e => console.error('Chatbot Sync FB error:', e.message));
-            } catch(err) {}
+            } catch (err) {
+              console.error('Không thể nạp chatbot service cho FB sync:', err.message);
+            }
           }
         }
       }
@@ -166,7 +168,7 @@ export const fetchInstagramInbox = async (pageToken, accountId, igUserId) => {
       
       const senderName = sender.username || sender.name || 'Instagram User';
       
-      await saveConversation(conv.id, 'instagram', 'inbox', senderName, sender.id, conv.snippet, conv.updated_time, accountId);
+      await saveConversation(conv.id, 'instagram', 'inbox', senderName, sender.id, conv.snippet, conv.updated_time, accountId, { mergeExisting: true });
       
       let hasNewCustomerMessage = false;
       let textToProcess = '';
@@ -206,7 +208,9 @@ export const fetchInstagramInbox = async (pageToken, accountId, igUserId) => {
             try {
               const { handleIncomingMessage } = await import('./chatbot.service.js');
               handleIncomingMessage(conv.id, textToProcess, imageUrlToProcess).catch(e => console.error('Chatbot Sync IG error:', e.message));
-            } catch(err) {}
+            } catch (err) {
+              console.error('Không thể nạp chatbot service cho IG sync:', err.message);
+            }
           }
         }
       }

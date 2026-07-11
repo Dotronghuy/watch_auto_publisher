@@ -6,6 +6,7 @@ import cron from 'node-cron';
 import { spawn } from 'child_process';
 import { syncAllCRM } from './services/crm.service.js';
 import { syncHashesFromSheets } from './services/image-hash.service.js';
+import { runNightlySelfLearning } from './services/self-learning.service.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -218,6 +219,22 @@ export const startScheduler = async (isSettingsUpdate = false) => {
     }
   });
   console.log('✅ Đã lên lịch Auto-Scan Google Drive lúc 02:00 sáng mỗi ngày.');
+
+  // --- THÊM: Hẹn giờ Tự học ban đêm (Self-Learning AI) tự động lúc 2:00 sáng ---
+  if (global.learningCronJob) {
+    global.learningCronJob.stop();
+  }
+  global.learningCronJob = cron.schedule('0 2 * * *', () => {
+    console.log('⏰ Bắt đầu tiến trình Tự học ban đêm của AI (Lịch định kỳ: 2:00 sáng)...');
+    const scriptPath = path.join(__dirname, './scripts/learn_from_chats.js');
+    const child = spawn('node', [scriptPath], {
+      cwd: path.join(__dirname, '../')
+    });
+    child.stdout.on('data', data => console.log(`[Self-Learning]: ${data.toString().trim()}`));
+    child.stderr.on('data', data => console.error(`[Self-Learning Error]: ${data.toString().trim()}`));
+    child.on('close', code => console.log(`[Self-Learning] Kết thúc với mã ${code}`));
+  });
+  console.log('✅ Đã lên lịch AI Tự học (Self-Learning) lúc 02:00 sáng mỗi ngày.');
 
   // --- THÊM: Hẹn giờ đồng bộ Lớp 2 Chatbot (Google Sheets Images) tự động lúc 3:00 sáng ---
   if (global.hashCronJob) {

@@ -2,7 +2,7 @@ import express from 'express';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { saveConversation, saveMessage, getConversations, getMessageById } from '../utils/crm.db.js';
+import { saveConversation, saveMessage, getConversations, getMessageById, getConversationByIdentity } from '../utils/crm.db.js';
 import { broadcastCRM } from './api.routes.js';
 import { autoTagCustomer } from '../services/autotag.service.js';
 import { handleIncomingMessage } from '../services/chatbot.service.js';
@@ -42,7 +42,9 @@ const getAccountByPageId = (pageId) => {
       const accounts = JSON.parse(fs.readFileSync(accountsPath, 'utf8'));
       return accounts.find(a => a.fbPageId?.trim() === String(pageId).trim()) || null;
     }
-  } catch (e) {}
+  } catch {
+    // Missing or malformed account config; webhook will fall back to unknown.
+  }
   return null;
 };
 
@@ -93,12 +95,14 @@ router.post('/', async (req, res) => {
             
             // Conversation ID format giống như FB API trả về: t_xxxxx
             // Nhưng webhook không trả conversation ID, nên phải tìm hoặc tạo
-            const convId = `t_${[senderId, recipientId].sort().join('_')}`;
+            const syntheticConvId = `t_${[senderId, recipientId].sort().join('_')}`;
+            const existingConversation = await getConversationByIdentity('facebook', 'inbox', customerId, accountId);
+            const convId = existingConversation?.id || syntheticConvId;
 
             // Lưu conversation
             await saveConversation(
               convId, 'facebook', 'inbox',
-              senderName, customerId,
+              existingConversation?.sender_name || senderName, customerId,
               text.substring(0, 100) || '📸 Tệp đính kèm',
               new Date(timestamp).toISOString(),
               accountId
@@ -186,7 +190,6 @@ router.post('/', async (req, res) => {
             const isFromPage = senderId === igUserId;
             const customerId = isFromPage ? recipientId : senderId;
             const senderName = isFromPage ? 'Page' : (senderId || 'IG User');
-            const convId = `ig_${[senderId, recipientId].sort().join('_')}`;
 
             // Tìm account bằng igUserId
             let accountId = 'unknown';
@@ -195,11 +198,17 @@ router.post('/', async (req, res) => {
               const accounts = JSON.parse(fs.readFileSync(accountsPath, 'utf8'));
               const acc = accounts.find(a => a.igUserId === igUserId);
               if (acc) accountId = acc.id;
-            } catch (e) {}
+            } catch {
+              // Missing or malformed account config; webhook will fall back to unknown.
+            }
+
+            const syntheticConvId = `ig_${[senderId, recipientId].sort().join('_')}`;
+            const existingConversation = await getConversationByIdentity('instagram', 'inbox', customerId, accountId);
+            const convId = existingConversation?.id || syntheticConvId;
 
             await saveConversation(
               convId, 'instagram', 'inbox',
-              senderName, customerId,
+              existingConversation?.sender_name || senderName, customerId,
               text.substring(0, 100) || '📸 Tệp đính kèm',
               new Date(timestamp).toISOString(),
               accountId
