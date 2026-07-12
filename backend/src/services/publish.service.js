@@ -2042,7 +2042,7 @@ export const autoPublishRoutine = async () => {
                        shopeeLinkToAttach = `https://shopee.vn/product/0/${variant.shopeeProductId}`; // Format chuẩn nếu có ID
                     }
                     liveLog(`🤖 [Mobile Emulator] Bắt đầu tiến trình gắn link Shopee...`, 'typing', 'Facebook');
-                    // await attachShopeeLinkMobile(postId, shopeeLinkToAttach);
+                    await attachShopeeLinkMobile(postId, shopeeLinkToAttach);
                   } catch (e) {
                     console.error('Lỗi khi gọi giả lập mobile gắn link:', e);
                   }
@@ -2120,7 +2120,7 @@ export const autoPublishRoutine = async () => {
                        shopeeLinkToAttach = `https://shopee.vn/product/0/${variant.shopeeProductId}`;
                     }
                     liveLog(`🤖 [Mobile Emulator] Bắt đầu tiến trình gắn link Shopee...`, 'typing', 'Facebook');
-                    // await attachShopeeLinkMobile(postId, shopeeLinkToAttach);
+                    await attachShopeeLinkMobile(postId, shopeeLinkToAttach);
                   } catch (e) {
                     console.error('Lỗi khi gọi giả lập mobile gắn link:', e);
                   }
@@ -2193,9 +2193,96 @@ export const autoPublishRoutine = async () => {
     console.error('❌ Tiến trình tự động thất bại:', error.response?.data || error.message);
     throw error;
   } finally {
-    isRoutineRunning = false; // Luôn reset trạng thái khi kết thúc (dù thành công, lỗi hay bị abort)
+import { checkAdbDevice, dumpUI, findNodeByKeyword, tap, inputText, runAdbCommand, sleep } from './adb.service.js';
+
+export async function attachShopeeLinkMobile(postId, shopeeLinkToAttach) {
+  liveLog(`🤖 [ADB Emulator] Mở giả lập Android để gắn link cho post: ${postId}...`, 'info', 'Facebook');
+  
+  try {
+    const deviceId = await checkAdbDevice();
+    liveLog(`🤖 [ADB Emulator] Đã kết nối giả lập: ${deviceId}`, 'info', 'Facebook');
+    
+    // Mở ứng dụng Facebook bằng deep link đến bài viết (nếu hỗ trợ) hoặc mở app Facebook thường
+    // fb://page/{page_id} hoặc fb://post/{post_id}
+    // Tuy nhiên, do cấu trúc ID của Graph API phức tạp (pageId_postId), an toàn nhất là mở ứng dụng
+    liveLog(`🤖 [ADB Emulator] Đang mở ứng dụng Facebook...`, 'typing', 'Facebook');
+    await runAdbCommand('shell monkey -p com.facebook.katana -c android.intent.category.LAUNCHER 1');
+    await sleep(8000); // Chờ App load xong
+    
+    // Yêu cầu: Giả lập phải ĐANG MỞ SẴN ở màn hình Trang cá nhân (Profile Fanpage) và vừa mới đăng bài.
+    // Thực hiện thao tác vuốt để Refresh trang
+    liveLog(`🤖 [ADB Emulator] Đang làm mới bảng tin Fanpage...`, 'typing', 'Facebook');
+    await runAdbCommand('shell input swipe 500 400 500 1200 600');
+    await sleep(5000); 
+    
+    liveLog(`🤖 [ADB Emulator] Đang tìm dấu 3 chấm của bài viết đầu tiên...`, 'typing', 'Facebook');
+    let xml = await dumpUI();
+    // Trên App Facebook tiếng Việt, dấu 3 chấm bài viết thường có content-desc là "Tùy chọn khác" hoặc "Tùy chọn bài viết"
+    let moreBtn = await findNodeByKeyword(xml, ['Tùy chọn khác', 'Tùy chọn bài viết', 'Hành động đối với bài viết']);
+    
+    // Nếu không tìm thấy, thử vuốt xuống 1 chút
+    if (!moreBtn) {
+        await runAdbCommand('shell input swipe 500 1000 500 500 500');
+        await sleep(3000);
+        xml = await dumpUI();
+        moreBtn = await findNodeByKeyword(xml, ['Tùy chọn khác', 'Tùy chọn bài viết', 'Hành động đối với bài viết']);
+    }
+
+    if (moreBtn) {
+        liveLog(`🤖 [ADB Emulator] Đã tìm thấy nút 3 chấm, đang bấm...`, 'typing', 'Facebook');
+        await tap(moreBtn.x, moreBtn.y);
+        await sleep(3000); // Chờ menu pop-up hiện lên
+        
+        liveLog(`🤖 [ADB Emulator] Tìm nút "Quản lý liên kết đến sản phẩm"...`, 'typing', 'Facebook');
+        xml = await dumpUI();
+        const manageLinkBtn = await findNodeByKeyword(xml, ['Quản lý liên kết đến sản phẩm', 'Thêm liên kết sản phẩm']);
+        
+        if (manageLinkBtn) {
+            await tap(manageLinkBtn.x, manageLinkBtn.y);
+            await sleep(3000); // Chờ form chuyển trang
+            
+            liveLog(`🤖 [ADB Emulator] Đang nhập URL Shopee...`, 'typing', 'Facebook');
+            xml = await dumpUI();
+            
+            // Tìm ô URL
+            const urlInput = await findNodeByKeyword(xml, ['URL', 'Nhập URL', 'Liên kết']);
+            if (urlInput) {
+                await tap(urlInput.x, urlInput.y);
+                await sleep(1000);
+                await inputText(shopeeLinkToAttach);
+                await sleep(1000);
+                // Bấm nút Next / Enter trên bàn phím ảo để thoát focus
+                await runAdbCommand('shell input keyevent 66');
+            }
+            
+            liveLog(`🤖 [ADB Emulator] Đang nhập Tên liên kết...`, 'typing', 'Facebook');
+            xml = await dumpUI();
+            const nameInput = await findNodeByKeyword(xml, ['Tên liên kết', 'Mua ở đây']);
+            if (nameInput) {
+                await tap(nameInput.x, nameInput.y);
+                await sleep(1000);
+                await inputText('Mua ở đây');
+                await sleep(1000);
+                await runAdbCommand('shell input keyevent 66'); // Ẩn bàn phím
+            }
+            
+            liveLog(`🤖 [ADB Emulator] Bấm nút Lưu...`, 'typing', 'Facebook');
+            xml = await dumpUI();
+            const saveBtn = await findNodeByKeyword(xml, ['Lưu']);
+            if (saveBtn) {
+                await tap(saveBtn.x, saveBtn.y);
+                await sleep(3000);
+                liveLog(`✅ [ADB Emulator] Đã gắn link Shopee thành công!`, 'success', 'Facebook');
+            } else {
+                liveLog(`❌ [ADB Emulator] Lỗi: Không tìm thấy nút Lưu.`, 'error', 'Facebook');
+            }
+        } else {
+            liveLog(`❌ [ADB Emulator] Lỗi: Không tìm thấy dòng "Quản lý liên kết đến sản phẩm" trong Menu 3 chấm.`, 'error', 'Facebook');
+        }
+    } else {
+        liveLog(`❌ [ADB Emulator] Lỗi: Không tìm thấy nút 3 chấm nào trên màn hình app.`, 'error', 'Facebook');
+    }
+  } catch (error) {
+    liveLog(`❌ [ADB Emulator] Bị lỗi: ${error.message}`, 'error', 'Facebook');
   }
-};
-
-
-
+}
