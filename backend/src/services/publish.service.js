@@ -513,11 +513,14 @@ export const dryRunRoutine = async () => {
   let localFilePaths = [];
 
   try {
-    const brandFolders = await getFoldersInFolder(ROOT_DRIVE_FOLDER_ID);
-    const iwFolder = brandFolders.find(f => f.name.toLowerCase().includes('i&w carnival') || f.name.toLowerCase().includes('i&w'));
-    if (!iwFolder) throw new Error('Không tìm thấy thư mục I&W Carnival trong Drive!');
-    const skuFolders = (await getFoldersInFolder(iwFolder.id)).filter(f => !f.name.toLowerCase().includes('review'));
-    if (skuFolders.length === 0) throw new Error('Không tìm thấy thư mục SKU nào trong thư mục I&W Carnival!');
+        const brandFolders = await getFoldersInFolder(ROOT_DRIVE_FOLDER_ID);
+    const validBrands = brandFolders.filter(f => !f.name.toLowerCase().includes('template') && !f.name.toLowerCase().includes('review'));
+    let skuFolders = [];
+    for (const b of validBrands) {
+      const bSkus = await getFoldersInFolder(b.id);
+      skuFolders = skuFolders.concat(bSkus.filter(f => !f.name.toLowerCase().includes('review')));
+    }
+    if (skuFolders.length === 0) throw new Error('Không tìm thấy thư mục SKU nào trong Drive!');
 
     const postedIds = await getPostedImageIds();
 
@@ -998,11 +1001,14 @@ export const startTelegramTrainingLoop = async (targetSku = null) => {
     try {
       console.log('--- ĐÃ CHẠY VÀO VÒNG LẶP TRAIN ẢNH ---');
       liveLog('Bắt đầu vòng lặp Train Ảnh mới...', 'highlight', 'System');
-      const brandFolders = await getFoldersInFolder(ROOT_DRIVE_FOLDER_ID);
-      const iwFolder = brandFolders.find(f => f.name.toLowerCase().includes('i&w carnival') || f.name.toLowerCase().includes('i&w'));
-      if (!iwFolder) throw new Error('Không tìm thấy thư mục I&W Carnival trong Drive!');
-      const skuFolders = (await getFoldersInFolder(iwFolder.id)).filter(f => !f.name.toLowerCase().includes('review'));
-      if (skuFolders.length === 0) throw new Error('Không tìm thấy thư mục SKU nào trong thư mục I&W Carnival!');
+          const brandFolders = await getFoldersInFolder(ROOT_DRIVE_FOLDER_ID);
+    const validBrands = brandFolders.filter(f => !f.name.toLowerCase().includes('template') && !f.name.toLowerCase().includes('review'));
+    let skuFolders = [];
+    for (const b of validBrands) {
+      const bSkus = await getFoldersInFolder(b.id);
+      skuFolders = skuFolders.concat(bSkus.filter(f => !f.name.toLowerCase().includes('review')));
+    }
+    if (skuFolders.length === 0) throw new Error('Không tìm thấy thư mục SKU nào trong Drive!');
 
       const postedIds = await getPostedImageIds();
       checkAbort();
@@ -1280,11 +1286,14 @@ export const trainContentOnly = async () => {
   liveLog('📝 [TRAIN CONTENT] Bắt đầu tạo nội dung để training...', 'highlight', 'System');
 
   try {
-    const brandFolders = await getFoldersInFolder(ROOT_DRIVE_FOLDER_ID);
-    const iwFolder = brandFolders.find(f => f.name.toLowerCase().includes('i&w carnival') || f.name.toLowerCase().includes('i&w'));
-    if (!iwFolder) throw new Error('Không tìm thấy thư mục I&W Carnival trong Drive!');
-    const skuFolders = (await getFoldersInFolder(iwFolder.id)).filter(f => !f.name.toLowerCase().includes('review'));
-    if (skuFolders.length === 0) throw new Error('Không tìm thấy thư mục SKU nào trong thư mục I&W Carnival!');
+        const brandFolders = await getFoldersInFolder(ROOT_DRIVE_FOLDER_ID);
+    const validBrands = brandFolders.filter(f => !f.name.toLowerCase().includes('template') && !f.name.toLowerCase().includes('review'));
+    let skuFolders = [];
+    for (const b of validBrands) {
+      const bSkus = await getFoldersInFolder(b.id);
+      skuFolders = skuFolders.concat(bSkus.filter(f => !f.name.toLowerCase().includes('review')));
+    }
+    if (skuFolders.length === 0) throw new Error('Không tìm thấy thư mục SKU nào trong Drive!');
 
     checkAbort();
 
@@ -1458,11 +1467,14 @@ export const autoPublishRoutine = async () => {
   let finalSkuName = "Unknown";
 
   try {
-    const brandFolders = await getFoldersInFolder(ROOT_DRIVE_FOLDER_ID);
-    const iwFolder = brandFolders.find(f => f.name.toLowerCase().includes('i&w carnival') || f.name.toLowerCase().includes('i&w'));
-    if (!iwFolder) throw new Error('Không tìm thấy thư mục I&W Carnival trong Drive!');
-    const skuFolders = (await getFoldersInFolder(iwFolder.id)).filter(f => !f.name.toLowerCase().includes('review'));
-    if (skuFolders.length === 0) throw new Error('Không tìm thấy thư mục SKU nào trong thư mục I&W Carnival!');
+        const brandFolders = await getFoldersInFolder(ROOT_DRIVE_FOLDER_ID);
+    const validBrands = brandFolders.filter(f => !f.name.toLowerCase().includes('template') && !f.name.toLowerCase().includes('review'));
+    let skuFolders = [];
+    for (const b of validBrands) {
+      const bSkus = await getFoldersInFolder(b.id);
+      skuFolders = skuFolders.concat(bSkus.filter(f => !f.name.toLowerCase().includes('review')));
+    }
+    if (skuFolders.length === 0) throw new Error('Không tìm thấy thư mục SKU nào trong Drive!');
 
     const postedIds = await getPostedImageIds();
 
