@@ -18,6 +18,7 @@ import { addMusicToVideo, hasAudioStream } from './video.service.js';
 import { addActivity } from '../utils/activity.js';
 import { liveLog } from '../utils/liveLog.js';
 import { computeHashFromBuffer } from './image-hash.service.js';
+import { checkAdbDevice, dumpUI, findNodeByKeyword, tap, inputText, runAdbCommand, sleep } from './adb.service.js';
 import { saveImageHash } from '../utils/crm.db.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -2192,8 +2193,8 @@ export const autoPublishRoutine = async () => {
     cleanTempDirectory();
     console.error('❌ Tiến trình tự động thất bại:', error.response?.data || error.message);
     throw error;
-  } finally {
-import { checkAdbDevice, dumpUI, findNodeByKeyword, tap, inputText, runAdbCommand, sleep } from './adb.service.js';
+  }
+}
 
 export async function attachShopeeLinkMobile(postId, shopeeLinkToAttach) {
   liveLog(`🤖 [ADB Emulator] Mở giả lập Android để gắn link cho post: ${postId}...`, 'info', 'Facebook');
