@@ -15,13 +15,24 @@ const auth = new google.auth.GoogleAuth({
 });
 
 const sheets = google.sheets({ version: 'v4', auth });
-const SPREADSHEET_ID = '1y2U9cuBNTT6SoHNHsHycLqVlwVM9yjvsSp6Nq2DPwxo';
+
+const getSheetId = () => {
+  try {
+    const settingsPath = path.join(__dirname, '../../config/settings.json');
+    if (fs.existsSync(settingsPath)) {
+      const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+      if (settings.googleSheetId) return settings.googleSheetId;
+    }
+  } catch (e) {}
+  return process.env.GOOGLE_SHEET_ID || '1y2U9cuBNTT6SoHNHsHycLqVlwVM9yjvsSp6Nq2DPwxo';
+};
+
 
 export const getProductInfoBySku = async (sku) => {
   try {
     console.log(`Đang tra cứu thông tin SKU ${sku} trên Google Sheets...`);
     const res = await sheets.spreadsheets.values.get({
-      spreadsheetId: SPREADSHEET_ID,
+      spreadsheetId: getSheetId(),
       range: 'A:AH', // Lấy từ cột A đến AH theo như ảnh cung cấp
     });
 
@@ -65,7 +76,7 @@ export const getProductInfoBySku = async (sku) => {
 export const updateProductPostInfo = async (sku, postId) => {
   try {
     const res = await sheets.spreadsheets.values.get({
-      spreadsheetId: SPREADSHEET_ID,
+      spreadsheetId: getSheetId(),
       range: 'A:C', // Mã sản phẩm nằm ở cột C
     });
 
@@ -86,7 +97,7 @@ export const updateProductPostInfo = async (sku, postId) => {
     if (rowIndex !== -1) {
       // 1. Viết tiêu đề nếu chưa có (Ghi vào 2 cột AI và AJ)
       await sheets.spreadsheets.values.update({
-        spreadsheetId: SPREADSHEET_ID,
+        spreadsheetId: getSheetId(),
         range: 'AI1:AJ1',
         valueInputOption: 'USER_ENTERED',
         requestBody: { values: [['Post ID', 'Ngày đăng']] }
@@ -95,7 +106,7 @@ export const updateProductPostInfo = async (sku, postId) => {
       // 2. Viết dữ liệu vào đúng dòng
       const now = new Date().toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' });
       await sheets.spreadsheets.values.update({
-        spreadsheetId: SPREADSHEET_ID,
+        spreadsheetId: getSheetId(),
         range: `AI${rowIndex}:AJ${rowIndex}`,
         valueInputOption: 'USER_ENTERED',
         requestBody: { values: [[postId, now]] }
@@ -111,7 +122,7 @@ export const updateProductPostInfo = async (sku, postId) => {
 export const getAllProductsPostInfo = async () => {
   try {
     const res = await sheets.spreadsheets.values.get({
-      spreadsheetId: SPREADSHEET_ID,
+      spreadsheetId: getSheetId(),
       range: 'A:AK',
     });
 
@@ -129,7 +140,7 @@ export const getAllProductsPostInfo = async () => {
     // Tự động tạo cột Chu kỳ đăng nếu chưa có
     if (cycleIndex === -1) {
       await sheets.spreadsheets.values.update({
-        spreadsheetId: SPREADSHEET_ID,
+        spreadsheetId: getSheetId(),
         range: 'AK1',
         valueInputOption: 'USER_ENTERED',
         requestBody: { values: [['Chu kỳ đăng (phút)']] }
@@ -160,7 +171,7 @@ export const getAllProductsPostInfo = async () => {
 export const getAllProductsWithImages = async () => {
   try {
     const res = await sheets.spreadsheets.values.get({
-      spreadsheetId: SPREADSHEET_ID,
+      spreadsheetId: getSheetId(),
       range: 'A:E',
     });
 
@@ -193,7 +204,7 @@ export const getAllProductsWithImages = async () => {
 export const syncProductCatalog = async () => {
   try {
     const res = await sheets.spreadsheets.values.get({
-      spreadsheetId: SPREADSHEET_ID,
+      spreadsheetId: getSheetId(),
       range: 'A:AH',
     });
 
@@ -257,7 +268,7 @@ export const clearExpiredPostInfo = async (rowIndices) => {
     }));
 
     await sheets.spreadsheets.values.batchUpdate({
-      spreadsheetId: SPREADSHEET_ID,
+      spreadsheetId: getSheetId(),
       requestBody: {
         valueInputOption: 'USER_ENTERED',
         data: data

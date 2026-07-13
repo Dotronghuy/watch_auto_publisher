@@ -22,19 +22,19 @@ const getSheetId = () => {
     const settingsPath = path.join(__dirname, '../../config/settings.json');
     if (fs.existsSync(settingsPath)) {
       const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
-      return settings.googleSheetId;
+      if (settings.googleSheetId) return settings.googleSheetId;
     }
   } catch (e) {
     console.error('Lỗi lấy Google Sheet ID:', e.message);
   }
-  return null;
+  return process.env.GOOGLE_SHEET_ID || '1y2U9cuBNTT6SoHNHsHycLqVlwVM9yjvsSp6Nq2DPwxo';
 };
 
 // Đọc dữ liệu từ Google Sheet
 export const readFromSheet = async () => {
   const spreadsheetId = getSheetId();
   if (!spreadsheetId) {
-    console.log('Chưa cấu hình Google Sheet ID.');
+    console.log('Chưa cấu hình Google Sheet ID. Debug ID:', getSheetId());
     return [];
   }
 
