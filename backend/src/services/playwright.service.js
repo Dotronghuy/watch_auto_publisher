@@ -237,7 +237,7 @@ export const generateBackgroundOnChatGPT = async (imagePath, promptsArray, abort
         context = await chromium.launchPersistentContext(userDataDir, {
             headless: false,
             args: [
-                '--window-position=0,0',
+                '--window-position=-999,-999',
                 '--window-size=1280,720',
                 '--disable-dev-shm-usage',
                 '--disable-gpu',
@@ -926,7 +926,7 @@ export const generateContentOnChatGPT = async (prompt, type, imagePath = null) =
     try {
         context = await chromium.launchPersistentContext(userDataDir, {
             headless: false,
-            args: ['--window-position=0,0', '--window-size=1280,720'],
+            args: ['--window-position=-999,-999', '--window-size=1280,720'],
             viewport: { width: 1280, height: 720 }
         });
         page = context.pages().length > 0 ? context.pages()[0] : await context.newPage();
@@ -1148,7 +1148,7 @@ export const analyzeNewSampleImages = async () => {
         const userDataDir = path.join(__dirname, '../../chrome_data_chatgpt');
         context = await chromium.launchPersistentContext(userDataDir, {
             headless: false,
-            args: ['--window-position=0,0', '--window-size=1280,720'],
+            args: ['--window-position=-999,-999', '--window-size=1280,720'],
             viewport: { width: 1280, height: 720 },
             timeout: 60000 // 60s timeout
         });
