@@ -431,22 +431,6 @@ const SocialConnections = () => {
                 </div>
               </div>
 
-              <div className="schedule-panel" style={{ marginTop: '20px' }}>
-                <h4>⭐ SKUs Ưu Tiên Mới Về</h4>
-                <p className="panel-desc">
-                  Nhập danh sách mã SKU (cách nhau bởi dấu phẩy) muốn ưu tiên đăng trước. Hệ thống sẽ chọn đăng mã này trước tiên, với chu kỳ vòng lặp 2 ngày.
-                </p>
-                <div style={{ marginTop: '10px' }}>
-                  <input 
-                    type="text" 
-                    value={prioritySkus} 
-                    onChange={e => setPrioritySkus(e.target.value)} 
-                    onBlur={() => autoSaveSettings({ prioritySkus })}
-                    style={{ width: '100%', padding: '10px', background: 'var(--color-surface-light)', border: '1px solid var(--color-border)', color: 'white', borderRadius: '6px' }} 
-                    placeholder="VD: CADISEN-123, BINGO-456" 
-                  />
-                </div>
-              </div>
 
 
             </div>

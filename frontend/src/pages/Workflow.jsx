@@ -1109,18 +1109,7 @@ const Workflow = () => {
                     <span className="tag ig">IG</span>
                   </div>
                 </div>
-                <div className="field" style={{marginTop: '10px'}}>
-                  <label>Mã SKU ưu tiên (Cách nhau bằng dấu phẩy)</label>
-                  <input
-                    type="text"
-                    value={prioritySkus}
-                    onChange={(e) => setPrioritySkus(e.target.value)}
-                    onBlur={() => autoSaveSettings({ prioritySkus })}
-                    style={{ width: '100%', padding: '6px 10px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: 'white', borderRadius: '4px', fontSize: '12px', marginTop: '4px' }}
-                    placeholder="VD: CADISEN-123, BINGO-456"
-                    onMouseDown={e => e.stopPropagation()}
-                  />
-                </div>
+
                 <div className="field" style={{marginTop: '10px', display: 'flex', gap: '6px', flexWrap: 'wrap'}}>
                   <button
                     className="btn-dry-run"
