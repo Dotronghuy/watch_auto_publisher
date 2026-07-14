@@ -21,7 +21,7 @@ const getSheetId = () => {
     const settingsPath = path.join(__dirname, '../../config/settings.json');
     if (fs.existsSync(settingsPath)) {
       const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
-      if (settings.googleSheetId) return settings.googleSheetId;
+      if (settings.catalogSheetId) return settings.catalogSheetId;
     }
   } catch (e) {}
   return process.env.GOOGLE_SHEET_ID || '1y2U9cuBNTT6SoHNHsHycLqVlwVM9yjvsSp6Nq2DPwxo';
@@ -170,33 +170,23 @@ export const getAllProductsPostInfo = async () => {
 
 export const getAllProductsWithImages = async () => {
   try {
-    const res = await sheets.spreadsheets.values.get({
-      spreadsheetId: getSheetId(),
-      range: 'A:E',
-    });
-
-    const rows = res.data.values;
-    if (!rows || rows.length === 0) return [];
-
-    const headers = rows[0];
-    const skuIndex = headers.indexOf('Mã sản phẩm');
-    const imageIndex = 4; // Cột E
-
-    if (skuIndex === -1) return [];
-
+    const catalogPath = path.join(__dirname, '../../data/catalog.json');
+    if (!fs.existsSync(catalogPath)) return [];
+    
+    const catalogData = JSON.parse(fs.readFileSync(catalogPath, 'utf8'));
     const products = [];
-    for (let i = 1; i < rows.length; i++) {
-      const row = rows[i];
-      if (row[skuIndex] && row[imageIndex]) {
+    
+    for (const prod of catalogData) {
+      if (prod['Mã sản phẩm'] && (prod['imageUrl'] || prod['Link ảnh sản phẩm'])) {
         products.push({
-          sku: row[skuIndex],
-          imageUrl: row[imageIndex],
+          sku: prod['Mã sản phẩm'],
+          imageUrl: prod['imageUrl'] || prod['Link ảnh sản phẩm']
         });
       }
     }
     return products;
   } catch (error) {
-    console.error('Lỗi khi lấy thông tin ảnh từ Sheets:', error.message);
+    console.error('Lỗi khi đọc ảnh từ catalog.json:', error.message);
     return [];
   }
 };

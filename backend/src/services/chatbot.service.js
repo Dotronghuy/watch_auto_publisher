@@ -36,18 +36,32 @@ const runWithModelFallback = async (content, requireJSON = false) => {
   const models = getGeminiModels();
   for (let i = 0; i < models.length; i++) {
     const modelName = models[i];
-    try {
-      const config = requireJSON ? { generationConfig: { responseMimeType: 'application/json' } } : {};
-      const model = genAI.getGenerativeModel({ model: modelName, ...config });
-      const result = await model.generateContent(content);
-      return result;
-    } catch (err) {
-      console.log(`⚠️ Lỗi Model ${modelName}:`, err.message);
-      if (i < models.length - 1) {
-        console.log(`🤖 Tự động chuyển sang ${models[i+1]}...`);
-        continue;
+    let retries = 4; // Thử lại tối đa 4 lần (tổng 5 lần thử) nếu bị lỗi 503 Quá tải
+
+    while (retries >= 0) {
+      try {
+        const config = requireJSON ? { generationConfig: { responseMimeType: 'application/json' } } : {};
+        const model = genAI.getGenerativeModel({ model: modelName, ...config });
+        const result = await model.generateContent(content);
+        return result;
+      } catch (err) {
+        const isOverloaded = err.status === 503 || (err.message && err.message.includes('503'));
+
+        if (isOverloaded && retries > 0) {
+          console.log(`⏳ Server Gemini bị quá tải (503) với model ${modelName}. Tự động thử lại sau 2 giây... (Còn ${retries} lần thử)`);
+          await new Promise(resolve => setTimeout(resolve, 2000));
+          retries--;
+        } else {
+          console.log(`⚠️ Lỗi Model ${modelName}:`, err.message);
+          break; // Thoát vòng lặp while để chuyển sang model tiếp theo
+        }
       }
-      throw err; // Nếu là model cuối cùng thì ném lỗi
+    }
+
+    if (i < models.length - 1) {
+      console.log(`🤖 Tự động chuyển sang model dự phòng ${models[i + 1]}...`);
+    } else {
+      throw new Error(`Tất cả các model đều lỗi hoặc quá tải.`); // Nếu là model cuối cùng thì ném lỗi
     }
   }
 };
@@ -57,7 +71,7 @@ const getSettings = () => {
     if (fs.existsSync(SETTINGS_PATH)) {
       return JSON.parse(fs.readFileSync(SETTINGS_PATH, 'utf8'));
     }
-  } catch (e) {}
+  } catch (e) { }
   return { botEnabled: false, botPauseHours: 2, botDelayMin: 3, botDelayMax: 8, enableLayer2: true, enableLayer3: true };
 };
 
@@ -66,7 +80,7 @@ const getKnowledgeText = () => {
     if (fs.existsSync(KNOWLEDGE_PATH)) {
       return fs.readFileSync(KNOWLEDGE_PATH, 'utf8');
     }
-  } catch (e) {}
+  } catch (e) { }
   return "Bạn là trợ lý ảo tư vấn đồng hồ.";
 };
 
@@ -75,8 +89,24 @@ const getImageReplyTemplate = () => {
     if (fs.existsSync(IMAGE_REPLY_TEMPLATE_PATH)) {
       return fs.readFileSync(IMAGE_REPLY_TEMPLATE_PATH, 'utf8');
     }
-  } catch (e) {}
+  } catch (e) { }
   return `Dạ mẫu anh/chị gửi là **{{PRODUCT_NAME}}** (Mã: {{SKU}}).\nGiá sản phẩm là: **{{PRICE}}** ạ! Anh/chị có muốn đặt hàng luôn không ạ? 😊`;
+};
+
+const getProductInfoFromCatalog = (skuCode) => {
+  try {
+    const catalogPath = path.join(__dirname, '../../data/catalog.json');
+    if (fs.existsSync(catalogPath)) {
+      const catalog = JSON.parse(fs.readFileSync(catalogPath, 'utf8'));
+      let found = catalog.find(p => p['Mã sản phẩm'] === skuCode);
+      if (!found) {
+        // Fallback: Tìm biến thể đầu tiên của mã gốc này (vd: 55883G -> 55883G-T1)
+        found = catalog.find(p => p['Mã sản phẩm'].startsWith(skuCode + '-'));
+      }
+      return found;
+    }
+  } catch (e) { }
+  return null;
 };
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -92,36 +122,57 @@ const getRandomDelay = (minSec, maxSec) => {
 /**
  * Xử lý Lớp 3: Gọi Gemini Vision
  */
-const runLayer3GeminiVision = async (imageUrl, messageText) => {
+const runLayer3GeminiVision = async (imageUrls, messageText) => {
   try {
-    const response = await fetch(imageUrl);
-    if (!response.ok) {
-      console.error(`[Lớp 3] Lỗi tải ảnh khách từ FB: HTTP ${response.status}`);
+    const customerImageParts = [];
+    for (const url of imageUrls) {
+      try {
+        const response = await fetch(url);
+        if (response.ok) {
+          const buffer = await response.arrayBuffer();
+          let mime = response.headers.get("content-type") || "image/jpeg";
+          if (!mime.startsWith('image/')) mime = 'image/jpeg';
+          customerImageParts.push({ inlineData: { data: Buffer.from(buffer).toString("base64"), mimeType: mime } });
+        }
+      } catch (e) {
+        console.error(`[Lớp 3] Lỗi tải ảnh khách từ FB:`, e.message);
+      }
+    }
+
+    if (customerImageParts.length === 0) {
       return { sku: null, message: "Dạ mẫu này đẹp quá ạ! 😍 Anh/chị cho shop biết thêm thích mức giá khoảng bao nhiêu để shop tư vấn nha!" };
     }
-    const buffer = await response.arrayBuffer();
-    let customerMimeType = response.headers.get("content-type") || "image/jpeg";
-    if (!customerMimeType.startsWith('image/')) {
-      customerMimeType = 'image/jpeg';
-    }
-    const customerImageBase64 = Buffer.from(buffer).toString("base64");
-    
+
     const modelName = getGeminiModels()[0];
     const model = genAI.getGenerativeModel({ model: modelName, generationConfig: { responseMimeType: "application/json" } });
-    
-    // Đọc catalog
+
+    // Đọc catalog và TỐI ƯU DUNG LƯỢNG (Minify) để tránh lỗi quá tải 1 Triệu Token
     const catalogPath = path.join(__dirname, '../../data/catalog.json');
     let catalogData = '[]';
-    if (fs.existsSync(catalogPath)) catalogData = fs.readFileSync(catalogPath, 'utf8');
+    if (fs.existsSync(catalogPath)) {
+      try {
+        const rawCatalog = JSON.parse(fs.readFileSync(catalogPath, 'utf8'));
+        const minifiedCatalog = rawCatalog.map(p => ({
+          sku: p['Mã sản phẩm'],
+          name: p['Tên sản phẩm'],
+          brand: p['Thương hiệu'],
+          color: p['Màu mặt số'],
+          strap: p['Chất liệu dây'],
+          case: p['Chất liệu vỏ']
+        }));
+        catalogData = JSON.stringify(minifiedCatalog);
+      } catch (e) {
+        console.error("Lỗi parse catalog:", e);
+      }
+    }
 
     // Chặng 1: Semantic Search & Text OCR
-    const prompt1A = `Khách hàng gửi ảnh. Lời nhắn: "${messageText}".
-Nhiệm vụ: Đọc MỌI chữ/số xuất hiện trong ảnh (đặc biệt là mã sản phẩm, thương hiệu). Sau đó mô tả ngoại hình đồng hồ (màu mặt số, màu vỏ, loại dây).
+    const prompt1A = `Khách hàng gửi ${customerImageParts.length} ảnh. Lời nhắn: "${messageText}".
+Nhiệm vụ: Đọc MỌI chữ/số xuất hiện trong TẤT CẢ CÁC ẢNH (đặc biệt là mã sản phẩm, thương hiệu). Sau đó mô tả ngoại hình đồng hồ (màu mặt số, màu vỏ, loại dây) của tất cả các mẫu xuất hiện.
 Trả về JSON: { "text_in_image": "các chữ đọc được", "description": "mô tả ngoại hình" }`;
 
     console.log(`🤖 Đang chạy Lớp 3 Chặng 1A (Vision OCR)...`);
-    const imagePart1 = { inlineData: { data: customerImageBase64, mimeType: customerMimeType } };
-    const result1A = await runWithModelFallback([prompt1A, imagePart1]);
+    const result1A = await runWithModelFallback([prompt1A, ...customerImageParts]);
     const visionOutput = result1A.response.text();
     console.log(`🤖 Kết quả Vision:`, visionOutput);
 
@@ -133,7 +184,9 @@ Dưới đây là danh sách sản phẩm (JSON):
 ${catalogData}
 
 Nhiệm vụ: Tìm tối đa 5 mã SKU khớp nhất với phân tích trên. 
-LƯU Ý CỰC KỲ QUAN TRỌNG: Mã sản phẩm trong ảnh khách gửi thường bị viết tắt, viết thiếu dấu gạch ngang, hoặc viết sai (ví dụ: "525G3" có thể là "525G-D3" hoặc "525G", "55883" có thể là "55883G"). BẠN PHẢI TỰ ĐỘNG SUY LUẬN VÀ TÌM CÁC MÃ TƯƠNG ĐƯƠNG TRONG TỆP JSON CHỨ KHÔNG ĐƯỢC TÌM KHỚP TUYỆT ĐỐI 100%. Nếu không thấy mã nào giống, hãy dựa vào mô tả màu sắc và thiết kế.
+LƯU Ý CỰC KỲ QUAN TRỌNG:
+1. Nếu "text_in_image" đọc được CHÍNH XÁC một mã sản phẩm (ví dụ "538L"), bạn BẮT BUỘC phải ưu tiên các SKU chứa đúng mã đó (như "538L-T2") và TUYỆT ĐỐI KHÔNG ĐƯỢC NHẦM SANG MÃ KHÁC (như "536L"). Hãy đọc kỹ từng con số!
+2. Mã sản phẩm khách viết thường bị tắt (ví dụ: "525G3" -> "525G-D3", "55883" -> "55883G"). Hãy suy luận linh hoạt. Nếu không thấy mã nào giống, hãy dựa vào màu sắc.
 Trả về JSON định dạng:
 {
   "candidates": ["SKU1", "SKU2"],
@@ -142,7 +195,7 @@ Trả về JSON định dạng:
 
     console.log(`🤖 Đang chạy Lớp 3 Chặng 1B (Semantic Search)...`);
     const result1B = await runWithModelFallback(prompt1B, true);
-    
+
     let stage1Result = {};
     try {
       const text = result1B.response.text();
@@ -165,14 +218,14 @@ Trả về JSON định dạng:
     const candidateImages = allProducts.filter(p => stage1Result.candidates.includes(p.sku));
 
     if (candidateImages.length === 0) {
-       return { sku: null, message: "Dạ mẫu này shop đang kiểm tra lại, anh/chị đợi lát nha!" };
+      return { sku: null, message: "Dạ mẫu này shop đang kiểm tra lại, anh/chị đợi lát nha!" };
     }
 
     // Tải ảnh gốc của các ứng viên
-    const imageParts2 = [imagePart1]; // Ảnh đầu tiên là ảnh khách gửi
-    let index = 1;
+    const imageParts2 = [...customerImageParts]; // Các ảnh đầu tiên là ảnh khách gửi
+    let index = customerImageParts.length;
     let candidateIndexMap = {}; // Map số thứ tự ảnh -> SKU
-    
+
     for (const c of candidateImages) {
       try {
         const res = await fetch(c.imageUrl);
@@ -186,25 +239,30 @@ Trả về JSON định dạng:
         } else {
           console.error(`[Lớp 3] Lỗi tải ảnh kho cho SKU ${c.sku}: HTTP ${res.status}`);
         }
-      } catch(e) {
+      } catch (e) {
         console.error(`[Lớp 3] Ngoại lệ khi tải ảnh kho SKU ${c.sku}:`, e.message);
       }
     }
 
-    const prompt2 = `Ảnh đầu tiên (index 0) là ảnh khách gửi. Các ảnh tiếp theo (từ index 1 trở đi) là ảnh gốc của các mẫu: ${Object.values(candidateIndexMap).join(', ')}.
-Nhiệm vụ: So sánh ảnh khách gửi (index 0) với các ảnh còn lại.
-Trích xuất mã SKU khớp NHẤT (giống nhất về kiểu dáng, màu sắc mặt số, dây đeo). Lưu ý: Ảnh khách gửi có thể là ảnh ghép nhiều góc độ hoặc mờ, chỉ cần màu sắc và thiết kế chính giống nhau là được. Đừng quá khắt khe.
-Chỉ trả về JSON định dạng: { "sku": "Mã SKU khớp" }. Nếu hoàn toàn không có ảnh nào khớp, trả về { "sku": null }.`;
+    const n = customerImageParts.length;
+    const prompt2 = `Từ index 0 đến index ${n - 1} là ảnh khách gửi. Các ảnh tiếp theo (từ index ${n} trở đi) là ảnh gốc của các mẫu: ${Object.values(candidateIndexMap).join(', ')}.
+Nhiệm vụ: So sánh tập ảnh khách gửi với các ảnh còn lại.
+Trích xuất mã SKU khớp NHẤT.
+LƯU Ý CỰC KỲ QUAN TRỌNG: 
+- Nếu tập ảnh khách gửi có CHỨA NHIỀU MẪU ĐỒNG HỒ HOÀN TOÀN KHÁC NHAU (khác form dáng, thiết kế), hãy ưu tiên chọn mẫu xuất hiện nhiều nhất/rõ nhất hoặc nếu không thể quyết định, TRẢ VỀ "MULTIPLE_MODELS".
+- Nếu tập ảnh khách gửi (hoặc 1 ảnh khách gửi) chụp NHIỀU MÀU SẮC CỦA CÙNG 1 MẪU, bạn KHÔNG ĐƯỢC chọn 1 mã chi tiết, mà PHẢI TRẢ VỀ mã gốc (bỏ phần hậu tố -T1...). Ví dụ: trả về "55883G" thay vì "55883G-T1". 
+- NGƯỢC LẠI, nếu chỉ có DUY NHẤT 1 chiếc đồng hồ, bạn BẮT BUỘC phải trả về đúng mã chi tiết (ví dụ: "55883G-T1").
+Chỉ trả về JSON định dạng: { "sku": "Mã SKU khớp hoặc MULTIPLE_MODELS" }. Nếu hoàn toàn không có ảnh nào khớp, trả về { "sku": null }.`;
 
     const result2 = await runWithModelFallback([prompt2, ...imageParts2], true);
     const responseText2 = result2.response.text();
     let stage2Result = { sku: null };
     try {
       stage2Result = JSON.parse(responseText2);
-    } catch(e) {}
+    } catch (e) { }
 
     const exactSku = stage2Result.sku;
-    
+
     if (exactSku) {
       console.log(`🤖 Chặng 2 Lớp 3 chốt hạ SKU: ${exactSku}`);
       return { sku: exactSku, message: "" };
@@ -322,7 +380,7 @@ const rewriteBotReply = async ({ customerMessage, draftReply, evaluation, knowle
     const prompt = `Sua lai cau tra loi chatbot cho khach hang dong ho.
 Muc tieu: dung su that, ngan gon, than thien, tieng Viet tu nhien. KHONG DICH SANG TIENG ANH. KHONG THEM GHI CHU TIENG ANH.
 TUYET DOI KHONG BIA DAT cac tinh nang nhu Bluetooth, AI, Smartwatch, ket noi mang. Đay la dong ho co/pin truyen thong.
-Neu ban gioi thieu san pham, BAT BUOC phai chi ra 1 MA SKU CU THE va chen link anh vao cuoi cau bang cu phap: ![Anh san pham](Link_anh)
+Neu ban gioi thieu san pham, BAT BUOC phai chi ra 1 MA SKU CU THE. KHONG THEM LINK ANH.
 
 Neu thieu thong tin ve gia/ton kho/bao hanh/ship/thanh toan, khong duoc doan. Hay noi shop se co nhan vien kiem tra lai.
 
@@ -355,7 +413,7 @@ Chi tra ve JSON: { "reply": "cau tra loi da sua" }`;
 export const runGeminiText = async (history, newMessage) => {
   try {
     const modelName = getGeminiModels()[0];
-    
+
     // RAG: Tìm kiếm thông tin liên quan từ vector store
     const [relevantKnowledge, memoryContext] = await Promise.all([
       searchKnowledge(newMessage, 3).catch((error) => {
@@ -378,7 +436,10 @@ Hãy trả lời lịch sự, thân thiện, dùng emoji hợp lý. Không bịa
 LƯU Ý QUAN TRỌNG:
 1. NGÔN NGỮ CHÍNH LÀ TIẾNG VIỆT. Bạn có thể dùng một số từ Tiếng Anh thông dụng trong thương mại (như: Shop, Sale, Size, Freeship, Fullbox, SKU). BẠN KHÔNG BIẾT VÀ KHÔNG ĐƯỢC PHÉP DÙNG BẤT KỲ NGÔN NGỮ NÀO KHÁC. KHÔNG DỊCH THUẬT.
 2. TUYỆT ĐỐI KHÔNG TỰ BỊA ĐẶT TÍNH NĂNG (như Bluetooth, AI, Smartwatch, đo nhịp tim...) nếu không có trong dữ liệu. Đồng hồ ở đây là đồng hồ cơ/pin truyền thống.
-3. KHI GIỚI THIỆU SẢN PHẨM: Bạn BẮT BUỘC phải chỉ ra 1 MÃ SKU cụ thể (VD: C8053G-T1). ĐỒNG THỜI, BẮT BUỘC chèn Link ảnh của sản phẩm vào cuối câu giới thiệu theo đúng cú pháp Markdown: ![Ảnh sản phẩm](Link_ảnh) (lấy Link_ảnh từ dữ liệu cung cấp).
+3. Lệnh Tối Cao KHI BÁO GIÁ HOẶC GIỚI THIỆU SẢN PHẨM CỤ THỂ: Bạn TUYỆT ĐỐI KHÔNG ĐƯỢC TỰ VIẾT thông tin sản phẩm (giá, kích thước...). Thay vào đó, BẠN BẮT BUỘC CHỈ CẦN XUẤT RA DUY NHẤT 1 CÚ PHÁP ĐÚNG NHƯ SAU:
+[PRODUCT: Mã_SKU_Sản_Phẩm]
+
+Hệ thống sẽ tự động bắt lấy cú pháp này và chèn Form mẫu thông số hoàn chỉnh vào. Bạn CHỈ ĐƯỢC PHÉP trả lời thêm ở NGAY BÊN DƯỚI cú pháp này (xuống dòng) NẾU khách có hỏi thêm câu hỏi phụ (như ship, bảo hành...). Tuyệt đối không tự sinh lời chào!
 4. CHỈ TRẢ VỀ ĐÚNG NỘI DUNG CẦN TRẢ LỜI KHÁCH HÀNG.
 
 Dưới đây là thông tin cửa hàng và chính sách liên quan:
@@ -388,7 +449,7 @@ ${knowledgeText}
 `;
 
     // Tạo model với systemInstruction
-    const model = genAI.getGenerativeModel({ 
+    const model = genAI.getGenerativeModel({
       model: modelName,
       systemInstruction: { parts: [{ text: systemPrompt }] }
     });
@@ -428,11 +489,74 @@ ${knowledgeText}
 
     // Sử dụng startChat + sendMessage (đúng chuẩn Gemini SDK)
     const chat = model.startChat({ history: chatHistory });
-    const result = await chat.sendMessage(newMessage);
-    const draftReply = cleanReplyText(result.response.text());
-    
+
+    let result;
+    let retries = 4;
+    while (retries >= 0) {
+      try {
+        result = await chat.sendMessage(newMessage);
+        break;
+      } catch (err) {
+        const isOverloaded = err.status === 503 || (err.message && err.message.includes('503'));
+        if (isOverloaded && retries > 0) {
+          console.log(`⏳ [runGeminiText] Gemini bị quá tải (503). Thử lại sau 2 giây... (Còn ${retries} lần thử)`);
+          await new Promise(resolve => setTimeout(resolve, 2000));
+          retries--;
+        } else {
+          throw err;
+        }
+      }
+    }
+
+    let draftReply = cleanReplyText(result.response.text());
+
     if (!draftReply) {
       return "Dạ shop đã nhận được tin nhắn. Sẽ có nhân viên hỗ trợ anh/chị ngay ạ!";
+    }
+
+    // --- ÉP FORM MẪU BẰNG CODE ---
+    const productMatch = draftReply.match(/\[PRODUCT:\s*([a-zA-Z0-9-]+)\]/i);
+    if (productMatch) {
+       const sku = productMatch[1].toUpperCase();
+       const productInfo = getProductInfoFromCatalog(sku) || {};
+       const isGenericSku = !sku.includes('-'); // "55883G" thay vì "55883G-T1"
+       
+       let chatLieuDay = productInfo["Chất liệu dây"];
+       if (!chatLieuDay) {
+         if (sku.includes("-T")) chatLieuDay = "Thép không gỉ 316L đúc đặc.";
+         else if (sku.includes("-S")) chatLieuDay = "Dây cao su cao cấp.";
+         else if (sku.includes("-D")) chatLieuDay = "Dây da cao cấp.";
+         else chatLieuDay = "Thép không gỉ 316L đúc đặc / Dây cao su / Dây da";
+       }
+
+       let formText = "";
+       const baseSku = sku.split('-')[0];
+       const hasSentForm = history.some(msg => msg.is_from_page && (msg.message || "").includes(`Mã Sản Phẩm: ${baseSku}`));
+
+       if (hasSentForm) {
+          formText = `Dạ mẫu bản màu này (${sku}) thì giá ưu đãi hiện tại là: ${productInfo["Giá sale"] || productInfo["Giá bán"]} ạ. Các thông số về kích thước, bộ máy, chống nước... hoàn toàn giống mẫu ${baseSku} em vừa gửi ở trên nha anh/chị! 🥰`;
+       } else {
+         formText = `Shop xin chào 🤗
+Cảm ơn chị đã quan tâm tới các sản phẩm của Shop. Dưới đây là thông tin chi tiết sản phẩm để chị tiện tham khảo ạ.
+
+-Mã Sản Phẩm: ${sku} -
+📏Kích thước mặt số : ${productInfo["Kích thước mặt"] || productInfo["Size"] || "Đang cập nhật"}
+🤿Khả năng chống nước : ${productInfo["Độ chịu nước"] || productInfo["Water resistance"] || "Đang cập nhật"}
+⚙️Bộ máy : ${productInfo["Loại máy"] || productInfo["Bộ máy"] || "Đang cập nhật"} chính hãng
+⏳Chế độ bảo hành máy 5 năm.
+🗜️Chất liệu vỏ : Thép không gỉ 316L đúc đặc.
+⛓️Chất liệu dây: ${chatLieuDay}
+🔎 Kính sapphire hạn chế trầy xước.
+
+✅ Giá bán : ${productInfo["Giá sale"] || productInfo["Giá bán"] || productInfo["Giá gốc"] || "Đang cập nhật"}`;
+
+         if (isGenericSku) {
+            formText += `|||Dạ mẫu này bên em đang có nhiều màu, anh/chị đang ưng màu nào ạ? 🥰`;
+         }
+       }
+
+       draftReply = draftReply.replace(productMatch[0], formText).trim();
+       return draftReply; // Bỏ qua bộ lọc chấm điểm để giữ nguyên 100% Form mẫu và Icon
     }
 
     const evaluation = await evaluateBotReply({
@@ -464,6 +588,7 @@ ${knowledgeText}
 // --- MAIN WORKFLOW ---
 
 const typingTimers = {};
+const convQueues = {}; // Hàng đợi xử lý tin nhắn để tránh race condition (bot trả lời 2 lần)
 
 export const handleIncomingMessage = async (conversationId, messageText, imageUrl = null) => {
   const settings = getSettings();
@@ -475,21 +600,33 @@ export const handleIncomingMessage = async (conversationId, messageText, imageUr
   }
 
   // Gộp chung nội dung và ảnh của các tin nhắn gửi sát nhau
-  const accImageUrl = imageUrl || (typingTimers[conversationId] ? typingTimers[conversationId].imageUrl : null);
+  const prevImageUrls = typingTimers[conversationId] ? (typingTimers[conversationId].imageUrls || []) : [];
+  const accImageUrls = imageUrl ? [...prevImageUrls, imageUrl] : prevImageUrls;
+  
   const prevText = (typingTimers[conversationId] ? typingTimers[conversationId].text : '');
   const accText = prevText ? prevText + '\n' + messageText : messageText;
 
   typingTimers[conversationId] = {
-    imageUrl: accImageUrl,
+    imageUrls: accImageUrls,
     text: accText,
-    timer: setTimeout(async () => {
+    timer: setTimeout(() => {
       delete typingTimers[conversationId];
-      await processConversation(conversationId, accText, accImageUrl, settings);
+
+      // Khởi tạo hàng đợi nếu chưa có
+      if (!convQueues[conversationId]) {
+        convQueues[conversationId] = Promise.resolve();
+      }
+
+      // Đẩy task xử lý vào hàng đợi để chạy tuần tự
+      convQueues[conversationId] = convQueues[conversationId]
+        .then(() => processConversation(conversationId, accText, accImageUrls, settings))
+        .catch(err => console.error("Lỗi trong hàng đợi xử lý Bot:", err.message));
+
     }, 4000) // Chờ 4 giây để gộp tin nhắn
   };
 };
 
-const processConversation = async (conversationId, messageText, imageUrl, settings) => {
+const processConversation = async (conversationId, messageText, imageUrls, settings) => {
   try {
     const conversation = await getConversationById(conversationId);
     if (!conversation) return;
@@ -502,7 +639,7 @@ const processConversation = async (conversationId, messageText, imageUrl, settin
         const pausedTime = new Date(conversation.bot_paused_at).getTime();
         const now = Date.now();
         const pauseMs = (settings.botPauseHours || 2) * 60 * 60 * 1000;
-        
+
         if (now - pausedTime > pauseMs) {
           // Timeout -> Bật lại bot
           await updateBotPausedStatus(conversationId, false);
@@ -521,31 +658,31 @@ const processConversation = async (conversationId, messageText, imageUrl, settin
 
     let replyMessage = "";
 
-    // 2. Xử lý tin nhắn CÓ ẢNH & TEXT GỘP CHUNG
+    // 2. Chấm điểm Hash và AI
     let systemImageContext = "";
-
-    if (imageUrl) {
-      console.log(`🤖 Bot đang xử lý ảnh từ khách...`);
-      
+    if (imageUrls && imageUrls.length > 0) {
+      console.log(`🤖 Bot đang xử lý ${imageUrls.length} ảnh từ khách...`);
       let skuFound = null;
       let usedLayer = 0;
 
-      // Tính hash của ảnh khách gửi
-      const targetHash = await computeHashFromUrl(imageUrl);
-
-      // Lớp 1 + 2: So sánh Hash trong DB (Cùng hàm findMatchingSku)
-      if (targetHash) {
-         skuFound = await findMatchingSku(targetHash, 5);
-         if (skuFound) usedLayer = 1; // Khớp hash!
+      // Chỉ dùng Hash cho ảnh đầu tiên nếu gửi 1 ảnh để tối ưu
+      if (imageUrls.length === 1) {
+        const targetHash = await computeHashFromUrl(imageUrls[0]);
+        if (targetHash) {
+          skuFound = await findMatchingSku(targetHash, 5);
+          if (skuFound) usedLayer = 1;
+        }
       }
 
+      // getProductInfoFromCatalog moved to top scope
+
       if (skuFound) {
-        // Tra cứu giá từ Google Sheets
-        const productInfo = await getProductInfoBySku(skuFound);
+        // Tra cứu giá từ file JSON cục bộ thay vì Google Sheets API để tránh lỗi sheet
+        const productInfo = getProductInfoFromCatalog(skuFound);
         if (productInfo) {
           const price = productInfo["Giá sale"] || productInfo["Giá gốc"] || "Đang cập nhật";
           const name = productInfo["Tên sản phẩm"] || skuFound;
-          
+
           systemImageContext = `[HỆ THỐNG PHÂN TÍCH ẢNH: Hệ thống nhận diện ảnh khách gửi là mẫu "${name}" (Mã: ${skuFound}), Giá: ${price}. Dựa vào thông tin này, hãy tư vấn cho khách.]\n\n`;
         } else {
           systemImageContext = `[HỆ THỐNG PHÂN TÍCH ẢNH: Ảnh khách gửi có mã ${skuFound} nhưng chưa có thông tin giá. Hãy báo khách đợi nhân viên kiểm tra.]\n\n`;
@@ -553,81 +690,87 @@ const processConversation = async (conversationId, messageText, imageUrl, settin
       } else {
         // Lớp 3: Gemini Vision (2-Stage Verification)
         if (settings.enableLayer3 !== false && isAiAllowed) {
-           console.log(`🤖 Chuyển qua Lớp 3: Gemini Vision`);
-           const layer3Result = await runLayer3GeminiVision(imageUrl, messageText);
-           
-           if (layer3Result.sku) {
-             // Lớp 3 đã tìm thấy SKU chính xác
-             const productInfo = await getProductInfoBySku(layer3Result.sku);
-             if (productInfo) {
-               const price = productInfo["Giá sale"] || productInfo["Giá gốc"] || "Đang cập nhật";
-               const name = productInfo["Tên sản phẩm"] || layer3Result.sku;
-               
-               systemImageContext = `[HỆ THỐNG PHÂN TÍCH ẢNH: Hệ thống nhận diện ảnh khách gửi là mẫu "${name}" (Mã: ${layer3Result.sku}), Giá: ${price}. Dựa vào thông tin này, hãy tư vấn cho khách.]\n\n`;
-             } else {
-               systemImageContext = `[HỆ THỐNG PHÂN TÍCH ẢNH: Nhận diện ảnh: ${layer3Result.message}]\n\n`;
-             }
-           } else {
-             // Lớp 3 không chốt được mã
-             systemImageContext = `[HỆ THỐNG PHÂN TÍCH ẢNH: Nhận diện ảnh: ${layer3Result.message}]\n\n`;
-           }
+          console.log(`🤖 Chuyển qua Lớp 3: Gemini Vision`);
+          const layer3Result = await runLayer3GeminiVision(imageUrls, messageText);
+
+          if (layer3Result.sku === "MULTIPLE_MODELS") {
+             systemImageContext = `[HỆ THỐNG PHÂN TÍCH ẢNH: Khách gửi nhiều mẫu đồng hồ khác nhau. Hãy báo khách là "Dạ shop đã nhận được các mẫu anh/chị quan tâm. Để tiện tư vấn, anh/chị đang ưng ý form dáng của mẫu nào nhất ạ?"]\n\n`;
+          } else if (layer3Result.sku) {
+            // Lớp 3 đã tìm thấy SKU chính xác
+            const productInfo = getProductInfoFromCatalog(layer3Result.sku);
+            if (productInfo) {
+              const price = productInfo["Giá sale"] || productInfo["Giá gốc"] || "Đang cập nhật";
+              const name = productInfo["Tên sản phẩm"] || layer3Result.sku;
+
+              systemImageContext = `[HỆ THỐNG PHÂN TÍCH ẢNH: Hệ thống nhận diện ảnh khách gửi là mẫu "${name}" (Mã: ${layer3Result.sku}), Giá: ${price}. Dựa vào thông tin này, hãy tư vấn cho khách.]\n\n`;
+            } else {
+              systemImageContext = `[HỆ THỐNG PHÂN TÍCH ẢNH: Nhận diện ảnh: ${layer3Result.message}]\n\n`;
+            }
+          } else {
+            // Lớp 3 không chốt được mã
+            systemImageContext = `[HỆ THỐNG PHÂN TÍCH ẢNH: Nhận diện ảnh: ${layer3Result.message}]\n\n`;
+          }
         } else {
-           systemImageContext = `[HỆ THỐNG PHÂN TÍCH ẢNH: Không nhận diện được ảnh. Hãy báo khách đợi nhân viên kiểm tra.]\n\n`;
+          systemImageContext = `[HỆ THỐNG PHÂN TÍCH ẢNH: Không nhận diện được ảnh. Hãy báo khách đợi nhân viên kiểm tra.]\n\n`;
         }
       }
-    } 
+    }
 
     // 3. Xử lý Logic Text Chung (Bao gồm cả khi có ảnh)
     if (!isAiAllowed) {
       console.log(`🤖 API AI BỊ TẮT -> Fallback kịch bản gốc.`);
-      if (imageUrl && !systemImageContext.includes("Không nhận diện được") && !systemImageContext.includes("Nhận diện ảnh")) {
-         // Trích xuất mã để trả lời nhanh nếu tắt AI nhưng vẫn dò ra ở lớp 1, 2
-         const matchSku = systemImageContext.match(/Mã: ([^)]+)/);
-         if (matchSku) {
-             replyMessage = `Dạ mẫu anh/chị gửi có mã là **${matchSku[1]}**. Anh/chị đợi chút để nhân viên shop kiểm tra tồn kho nha!`;
-         } else {
-             replyMessage = "Dạ shop đã nhận được ảnh. Nhân viên shop sẽ phản hồi sớm nhất nha!";
-         }
+      if (imageUrls && imageUrls.length > 0 && !systemImageContext.includes("Không nhận diện được") && !systemImageContext.includes("Nhận diện ảnh")) {
+        // Trích xuất mã để trả lời nhanh nếu tắt AI nhưng vẫn dò ra ở lớp 1, 2
+        const matchSku = systemImageContext.match(/Mã: ([^)]+)/);
+        if (matchSku) {
+          replyMessage = `Dạ mẫu anh/chị gửi có mã là **${matchSku[1]}**. Anh/chị đợi chút để nhân viên shop kiểm tra tồn kho nha!`;
+        } else {
+          replyMessage = "Dạ shop đã nhận được ảnh. Nhân viên shop sẽ phản hồi sớm nhất nha!";
+        }
       } else {
-         replyMessage = "Dạ hiện tại hệ thống AI đang tạm ngưng, anh/chị cần tư vấn thêm cứ để lại tin nhắn, nhân viên shop sẽ phản hồi sớm nhất nha!";
+        replyMessage = "Dạ hiện tại hệ thống AI đang tạm ngưng, anh/chị cần tư vấn thêm cứ để lại tin nhắn, nhân viên shop sẽ phản hồi sớm nhất nha!";
       }
     } else {
       console.log(`🤖 Bot đang xử lý Ngữ cảnh bằng Gemini...`);
       // Lấy lịch sử 10 tin nhắn gần nhất
       const historyRows = await getMessagesByConversation(conversationId);
       const recentHistory = historyRows.slice(-10); // Không gửi quá dài để đỡ token
-      
+
       const finalPrompt = systemImageContext + (messageText || '');
       replyMessage = await runGeminiText(recentHistory, finalPrompt);
     }
 
-    // 4. Delay tự nhiên và Gửi Reply
-    const delayTime = getRandomDelay(settings.botDelayMin || 3, settings.botDelayMax || 8);
-    console.log(`⏳ Bot delay ${delayTime}ms trước khi gửi...`);
-    await delay(delayTime);
-
-    // Gửi qua nền tảng
-    await replyCRM(conversation.sender_id, replyMessage, conversation.type, conversationId);
-    console.log(`✅ Bot đã trả lời: ${replyMessage}`);
-
-    // Cập nhật DB và UI cục bộ
-    const botMessageId = 'msg_bot_' + Date.now();
-    const createdTime = new Date().toISOString();
-    await saveMessage(botMessageId, conversationId, replyMessage, true, createdTime);
+    // 4. Lặp qua các tin nhắn nếu có dấu phân cách ||| (Gửi nhiều tin nhắn liên tiếp)
+    const messagesToSend = replyMessage.split('|||').map(m => m.trim()).filter(m => m);
     
-    try {
-      broadcastCRM('new_message', {
-        conversationId,
-        message: {
-          id: botMessageId,
-          conversation_id: conversationId,
-          message: replyMessage,
-          is_from_page: 1,
-          created_time: createdTime
-        }
-      });
-    } catch (e) {
-      console.log('⚠️ Không thể broadcast tin nhắn Bot lên UI:', e.message);
+    for (const msg of messagesToSend) {
+      const delayTime = getRandomDelay(settings.botDelayMin || 3, settings.botDelayMax || 8);
+      console.log(`⏳ Bot delay ${delayTime}ms trước khi gửi...`);
+      await delay(delayTime);
+
+      // Gửi qua nền tảng
+      await replyCRM(conversation.sender_id, msg, conversation.type, conversationId);
+      console.log(`✅ Bot đã trả lời: ${msg}`);
+
+      // Cập nhật DB và UI cục bộ
+      const botMessageId = 'msg_bot_' + Date.now() + Math.floor(Math.random() * 1000);
+      const createdTime = new Date().toISOString();
+      await saveMessage(botMessageId, conversationId, msg, true, createdTime);
+
+      try {
+        broadcastCRM('new_message', {
+          conversationId,
+          message: {
+            id: botMessageId,
+            conversation_id: conversationId,
+            message: msg,
+            is_from_page: 1,
+            created_time: createdTime
+          }
+        });
+      } catch (e) {
+        console.log('⚠️ Không thể broadcast tin nhắn Bot lên UI:', e.message);
+      }
     }
 
   } catch (error) {

@@ -401,8 +401,8 @@ const getSmartFilteredSkus = async (skuFolders, allProductsInfo) => {
     );
 
     if (sheetRow) {
-      const isPriority = prioritySkus.includes(skuFolder.name.toUpperCase());
       const priority = String(sheetRow['Tập Trung'] || '0').trim();
+      const isPriority = priority === '1*' || prioritySkus.includes(skuFolder.name.toUpperCase());
       const group = isPriority ? 'P' : (['1', '2', '0'].includes(priority) ? priority : '0');
       groups[group].push({
         folder: skuFolder,
@@ -457,7 +457,13 @@ const getSmartFilteredSkus = async (skuFolders, allProductsInfo) => {
   };
 
   const result = [
-    ...groups[selectedGroup].sort(sortByMedia),
+    ...groups[selectedGroup].sort((a, b) => {
+      if (selectedGroup === 'P') {
+         // Sort alphabetically for Priority group to ensure T1 -> T2 -> T3 order
+         return a.folder.name.localeCompare(b.folder.name, undefined, {numeric: true});
+      }
+      return sortByMedia(a, b);
+    }),
     ...Object.entries(groups)
       .filter(([k]) => k !== selectedGroup)
       .sort(([a], [b]) => Number(b) - Number(a)) // Ưu tiên nhóm cao hơn trước

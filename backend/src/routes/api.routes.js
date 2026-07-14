@@ -400,7 +400,7 @@ router.post('/reset-state', (req, res) => {
 router.post('/train-image', async (req, res) => {
   try {
     resetGlobalStop();
-    const { sku } = req.body || {};
+    const sku = req.body?.sku ? req.body.sku.trim() : null;
     addActivity('Bắt đầu Train Ảnh (GPT Vision)' + (sku ? ` - SKU: ${sku}` : ''), 'info');
     sendLogToClients({ time: new Date().toLocaleTimeString(), sender: 'System', message: '🚀 Bắt đầu luồng Train Ảnh...', type: 'info' });
     

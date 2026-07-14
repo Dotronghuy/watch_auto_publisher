@@ -95,12 +95,13 @@ app.listen(PORT, async () => {
   }
 
   // 3. Khởi động Background Job để tracking Metrics
-  setInterval(async () => {
-    try {
-      console.log('📊 Đang chạy tiến trình quét tương tác bài viết (5 phút/lần)...');
-      await trackPostMetrics();
-    } catch (e) {
-      console.error('⚠️ Lỗi trackPostMetrics (bỏ qua):', e.message);
-    }
-  }, 5 * 60 * 1000); // Mỗi 5 phút
+  // TẠM TẮT: Theo yêu cầu để tránh rác terminal
+  // setInterval(async () => {
+  //   try {
+  //     console.log('📊 Đang chạy tiến trình quét tương tác bài viết (5 phút/lần)...');
+  //     await trackPostMetrics();
+  //   } catch (e) {
+  //     console.error('⚠️ Lỗi trackPostMetrics (bỏ qua):', e.message);
+  //   }
+  // }, 5 * 60 * 1000); // Mỗi 5 phút
 });

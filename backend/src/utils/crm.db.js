@@ -255,6 +255,21 @@ export const markConversationAsApproved = (id) => {
   });
 };
 
+export const checkDuplicateBotMessage = (conversationId, text) => {
+  return new Promise((resolve, reject) => {
+    db.get(
+      `SELECT id FROM messages 
+       WHERE conversation_id = ? AND is_from_page = 1 AND message = ?
+       ORDER BY created_time DESC LIMIT 1`, 
+      [conversationId, text], 
+      (err, row) => {
+        if (err) reject(err);
+        else resolve(!!row);
+      }
+    );
+  });
+};
+
 export const getConversationById = (id) => {
   return new Promise((resolve, reject) => {
     db.get(`SELECT * FROM conversations WHERE id = ?`, [id], (err, row) => {

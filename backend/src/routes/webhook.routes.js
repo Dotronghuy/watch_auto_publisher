@@ -2,7 +2,7 @@ import express from 'express';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { saveConversation, saveMessage, getConversations, getMessageById, getConversationByIdentity } from '../utils/crm.db.js';
+import { saveConversation, saveMessage, getConversations, getMessageById, getConversationByIdentity, checkDuplicateBotMessage } from '../utils/crm.db.js';
 import { broadcastCRM } from './api.routes.js';
 import { autoTagCustomer } from '../services/autotag.service.js';
 import { handleIncomingMessage } from '../services/chatbot.service.js';
@@ -99,6 +99,12 @@ router.post('/', async (req, res) => {
             const existingConversation = await getConversationByIdentity('facebook', 'inbox', customerId, accountId);
             const convId = existingConversation?.id || syntheticConvId;
 
+            // Chống nhân bản tin nhắn Bot (do Webhook dội lại)
+            if (isFromPage && text.trim()) {
+              const isDupe = await checkDuplicateBotMessage(convId, text.trim());
+              if (isDupe) continue;
+            }
+
             // Lưu conversation
             await saveConversation(
               convId, 'facebook', 'inbox',
@@ -109,6 +115,10 @@ router.post('/', async (req, res) => {
             );
 
             const existingMessage = messageId ? await getMessageById(messageId) : null;
+            if (existingMessage) {
+              console.log(`[Webhook] Bỏ qua tin nhắn trùng lặp (đã xử lý mid): ${messageId}`);
+              continue;
+            }
 
             // Lưu message
             await saveMessage(
@@ -205,6 +215,12 @@ router.post('/', async (req, res) => {
             const syntheticConvId = `ig_${[senderId, recipientId].sort().join('_')}`;
             const existingConversation = await getConversationByIdentity('instagram', 'inbox', customerId, accountId);
             const convId = existingConversation?.id || syntheticConvId;
+
+            // Chống nhân bản tin nhắn Bot (do Webhook dội lại)
+            if (isFromPage && text.trim()) {
+              const isDupe = await checkDuplicateBotMessage(convId, text.trim());
+              if (isDupe) continue;
+            }
 
             await saveConversation(
               convId, 'instagram', 'inbox',

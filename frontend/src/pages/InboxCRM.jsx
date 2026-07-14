@@ -55,6 +55,11 @@ const InboxCRM = () => {
   const emojiPickerRef = useRef(null);
   const activeConvRef = useRef(activeConv);
 
+  // LUÔN ĐỒNG BỘ activeConvRef VỚI STATE MỚI NHẤT
+  useEffect(() => {
+    activeConvRef.current = activeConv;
+  }, [activeConv]);
+
   const fetchConversations = useCallback(async () => {
     try {
       const res = await fetch('/api/crm/conversations');
@@ -154,14 +159,15 @@ const InboxCRM = () => {
       // Reconnect tự động bởi browser, ko cần xử lý
     };
 
-    // Background auto-sync: gọi sync API mỗi 5 giây để backend fetch data mới từ FB/IG
-    const syncInterval = setInterval(async () => {
-      try {
-        await fetch('/api/crm/sync', { method: 'POST' });
-      } catch {
-        // Background sync will retry on the next interval.
-      }
-    }, 5000);
+    // Background auto-sync: Đã TẮT vì đã dùng Webhook
+    // const syncInterval = setInterval(async () => {
+    //   try {
+    //     await fetch('/api/crm/sync', { method: 'POST' });
+    //   } catch {
+    //     // Background sync will retry on the next interval.
+    //   }
+    // }, 5000);
+    const syncInterval = null;
 
     // Trigger sync lần đầu
     fetch('/api/crm/sync', { method: 'POST' }).catch(() => {});
@@ -352,7 +358,7 @@ const InboxCRM = () => {
 
   const renderMessageText = (text) => {
     if (!text) return null;
-    const parts = text.split(/(\[IMAGE: .*?\]|\[VIDEO: .*?\]|\[FILE: .*?\])/g);
+    const parts = text.split(/(\[IMAGE: .*?\]|\[VIDEO: .*?\]|\[AUDIO: .*?\]|\[FILE: .*?\])/g);
     return parts.map((part, index) => {
       if (part.startsWith('[IMAGE: ')) {
         const url = part.replace('[IMAGE: ', '').slice(0, -1);
@@ -373,8 +379,22 @@ const InboxCRM = () => {
             <video src={url} controls style={{maxWidth: '250px', maxHeight: '300px', objectFit: 'contain', borderRadius: '8px'}} />
           </div>
         );
+      } else if (part.startsWith('[AUDIO: ')) {
+        const url = part.replace('[AUDIO: ', '').slice(0, -1);
+        return (
+          <div key={index} style={{marginTop: '5px'}}>
+            <audio src={url} controls style={{maxWidth: '250px'}} />
+          </div>
+        );
       } else if (part.startsWith('[FILE: ')) {
         const url = part.replace('[FILE: ', '').slice(0, -1);
+        if (url.match(/\.(mp3|wav|ogg|m4a)$/i) || url.includes('audioclip')) {
+          return (
+            <div key={index} style={{marginTop: '5px'}}>
+              <audio src={url} controls style={{maxWidth: '250px'}} />
+            </div>
+          );
+        }
         return (
           <div key={index} style={{marginTop: '5px'}}>
             <a href={url} target="_blank" rel="noreferrer" style={{color: '#4ade80', textDecoration: 'underline'}}>
@@ -999,6 +1019,18 @@ const InboxCRM = () => {
                   value={replyText}
                   onChange={e => setReplyText(e.target.value)}
                   onKeyDown={e => e.key === 'Enter' && handleSend()}
+                  onPaste={(e) => {
+                    const items = e.clipboardData?.items;
+                    if (items) {
+                      for (let i = 0; i < items.length; i++) {
+                        if (items[i].type.indexOf('image') !== -1) {
+                          alert('Tính năng gửi ảnh từ phím tắt Ctrl+V đang được phát triển, hiện tại chỉ hỗ trợ text!');
+                          e.preventDefault();
+                          return;
+                        }
+                      }
+                    }
+                  }}
                   disabled={!hasPermission('inbox.reply')}
                 />
                 <div style={{position: 'relative'}} ref={emojiPickerRef}>
