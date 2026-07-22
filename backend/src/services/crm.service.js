@@ -12,6 +12,22 @@ const accountsPath = path.join(__dirname, '../../config/accounts.json');
 
 const GRAPH_API_VERSION = 'v21.0';
 const GRAPH_API_BASE = `https://graph.facebook.com/${GRAPH_API_VERSION}`;
+const fastSyncRetryAfter = new Map();
+
+const isFastSyncCoolingDown = (key) => {
+  const retryAt = fastSyncRetryAfter.get(key) || 0;
+  if (retryAt <= Date.now()) {
+    fastSyncRetryAfter.delete(key);
+    return false;
+  }
+  return true;
+};
+
+const applyFastSyncCooldown = (key, options) => {
+  if (!options.silentErrors) return;
+  const cooldownMs = Math.max(60000, Number.parseInt(options.errorCooldownMs, 10) || 30 * 60 * 1000);
+  fastSyncRetryAfter.set(key, Date.now() + cooldownMs);
+};
 
 /**
  * Đọc accounts từ file config
@@ -34,6 +50,8 @@ const getActiveAccounts = () => {
  */
 export const fetchFacebookInbox = async (pageToken, accountId, fbPageId, options = {}) => {
   if (!pageToken) return;
+  const fastSyncKey = `facebook:${accountId}`;
+  if (options.silentErrors && isFastSyncCoolingDown(fastSyncKey)) return false;
   try {
     const conversationLimit = Math.max(1, Number.parseInt(options.conversationLimit, 10) || 25);
     const messageLimit = Math.max(1, Number.parseInt(options.messageLimit, 10) || 20);
@@ -106,7 +124,10 @@ export const fetchFacebookInbox = async (pageToken, accountId, fbPageId, options
     }
     return hasAnyNewCustomerMessage;
   } catch (error) {
-    console.error(`❌ Lỗi FB Inbox (Account ${accountId}):`, error.response?.data || error.message);
+    applyFastSyncCooldown(fastSyncKey, options);
+    if (!options.silentErrors) {
+      console.error(`❌ Lỗi FB Inbox (Account ${accountId}):`, error.response?.data || error.message);
+    }
     return false;
   }
 };
@@ -147,6 +168,8 @@ export const fetchFacebookComments = async (pageToken, accountId) => {
  */
 export const fetchInstagramInbox = async (pageToken, accountId, igUserId, options = {}) => {
   if (!pageToken) return;
+  const fastSyncKey = `instagram:${accountId}`;
+  if (options.silentErrors && isFastSyncCoolingDown(fastSyncKey)) return false;
   try {
     const conversationLimit = Math.max(1, Number.parseInt(options.conversationLimit, 10) || 25);
     const messageLimit = Math.max(1, Number.parseInt(options.messageLimit, 10) || 20);
@@ -229,7 +252,10 @@ export const fetchInstagramInbox = async (pageToken, accountId, igUserId, option
     }
     return hasAnyNewCustomerMessage;
   } catch (error) {
-    console.error(`❌ Lỗi IG Inbox (Account ${accountId}):`, error.response?.data || error.message);
+    applyFastSyncCooldown(fastSyncKey, options);
+    if (!options.silentErrors) {
+      console.error(`❌ Lỗi IG Inbox (Account ${accountId}):`, error.response?.data || error.message);
+    }
     return false;
   }
 };
@@ -316,7 +342,12 @@ export const syncCRMInboxes = async () => {
   const accountResults = await Promise.all(activeAccounts.map(async (acc) => {
     const { id, fbAccessToken, igAccessToken, igUserId, fbPageId } = acc;
     const syncTasks = [];
-    const fastOptions = { conversationLimit: 10, messageLimit: 5 };
+    const fastOptions = {
+      conversationLimit: 10,
+      messageLimit: 5,
+      silentErrors: true,
+      errorCooldownMs: 30 * 60 * 1000,
+    };
 
     if (fbAccessToken) {
       syncTasks.push(fetchFacebookInbox(fbAccessToken, id, fbPageId, fastOptions));
@@ -333,8 +364,8 @@ export const syncCRMInboxes = async () => {
   return accountResults.some(Boolean);
 };
 
-export const startFastCRMInboxSync = (intervalMs = 2000) => {
-  const safeIntervalMs = Math.max(2000, Number.parseInt(intervalMs, 10) || 2000);
+export const startFastCRMInboxSync = (intervalMs = 15000) => {
+  const safeIntervalMs = Math.max(10000, Number.parseInt(intervalMs, 10) || 15000);
   if (global.crmFastSyncInterval) {
     return global.crmFastSyncInterval;
   }
@@ -363,7 +394,9 @@ export const startFastCRMInboxSync = (intervalMs = 2000) => {
 
   global.crmFastSyncInterval = setInterval(runFastInboxSync, safeIntervalMs);
   setTimeout(runFastInboxSync, 1000);
-  console.log(`✅ Đã bật đồng bộ nhanh CRM Inbox mỗi ${safeIntervalMs / 1000}s.`);
+  if (process.env.CRM_FAST_SYNC_VERBOSE === 'true') {
+    console.log(`✅ Đã bật đồng bộ nhanh CRM Inbox mỗi ${safeIntervalMs / 1000}s.`);
+  }
   return global.crmFastSyncInterval;
 };
 

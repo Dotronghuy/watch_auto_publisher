@@ -87,7 +87,7 @@ app.listen(PORT, async () => {
   console.log(`🚀 Server is running on http://localhost:${PORT}`);
 
   try {
-    startFastCRMInboxSync(process.env.CRM_FAST_SYNC_INTERVAL_MS || 2000);
+    startFastCRMInboxSync(process.env.CRM_FAST_SYNC_INTERVAL_MS || 15000);
   } catch (error) {
     console.error('⚠️ Không thể khởi động đồng bộ nhanh CRM Inbox:', error.message);
   }

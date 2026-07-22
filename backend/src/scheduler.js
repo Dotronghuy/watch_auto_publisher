@@ -4,7 +4,6 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import cron from 'node-cron';
 import { spawn } from 'child_process';
-import { startFastCRMInboxSync } from './services/crm.service.js';
 import { syncHashesFromSheets } from './services/image-hash.service.js';
 import { runNightlySelfLearning } from './services/self-learning.service.js';
 
@@ -16,7 +15,6 @@ const heartbeatPath = path.join(__dirname, '../config/.heartbeat');
 // restart backend giữa một phiên Auto-Fill mỗi khi scheduler cập nhật file này.
 const lastRunStatePath = path.join(__dirname, '../config/last_run.state');
 const legacyLastRunPath = path.join(__dirname, '../config/last_run.json');
-const CRM_FAST_SYNC_INTERVAL_MS = Math.max(2000, Number.parseInt(process.env.CRM_FAST_SYNC_INTERVAL_MS || '2000', 10));
 
 let isSchedulerRunning = false; // Guard chống gọi scheduler 2 lần đồng thời
 let heartbeatInterval = null;
@@ -299,8 +297,6 @@ export const startScheduler = async (isSettingsUpdate = false) => {
     syncHashesFromSheets().catch(e => console.error('Lỗi syncHashesFromSheets:', e));
   });
   console.log('✅ Đã lên lịch Sync Ảnh Google Sheets lúc 03:00 sáng mỗi ngày.');
-
-  startFastCRMInboxSync(CRM_FAST_SYNC_INTERVAL_MS);
 
   isSchedulerRunning = false; // Reset để cho phép gọi lại khi user thay đổi settings
 };
