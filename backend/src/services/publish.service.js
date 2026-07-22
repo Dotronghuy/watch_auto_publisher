@@ -349,6 +349,11 @@ export const forceResetRunningState = () => {
 };
 
 const getSmartFilteredSkus = async (skuFolders, allProductsInfo) => {
+  // DAILY VLOG chỉ đăng thủ công, tuyệt đối không đưa vào bất kỳ nhánh tự động/fallback nào.
+  skuFolders = skuFolders.filter(folder =>
+    !folder.name.toUpperCase().replace(/[\s_-]+/g, '').includes('DAILYVLOG')
+  );
+
   const sheetData = await readFromSheet();
 
   let prioritySkus = [];
@@ -469,13 +474,6 @@ const getSmartFilteredSkus = async (skuFolders, allProductsInfo) => {
       .sort(([a], [b]) => Number(b) - Number(a)) // Ưu tiên nhóm cao hơn trước
       .flatMap(([, v]) => v.sort(sortByMedia))
   ].map(item => item.folder);
-
-  // Thêm DAILY VLOG vào luồng với tỷ lệ 15%
-  const dailyVlogFolder = skuFolders.find(f => f.name.toUpperCase().includes('DAILY VLOG'));
-  if (dailyVlogFolder && Math.random() < 0.15) {
-    result.unshift(dailyVlogFolder);
-    liveLog('🎥 [Smart Filter] Trúng tỷ lệ 15% xuất hiện DAILY VLOG!', 'highlight', 'System');
-  }
 
   if (result.length === 0) {
     liveLog('⚠️ [Smart Filter] Không có SKU khả dụng, dùng random.', 'warning', 'System');
