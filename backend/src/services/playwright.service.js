@@ -237,7 +237,7 @@ export const generateBackgroundOnChatGPT = async (imagePath, promptsArray, abort
         context = await chromium.launchPersistentContext(userDataDir, {
             headless: false,
             args: [
-                '--window-position=-999,-999',
+                '--window-position=100,100',
                 '--window-size=1280,720',
                 '--disable-dev-shm-usage',
                 '--disable-gpu',
@@ -252,6 +252,7 @@ export const generateBackgroundOnChatGPT = async (imagePath, promptsArray, abort
             }
         });
         page = context.pages().length > 0 ? context.pages()[0] : await context.newPage();
+        await page.bringToFront();
         
         // Anti-fingerprint nâng cao (Xóa Webdriver)
         await page.addInitScript(() => {
@@ -1259,10 +1260,11 @@ export const generateContentOnChatGPT = async (prompt, type, imagePath = null) =
     try {
         context = await chromium.launchPersistentContext(userDataDir, {
             headless: false,
-            args: ['--window-position=-999,-999', '--window-size=1280,720'],
+            args: ['--window-position=100,100', '--window-size=1280,720'],
             viewport: { width: 1280, height: 720 }
         });
         page = context.pages().length > 0 ? context.pages()[0] : await context.newPage();
+        await page.bringToFront();
         // Luôn sử dụng URL gốc của Dự án Content AI (Bảo đảm 100% chạy trong Dự án)
         let targetUrl = getSettingValue('chatGptContentProjectUrl') || 'https://chatgpt.com/g/g-p-6a472f6b41d48191a7d769ade350641d-content-watch-ai/project';
         
@@ -1481,11 +1483,12 @@ export const analyzeNewSampleImages = async () => {
         const userDataDir = path.join(__dirname, '../../chrome_data_chatgpt');
         context = await chromium.launchPersistentContext(userDataDir, {
             headless: false,
-            args: ['--window-position=-999,-999', '--window-size=1280,720'],
+            args: ['--window-position=100,100', '--window-size=1280,720'],
             viewport: { width: 1280, height: 720 },
             timeout: 60000 // 60s timeout
         });
         page = context.pages().length > 0 ? context.pages()[0] : await context.newPage();
+        await page.bringToFront();
     } catch (err) {
         console.error('❌ Lỗi khởi động trình duyệt:', err.message);
         if (err.message.includes('lock')) {
