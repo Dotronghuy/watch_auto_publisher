@@ -6,8 +6,12 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Cấu hình
-const KEYFILEPATH = path.join(__dirname, '../../config/credentials.json');
+// Dùng cùng file credentials với Google Drive, Products Sheet và màn hình cài đặt.
+// Bản cũ từng đọc nhầm backend/config nên máy chỉ có file đã upload ở src/config sẽ lỗi riêng SKU_STATUS.
+const PRIMARY_KEYFILEPATH = path.join(__dirname, '../config/credentials.json');
+const LEGACY_KEYFILEPATH = path.join(__dirname, '../../config/credentials.json');
+const KEYFILEPATH = fs.existsSync(PRIMARY_KEYFILEPATH) ? PRIMARY_KEYFILEPATH : LEGACY_KEYFILEPATH;
+const DEFAULT_SKU_STATUS_SHEET_ID = '1tWg6zzAw6F9_2vlvOFfPy_2tV88xFGPB-4f5NvbwS_M';
 const SCOPES = ['https://www.googleapis.com/auth/spreadsheets'];
 
 const auth = new google.auth.GoogleAuth({
@@ -22,12 +26,13 @@ const getSheetId = () => {
     const settingsPath = path.join(__dirname, '../../config/settings.json');
     if (fs.existsSync(settingsPath)) {
       const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
-      if (settings.googleSheetId) return settings.googleSheetId;
+      if (settings.skuStatusSheetId) return settings.skuStatusSheetId;
+      if (settings.googleSheetId) return settings.googleSheetId; // Tương thích cấu hình cũ
     }
   } catch (e) {
     console.error('Lỗi lấy Google Sheet ID:', e.message);
   }
-  return process.env.GOOGLE_SHEET_ID || '1y2U9cuBNTT6SoHNHsHycLqVlwVM9yjvsSp6Nq2DPwxo';
+  return process.env.SKU_STATUS_SHEET_ID || DEFAULT_SKU_STATUS_SHEET_ID;
 };
 
 // Đọc dữ liệu từ Google Sheet
@@ -61,7 +66,8 @@ export const readFromSheet = async () => {
 
     return data;
   } catch (error) {
-    console.error('Lỗi khi đọc Google Sheet:', error.message);
+    const detail = error.response?.data?.error?.message || error.message;
+    console.error(`❌ [SKU_STATUS] Không đọc được Sheet ${spreadsheetId}: ${detail}`);
     return [];
   }
 };

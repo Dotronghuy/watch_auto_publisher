@@ -6,7 +6,10 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const KEYFILEPATH = path.join(__dirname, '../config/credentials.json');
+const PRIMARY_KEYFILEPATH = path.join(__dirname, '../config/credentials.json');
+const LEGACY_KEYFILEPATH = path.join(__dirname, '../../config/credentials.json');
+const KEYFILEPATH = fs.existsSync(PRIMARY_KEYFILEPATH) ? PRIMARY_KEYFILEPATH : LEGACY_KEYFILEPATH;
+const DEFAULT_CATALOG_SHEET_ID = '1y2U9cuBNTT6SoHNHsHycLqVlwVM9yjvsSp6Nq2DPwxo';
 const SCOPES = ['https://www.googleapis.com/auth/spreadsheets'];
 
 const auth = new google.auth.GoogleAuth({
@@ -24,7 +27,7 @@ const getSheetId = () => {
       if (settings.catalogSheetId) return settings.catalogSheetId;
     }
   } catch (e) {}
-  return process.env.GOOGLE_SHEET_ID || '1y2U9cuBNTT6SoHNHsHycLqVlwVM9yjvsSp6Nq2DPwxo';
+  return process.env.CATALOG_SHEET_ID || DEFAULT_CATALOG_SHEET_ID;
 };
 
 
@@ -68,7 +71,8 @@ export const getProductInfoBySku = async (sku) => {
     console.log(`⚠️ Không tìm thấy SKU ${sku} trong Sheet.`);
     return null;
   } catch (error) {
-    console.error('Lỗi khi đọc Google Sheets:', error.message);
+    const detail = error.response?.data?.error?.message || error.message;
+    console.error(`❌ [PRODUCTS] Không đọc được Sheet ${getSheetId()}: ${detail}`);
     return null;
   }
 };
@@ -115,7 +119,8 @@ export const updateProductPostInfo = async (sku, postId) => {
       console.log(`✅ Đã cập nhật lịch sử đăng bài (Post ID, Ngày đăng) cho SKU ${sku} lên Google Sheets.`);
     }
   } catch (error) {
-    console.error('Lỗi khi ghi lịch sử vào Google Sheets:', error.message);
+    const detail = error.response?.data?.error?.message || error.message;
+    console.error(`❌ [PRODUCTS] Không ghi được lịch sử vào Sheet ${getSheetId()}: ${detail}`);
   }
 };
 
@@ -163,7 +168,8 @@ export const getAllProductsPostInfo = async () => {
     }
     return products;
   } catch (error) {
-    console.error('Lỗi khi lấy thông tin post từ Sheets:', error.message);
+    const detail = error.response?.data?.error?.message || error.message;
+    console.error(`❌ [PRODUCTS] Không lấy được lịch sử đăng từ Sheet ${getSheetId()}: ${detail}`);
     return [];
   }
 };
@@ -266,6 +272,7 @@ export const clearExpiredPostInfo = async (rowIndices) => {
     });
     console.log(`✅ Đã dọn dẹp ngày đăng trên Sheets cho ${rowIndices.length} SKU (đã hết cooldown nhưng ko bốc trúng).`);
   } catch (error) {
-    console.error('Lỗi khi xóa lịch sử hết hạn trên Sheets:', error.message);
+    const detail = error.response?.data?.error?.message || error.message;
+    console.error(`❌ [PRODUCTS] Không xóa được lịch sử hết hạn trên Sheet ${getSheetId()}: ${detail}`);
   }
 };
