@@ -8,7 +8,11 @@ import { readFromSheet } from './sheets.service.js';
 import { getPostedImageIds, addPostedImageId, addPostMetric } from '../utils/history.js';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { generateBackgroundOnChatGPT, generateContentOnChatGPT } from './playwright.service.js';
+import {
+  assertGeneratedImagesAreNotInputReferences,
+  generateBackgroundOnChatGPT,
+  generateContentOnChatGPT
+} from './playwright.service.js';
 import { PrismaClient } from '@prisma/client';
 const prisma = new PrismaClient();
 import { generateBackgroundOnSD } from './sd.service.js';
@@ -1685,6 +1689,9 @@ export const autoPublishRoutine = async () => {
       // 3.1 NẾU LÀ CHẾ ĐỘ AI -> Gọi ChatGPT vẽ nền (Sinh 4-6 ảnh)
       let aiGeneratedImagePaths = [];
       if (postMode === 'AI' && localFilePaths.length === 1) {
+        // Chặn với cả thư viện ảnh mẫu, không chỉ ảnh mẫu được bốc ở lượt hiện tại.
+        // Nhờ vậy một thumbnail cũ trong cuộc trò chuyện cũng không thể lọt ra Fanpage.
+        const aiInputReferencePaths = [...localFilePaths, ...getAllSampleImageFiles()];
         try {
           const isExperimentalAI = true; // BẬT CÔNG TẮC THỬ NGHIỆM
 
@@ -1696,6 +1703,7 @@ export const autoPublishRoutine = async () => {
             sampleInfo = sampleInfos[0];
             const sampleImg = sampleInfo.imagePath;
             if (sampleImg) liveLog(`🖼️ Dùng ảnh mẫu ${sampleInfo.genderTag}: ${sampleInfo.sampleName}`, 'highlight', 'ChatGPT');
+            aiInputReferencePaths.push(...sampleInfos.map(info => info.imagePath).filter(Boolean));
 
             const imgPromptsArray = sampleInfos.map(info => ({
               prompt: getPromptGuidePromptOrThrow(info.genderTag),
@@ -1775,6 +1783,7 @@ export const autoPublishRoutine = async () => {
 
           const sampleImg = getRandomSampleImage();
           if (sampleImg) liveLog(`🖼️ Dùng ảnh mẫu tham chiếu: ${path.basename(sampleImg)}`, 'highlight', 'ChatGPT');
+          if (sampleImg) aiInputReferencePaths.push(sampleImg);
 
           let extraWatchImages = [];
           try {
@@ -1801,6 +1810,7 @@ export const autoPublishRoutine = async () => {
                 checkAbort();
                 const p = await downloadFileFromDrive(file.id, file.name);
                 extraWatchImages.push(p);
+                aiInputReferencePaths.push(p);
               }
               liveLog(`✅ Đã tải ${extraWatchImages.length} ảnh tham khảo cho ChatGPT`, 'success', 'Google Drive');
             }
@@ -1814,6 +1824,10 @@ export const autoPublishRoutine = async () => {
           if (!Array.isArray(aiGeneratedImagePaths) || aiGeneratedImagePaths.length === 0) {
             throw new Error('ChatGPT trả về 0 ảnh AI. Dừng Auto Publish để tránh chạy tiếp khi chưa có ảnh tạo mới.');
           }
+
+          // Lớp chặn cuối ngay trước khâu đăng: kể cả engine hoặc selector thay đổi
+          // về sau, ảnh đầu ra trùng ảnh sản phẩm/ảnh mẫu vẫn không được lên Fanpage.
+          await assertGeneratedImagesAreNotInputReferences(aiGeneratedImagePaths, aiInputReferencePaths);
 
           // Xóa ảnh gốc vì không cần thiết đăng ảnh gốc nữa
           if (fs.existsSync(localFilePaths[0])) fs.unlinkSync(localFilePaths[0]);

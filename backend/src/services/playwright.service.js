@@ -405,6 +405,138 @@ export const downloadRenderedChatGptImage = async (page, imageUrl) => {
     }
 };
 
+const normalizeImageForReferenceComparison = async (imageInput) => {
+    return sharp(imageInput)
+        .rotate()
+        .resize(96, 96, { fit: 'fill' })
+        .flatten({ background: { r: 255, g: 255, b: 255 } })
+        .removeAlpha()
+        .toColourspace('srgb')
+        .raw()
+        .toBuffer();
+};
+
+const normalizedReferencePixelCache = new Map();
+
+const getNormalizedReferencePixels = async (referencePath) => {
+    const stats = fs.statSync(referencePath);
+    const cacheKey = `${path.resolve(referencePath)}:${stats.size}:${stats.mtimeMs}`;
+    if (!normalizedReferencePixelCache.has(cacheKey)) {
+        normalizedReferencePixelCache.set(cacheKey, normalizeImageForReferenceComparison(referencePath));
+    }
+    return normalizedReferencePixelCache.get(cacheKey);
+};
+
+// Chặn trường hợp thumbnail ảnh sản phẩm/ảnh bố cục vừa upload bị nhận nhầm là
+// ảnh ChatGPT mới tạo. So sánh trên pixel đã chuẩn hóa nên vẫn bắt được ảnh bị
+// đổi kích thước hoặc mã hóa lại từ JPG sang PNG.
+export const findMatchingInputReferenceImage = async (generatedImage, referencePaths = []) => {
+    const validReferencePaths = [...new Set(referencePaths)]
+        .filter((referencePath) => referencePath && fs.existsSync(referencePath));
+    if (validReferencePaths.length === 0) return null;
+
+    const generatedPixels = await normalizeImageForReferenceComparison(generatedImage);
+    const pixelCount = generatedPixels.length / 3;
+
+    for (const referencePath of validReferencePaths) {
+        try {
+            const referencePixels = await getNormalizedReferencePixels(referencePath);
+            if (referencePixels.length !== generatedPixels.length) continue;
+
+            let totalDifference = 0;
+            let clearlyChangedPixels = 0;
+            for (let offset = 0; offset < generatedPixels.length; offset += 3) {
+                const pixelDifference = (
+                    Math.abs(generatedPixels[offset] - referencePixels[offset]) +
+                    Math.abs(generatedPixels[offset + 1] - referencePixels[offset + 1]) +
+                    Math.abs(generatedPixels[offset + 2] - referencePixels[offset + 2])
+                ) / 3;
+                totalDifference += pixelDifference;
+                // Re-encode JPEG thường gây sai số nhỏ trên nhiều pixel; chỉ tính
+                // pixel thay đổi nội dung thật sự khi độ lệch màu vượt 40/255.
+                if (pixelDifference > 40) clearlyChangedPixels++;
+            }
+
+            const meanAbsoluteError = totalDifference / pixelCount;
+            const changedPixelRatio = clearlyChangedPixels / pixelCount;
+            if (meanAbsoluteError <= 6 && changedPixelRatio <= 0.01) {
+                return { referencePath, meanAbsoluteError, changedPixelRatio };
+            }
+        } catch (error) {
+            console.log(`⚠️ Không so sánh được ảnh tham chiếu ${path.basename(referencePath)}: ${error.message}`);
+        }
+    }
+
+    return null;
+};
+
+export const assertGeneratedImagesAreNotInputReferences = async (generatedImagePaths = [], referencePaths = []) => {
+    for (const generatedImagePath of generatedImagePaths) {
+        if (!generatedImagePath || !fs.existsSync(generatedImagePath)) {
+            throw new Error(`Ảnh AI đầu ra không tồn tại: ${generatedImagePath || 'N/A'}`);
+        }
+
+        const match = await findMatchingInputReferenceImage(generatedImagePath, referencePaths);
+        if (match) {
+            const error = new Error(
+                `Phát hiện ảnh AI đầu ra trùng ảnh đầu vào ${path.basename(match.referencePath)} ` +
+                `(MAE=${match.meanAbsoluteError.toFixed(2)}, changed=${(match.changedPixelRatio * 100).toFixed(2)}%). ` +
+                'Đã chặn đăng bài để tránh đưa ảnh mẫu lên Fanpage.'
+            );
+            error.code = 'UNSAFE_REFERENCE_IMAGE';
+            throw error;
+        }
+    }
+};
+
+export const findNewAssistantImageCandidate = async (page, {
+    minArea,
+    baselineAssistantMessageCount,
+    baselineAssistantImageSrcs = [],
+    rejectedSrcs = [],
+}) => page.evaluate(({
+    minArea: minimumArea,
+    baselineAssistantMessageCount: baselineMessageCount,
+    baselineAssistantImageSrcs: baselineImageSrcs,
+    rejectedSrcs: rejectedImageSrcs,
+}) => {
+    const assistantMessages = Array.from(document.querySelectorAll('[data-message-author-role="assistant"]'));
+    const newAssistantMessages = assistantMessages.slice(baselineMessageCount);
+    const all = newAssistantMessages.flatMap(message =>
+        Array.from(message.querySelectorAll('img'))
+    ).map((img) => {
+        const src = img.currentSrc || img.src || '';
+        const width = img.naturalWidth || img.offsetWidth || 0;
+        const height = img.naturalHeight || img.offsetHeight || 0;
+        const isUi = !src || src.includes('avatar') || src.includes('favicon') || src.startsWith('data:image/svg');
+        return { src, area: width * height, width, height, isUi };
+    });
+
+    const baselineSrcSet = new Set(baselineImageSrcs);
+    const rejectedSrcSet = new Set(rejectedImageSrcs);
+    const validImages = all.filter((img) =>
+        !img.isUi &&
+        img.area >= minimumArea &&
+        !baselineSrcSet.has(img.src) &&
+        !rejectedSrcSet.has(img.src)
+    );
+    const lastValid = validImages.length > 0 ? validImages[validImages.length - 1] : null;
+
+    return {
+        target: lastValid,
+        total: all.length,
+        validCount: validImages.length,
+        bestVisible: lastValid,
+        assistantMessageCount: assistantMessages.length,
+        newAssistantMessageCount: newAssistantMessages.length,
+    };
+}, {
+    minArea,
+    baselineAssistantMessageCount,
+    baselineAssistantImageSrcs,
+    rejectedSrcs,
+});
+
 const WATCH_STRAP_INTEGRITY_GUARD = `[MANDATORY WATCH STRAP INTEGRITY RULE]
 - First identify the exact bracelet/strap material, shape, width, stitching, texture, and color from Image 1. Preserve Image 1's bracelet/strap even if the scene/sample image shows a different steel bracelet, leather strap, rubber strap, or silicone strap.
 - If Image 1 has a leather, rubber, or silicone strap, render it as one continuous full-length strap from both lugs. Do not let the strap stop abruptly near the case, fade into the background, merge into fabric/skin, become a short stump, or get cropped by the frame.
@@ -779,39 +911,53 @@ CRITICAL RULES:
                 }
             } catch (e) {}
 
-            // Chỉ dùng phím Enter theo yêu cầu
-            await page.keyboard.press('Enter');
-            
-            console.log(`⏳ Đang chờ ChatGPT vẽ ảnh ${i + 1} (có thể mất 60-100 giây)...`);
-            
-            let targetImgSrc = null;
             const GENERATED_IMAGE_MIN_AREA = 30000;
             const MAX_IMAGE_WAIT_ATTEMPTS = 96; // 8 phút, tránh false timeout khi ChatGPT vẽ chậm.
-            
-            // Scroll xuống cuối trang chat trước khi quét để đảm bảo tìm đúng ảnh cũ
+            const inputReferencePaths = [
+                imagePath,
+                ...(Array.isArray(extraWatchImages) ? extraWatchImages : []),
+                currentSampleImage,
+            ].filter(Boolean);
+
+            // Ghi nhận trạng thái assistant TRƯỚC khi gửi. Ảnh upload của người dùng
+            // nằm ở message role=user nên tuyệt đối không được dùng làm ảnh đầu ra.
+            let generationBaseline = null;
             try {
-                await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
-                await page.waitForTimeout(500);
-            } catch (e) {}
-            
-            // Lấy src của ảnh cũ cuối cùng trong DOM để so sánh
-            let lastOldImageSrc = null;
-            try {
-                const existingImages = await page.evaluate((minArea) => {
-                    const valid = Array.from(document.images).filter(img => {
+                generationBaseline = await page.evaluate((minArea) => {
+                    const assistantMessages = Array.from(document.querySelectorAll('[data-message-author-role="assistant"]'));
+                    const assistantImages = assistantMessages.flatMap(message => Array.from(message.querySelectorAll('img')));
+                    const valid = assistantImages.filter(img => {
                         const isUi = !img.src || img.src.includes('avatar') || img.src.includes('favicon') || img.src.startsWith('data:image/svg');
-                        // Dùng naturalWidth/naturalHeight thay getBoundingClientRect() vì ảnh ngoài viewport có rect=0
                         const w = img.naturalWidth || img.width || 0;
                         const h = img.naturalHeight || img.height || 0;
                         return !isUi && (w * h) >= minArea;
                     });
-                    return valid.map(img => img.currentSrc || img.src);
+                    return {
+                        assistantMessageCount: assistantMessages.length,
+                        assistantImageSrcs: valid.map(img => img.currentSrc || img.src),
+                    };
                 }, GENERATED_IMAGE_MIN_AREA);
-                if (existingImages.length > 0) {
-                    lastOldImageSrc = existingImages[existingImages.length - 1];
-                }
-            } catch (e) {}
-            console.log(`📍 Src ảnh cũ cuối cùng: ${lastOldImageSrc ? lastOldImageSrc.substring(0, 40) + '...' : 'Không có'}`);
+            } catch (error) {
+                throw new Error(`Không lập được mốc ảnh ChatGPT an toàn trước khi gửi: ${error.message}`);
+            }
+
+            if (!generationBaseline || !Array.isArray(generationBaseline.assistantImageSrcs)) {
+                throw new Error('Mốc ảnh ChatGPT không hợp lệ. Đã dừng để tránh nhận nhầm ảnh đầu vào.');
+            }
+
+            console.log(
+                `📍 Mốc an toàn trước khi gửi: ${generationBaseline.assistantMessageCount} phản hồi assistant, ` +
+                `${generationBaseline.assistantImageSrcs.length} ảnh cũ.`
+            );
+
+            // Chỉ dùng phím Enter theo yêu cầu
+            await page.keyboard.press('Enter');
+
+            console.log(`⏳ Đang chờ ChatGPT vẽ ảnh ${i + 1} (có thể mất 60-100 giây)...`);
+
+            let targetImgSrc = null;
+            let targetImgBuffer = null;
+            const rejectedCandidateSrcs = new Set();
 
             let imageRetryCount = 0;
             let lastTryAgainMs = 0;
@@ -924,52 +1070,40 @@ CRITICAL RULES:
                         firstGeneratingMs = 0; // Reset nếu không còn generating
                     }
 
-                    const scanResult = await page.evaluate(({ minArea, oldSrc }) => {
-                        const all = Array.from(document.images).map((img) => {
-                            const src = img.currentSrc || img.src || '';
-                            // Dùng naturalWidth/naturalHeight để đo kích thước thực của ảnh
-                            // getBoundingClientRect() trả về 0 nếu ảnh nằm ngoài viewport (lazy load)
-                            const w = img.naturalWidth || img.offsetWidth || 0;
-                            const h = img.naturalHeight || img.offsetHeight || 0;
-                            const area = w * h;
-                            const isUi = !src || src.includes('avatar') || src.includes('favicon') || src.startsWith('data:image/svg');
-                            return {
-                                src,
-                                area,
-                                width: w,
-                                height: h,
-                                isUi
-                            };
-                        });
-
-                        const validImages = all.filter((img) => !img.isUi && img.area >= minArea);
-
-                        // Lấy ảnh cuối cùng trong DOM (ảnh mới nhất luôn được append vào cuối)
-                        const lastValid = validImages.length > 0 ? validImages[validImages.length - 1] : null;
-
-                        let target = null;
-                        if (lastValid && lastValid.src !== oldSrc) {
-                            target = lastValid;
-                        }
-
-                        return {
-                            target,
-                            total: all.length,
-                            validCount: validImages.length,
-                            bestVisible: lastValid
-                        };
-                    }, {
+                    const scanResult = await findNewAssistantImageCandidate(page, {
                         minArea: GENERATED_IMAGE_MIN_AREA,
-                        oldSrc: lastOldImageSrc
+                        baselineAssistantMessageCount: generationBaseline.assistantMessageCount,
+                        baselineAssistantImageSrcs: generationBaseline.assistantImageSrcs,
+                        rejectedSrcs: [...rejectedCandidateSrcs],
                     });
 
                     if (scanResult.target) {
-                        targetImgSrc = scanResult.target.src;
-                        console.log(`✅ Đã chộp được ảnh mới vẽ (Kích thước: ${Math.round(scanResult.target.area)} px²)`);
+                        const candidateSrc = scanResult.target.src;
+                        const candidateBuffer = await downloadRenderedChatGptImage(page, candidateSrc);
+                        const inputMatch = await findMatchingInputReferenceImage(candidateBuffer, inputReferencePaths);
+                        if (inputMatch) {
+                            rejectedCandidateSrcs.add(candidateSrc);
+                            const matchDetails = `${path.basename(inputMatch.referencePath)}; ` +
+                                `MAE=${inputMatch.meanAbsoluteError.toFixed(2)}; ` +
+                                `changed=${(inputMatch.changedPixelRatio * 100).toFixed(2)}%`;
+                            console.log(`🚫 Loại ảnh bị nhận nhầm từ đầu vào (${matchDetails}). Tiếp tục chờ ảnh AI thật...`);
+                            liveLog(`🚫 Ảnh ${i + 1}: Đã chặn một ảnh đầu vào bị nhận nhầm là ảnh AI (${path.basename(inputMatch.referencePath)}).`, 'warning', 'ChatGPT');
+                            continue;
+                        }
+
+                        targetImgSrc = candidateSrc;
+                        targetImgBuffer = candidateBuffer;
+                        console.log(
+                            `✅ Đã chộp được ảnh mới trong phản hồi assistant ` +
+                            `(Kích thước: ${Math.round(scanResult.target.area)} px²)`
+                        );
                     } else if (attempt > 0 && attempt % 6 === 0) {
                         const best = scanResult.bestVisible;
                         const bestText = best ? `${Math.round(best.width)}x${Math.round(best.height)} area=${Math.round(best.area)}` : 'none';
-                        console.log(`🔎 Chưa thấy ảnh mới hợp lệ: total=${scanResult.total}, valid=${scanResult.validCount}, lastImg=${bestText}`);
+                        console.log(
+                            `🔎 Chưa thấy ảnh assistant mới hợp lệ: assistantNew=${scanResult.newAssistantMessageCount}, ` +
+                            `images=${scanResult.total}, valid=${scanResult.validCount}, lastImg=${bestText}`
+                        );
                     }
                 } catch (e) {}
                 
@@ -1031,7 +1165,7 @@ CRITICAL RULES:
             await page.waitForTimeout(2000);
 
             console.log('📥 Đang tải ảnh xuống máy...');
-            const rawBuffer = await downloadRenderedChatGptImage(page, targetImgSrc);
+            const rawBuffer = targetImgBuffer || await downloadRenderedChatGptImage(page, targetImgSrc);
             const outputPath = path.join(__dirname, `../../temp_images/chatgpt_gen_${Date.now()}.png`);
             // Xóa sạch metadata AI (C2PA/IPTC/EXIF) để Facebook không gắn tag "Có dùng AI"
             const cleanBuffer = await sharp(rawBuffer).png().toBuffer();
