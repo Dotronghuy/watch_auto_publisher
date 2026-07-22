@@ -324,6 +324,87 @@ const isBrowserClosedError = (error) => {
     return /Target page, context or browser has been closed|Browser has been closed|Page closed|Context closed/i.test(error?.message || '');
 };
 
+const decodeImageDataUrl = (dataUrl) => {
+    if (typeof dataUrl !== 'string' || !dataUrl.includes(',')) {
+        throw new Error('Dữ liệu ảnh trả về không phải Data URL hợp lệ.');
+    }
+    return Buffer.from(dataUrl.split(',')[1], 'base64');
+};
+
+// ChatGPT thường hiển thị ảnh bằng blob URL tạm. Blob có thể bị thu hồi ngay sau
+// khi ảnh render, vì vậy luôn có canvas và element screenshot làm phương án dự phòng.
+export const downloadRenderedChatGptImage = async (page, imageUrl) => {
+    let fetchError = null;
+    try {
+        const dataUrl = await page.evaluate(async (url) => {
+            const response = await fetch(url);
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            const blob = await response.blob();
+            return await new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onloadend = () => resolve(reader.result);
+                reader.onerror = () => reject(reader.error || new Error('FileReader thất bại'));
+                reader.readAsDataURL(blob);
+            });
+        }, imageUrl);
+        return decodeImageDataUrl(dataUrl);
+    } catch (error) {
+        fetchError = error;
+        console.log(`⚠️ Không fetch được URL ảnh tạm (${error.message}). Thử lấy pixel từ DOM...`);
+    }
+
+    let canvasError = null;
+    try {
+        const dataUrl = await page.evaluate(async (url) => {
+            const image = Array.from(document.images).reverse().find((img) =>
+                (img.currentSrc || img.src || '') === url
+            );
+            if (!image) throw new Error('Không còn tìm thấy phần tử ảnh trong DOM');
+            if (!image.complete || image.naturalWidth === 0) {
+                await image.decode();
+            }
+            if (!image.naturalWidth || !image.naturalHeight) {
+                throw new Error('Ảnh DOM chưa có kích thước hợp lệ');
+            }
+
+            const canvas = document.createElement('canvas');
+            canvas.width = image.naturalWidth;
+            canvas.height = image.naturalHeight;
+            const context = canvas.getContext('2d');
+            if (!context) throw new Error('Không tạo được canvas context');
+            context.drawImage(image, 0, 0, canvas.width, canvas.height);
+            return canvas.toDataURL('image/png');
+        }, imageUrl);
+        console.log('✅ Đã lấy ảnh từ pixel đang hiển thị trong DOM.');
+        return decodeImageDataUrl(dataUrl);
+    } catch (error) {
+        canvasError = error;
+        console.log(`⚠️ Không lấy được ảnh qua canvas (${error.message}). Thử chụp trực tiếp phần tử ảnh...`);
+    }
+
+    let imageHandle = null;
+    try {
+        imageHandle = await page.evaluateHandle((url) =>
+            Array.from(document.images).reverse().find((img) =>
+                (img.currentSrc || img.src || '') === url
+            ) || null,
+        imageUrl);
+        const imageElement = imageHandle.asElement();
+        if (!imageElement) throw new Error('Không còn tìm thấy phần tử ảnh để chụp');
+        await imageElement.scrollIntoViewIfNeeded();
+        const screenshot = await imageElement.screenshot({ type: 'png' });
+        console.log('✅ Đã lưu ảnh bằng phương án chụp trực tiếp phần tử DOM.');
+        return screenshot;
+    } catch (screenshotError) {
+        throw new Error(
+            `Không thể lưu ảnh ChatGPT. fetch: ${fetchError?.message || 'n/a'}; ` +
+            `canvas: ${canvasError?.message || 'n/a'}; screenshot: ${screenshotError.message}`
+        );
+    } finally {
+        if (imageHandle) await imageHandle.dispose().catch(() => {});
+    }
+};
+
 const WATCH_STRAP_INTEGRITY_GUARD = `[MANDATORY WATCH STRAP INTEGRITY RULE]
 - First identify the exact bracelet/strap material, shape, width, stitching, texture, and color from Image 1. Preserve Image 1's bracelet/strap even if the scene/sample image shows a different steel bracelet, leather strap, rubber strap, or silicone strap.
 - If Image 1 has a leather, rubber, or silicone strap, render it as one continuous full-length strap from both lugs. Do not let the strap stop abruptly near the case, fade into the background, merge into fabric/skin, become a short stump, or get cropped by the frame.
@@ -948,21 +1029,9 @@ CRITICAL RULES:
             
             // Wait to fully load
             await page.waitForTimeout(2000);
-            
+
             console.log('📥 Đang tải ảnh xuống máy...');
-            const imageResponse = await page.evaluate(async (url) => {
-                const res = await fetch(url);
-                const blob = await res.blob();
-                return new Promise((resolve, reject) => {
-                    const reader = new FileReader();
-                    reader.onloadend = () => resolve(reader.result);
-                    reader.onerror = reject;
-                    reader.readAsDataURL(blob);
-                });
-            }, targetImgSrc);
-            
-            const base64Data = imageResponse.split(',')[1];
-            const rawBuffer = Buffer.from(base64Data, 'base64');
+            const rawBuffer = await downloadRenderedChatGptImage(page, targetImgSrc);
             const outputPath = path.join(__dirname, `../../temp_images/chatgpt_gen_${Date.now()}.png`);
             // Xóa sạch metadata AI (C2PA/IPTC/EXIF) để Facebook không gắn tag "Có dùng AI"
             const cleanBuffer = await sharp(rawBuffer).png().toBuffer();

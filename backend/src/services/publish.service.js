@@ -1471,6 +1471,7 @@ export const autoPublishRoutine = async () => {
   let localFilePaths = [];
   let finalPostId = "N/A";
   let finalSkuName = "Unknown";
+  let publishSucceeded = false;
 
   try {
         const brandFolders = await getFoldersInFolder(ROOT_DRIVE_FOLDER_ID);
@@ -2006,6 +2007,7 @@ export const autoPublishRoutine = async () => {
               try {
                 postId = await publishFBReels(finalVideoPath, postContent, { fbAccessToken: pageToken });
                 await addPostMetric('facebook_reels', postId, selectedSku.name, postContent);
+                if (postId) publishSucceeded = true;
                 liveLog(`✅ [${account.name}] Đăng FB Reels thành công! (ID: ${postId})`, 'success', 'Facebook');
               } catch (e) { liveLog(`❌ [${account.name}] Lỗi FB Reels: ${e.message}`, 'error', 'Facebook'); }
             }
@@ -2022,6 +2024,7 @@ export const autoPublishRoutine = async () => {
                   try {
                     await publishIGReels(finalVideoPath, igContent, [], { igAccessToken: igTokenToUse, igUserId: igUserToUse });
                     igSuccess = true;
+                    publishSucceeded = true;
                     liveLog(`✅ [${account.name}] Đăng IG Reels thành công!`, 'success', 'Instagram');
                     break; 
                   } catch (igErr) {
@@ -2051,6 +2054,7 @@ export const autoPublishRoutine = async () => {
                   const photoId = uploadRes.data.id;
                   postId = uploadRes.data.post_id || uploadRes.data.id;
                   await addPostMetric('facebook', postId, selectedSku.name, postContent);
+                  if (postId) publishSucceeded = true;
                   liveLog(`✅ [${account.name}] Đăng FB 1 ảnh thành công! (ID: ${postId})`, 'success', 'Facebook');
 
                   // --- MOBILE EMULATOR: TỰ ĐỘNG GẮN LINK SHOPEE ---
@@ -2088,6 +2092,7 @@ export const autoPublishRoutine = async () => {
                     const delayMs = getIgDelayMs();
                     if (delayMs > 0) await sleep(delayMs, globalStopController.signal);
                     await publishToInstagram(igContent, publicUrl, [], { igAccessToken: igTokenToUse, igUserId: igUserToUse });
+                    publishSucceeded = true;
                     liveLog(`✅ [${account.name}] Đăng IG 1 ảnh thành công!`, 'success', 'Instagram');
                   }
                } catch (e) { liveLog(`❌ [${account.name}] Lỗi đăng FB 1 ảnh: ${e.response?.data?.error?.message || e.message}`, 'error', 'Facebook'); }
@@ -2129,6 +2134,7 @@ export const autoPublishRoutine = async () => {
                   });
                   postId = feedRes.data.id;
                   await addPostMetric('facebook', postId, selectedSku.name, postContent);
+                  if (postId) publishSucceeded = true;
                   liveLog(`✅ [${account.name}] Đăng Album FB thành công! (ID: ${postId})`, 'success', 'Facebook');
 
                   // --- MOBILE EMULATOR: TỰ ĐỘNG GẮN LINK SHOPEE ---
@@ -2163,6 +2169,7 @@ export const autoPublishRoutine = async () => {
                     if (delayMs > 0) await sleep(delayMs, globalStopController.signal);
                     const igRes = await publishCarouselToInstagram(igContent, publicUrls, [], { igAccessToken: igTokenToUse, igUserId: igUserToUse });
                     if (igRes && igRes.mediaId) {
+                       publishSucceeded = true;
                        await addPostMetric('instagram', igRes.mediaId, selectedSku.name, igContent);
                        liveLog(`✅ [${account.name}] Đăng Album IG thành công!`, 'success', 'Instagram');
                     }
@@ -2175,6 +2182,10 @@ export const autoPublishRoutine = async () => {
          
          liveLog(`✅ Hoàn thành tài khoản: ${account.name}`, 'success', 'System');
       } // KẾT THÚC VÒNG LẶP CHO NHIỀU ACCOUNTS
+
+      if (!publishSucceeded) {
+        throw new Error('Không có nền tảng nào đăng bài thành công. Không cập nhật lịch sử SKU/media.');
+      }
 
       const postId = mainPostId || "N/A";
       finalPostId = postId;
@@ -2193,10 +2204,10 @@ export const autoPublishRoutine = async () => {
         throw e;
       }
       console.log(`⚠️ Lỗi tổng thể (trích xuất thông tin hoặc tạo ảnh): ${e.message}.`);
-      // Lỗi ở mức này thì đã skip việc đăng ở trong loop, nên chúng ta bỏ qua.
+      throw e;
     }
 
-    // 6. Lưu ID tất cả ảnh vào lịch sử
+    // 6. Chỉ lưu ID media sau khi ít nhất một nền tảng đã đăng thành công.
     for (const img of selectedImages) {
       await addPostedImageId(img.id);
     }
@@ -2211,6 +2222,8 @@ export const autoPublishRoutine = async () => {
     cleanTempDirectory();
     console.error('❌ Tiến trình tự động thất bại:', error.response?.data || error.message);
     throw error;
+  } finally {
+    isRoutineRunning = false;
   }
 }
 
