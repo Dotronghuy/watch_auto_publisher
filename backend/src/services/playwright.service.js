@@ -1,4 +1,4 @@
-import { chromium } from 'playwright-extra';
+﻿import { chromium } from 'playwright-extra';
 import stealth from 'puppeteer-extra-plugin-stealth';
 import path from 'path';
 import fs from 'fs';
@@ -74,6 +74,130 @@ const humanBehavior = {
     else if (roll < 0.5) await humanBehavior.randomScroll(page);
     // 50% không làm gì (như người thật ngồi chờ)
   }
+};
+
+// ─── SHARED ANTI-BOT HELPERS ───
+
+/**
+ * Trả về options chung cho launchPersistentContext với đầy đủ anti-detection:
+ * - userAgent giống Chrome thật trên Windows
+ * - locale, timezone khớp Việt Nam
+ * - Không có --no-sandbox / --disable-gpu (dễ bị detect)
+ * - viewport ngẫu nhiên nhẹ quanh 1366x768 (phổ biến nhất VN)
+ */
+const humanLaunchOptions = (extraArgs = []) => {
+    const viewportW = 1366 + Math.floor(Math.random() * 20) - 10;
+    const viewportH = 768 + Math.floor(Math.random() * 10) - 5;
+    return {
+        headless: false,
+        args: [
+            `--window-position=${80 + Math.floor(Math.random() * 40)},${60 + Math.floor(Math.random() * 30)}`,
+            `--window-size=${viewportW},${viewportH}`,
+            '--disable-dev-shm-usage',
+            '--disable-blink-features=AutomationControlled',
+            '--lang=vi-VN,vi,en-US,en',
+            ...extraArgs
+        ],
+        viewport: { width: viewportW, height: viewportH },
+        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36',
+        locale: 'vi-VN',
+        timezoneId: 'Asia/Ho_Chi_Minh',
+        colorScheme: 'light',
+    };
+};
+
+/**
+ * addInitScript nâng cao — vá các fingerprint mà puppeteer-extra-plugin-stealth còn bỏ sót.
+ * Gọi sau khi có `page` và trước khi navigate.
+ */
+const advancedAntiFingerprint = async (page) => {
+    await page.addInitScript(() => {
+        // 1. Xóa webdriver
+        Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+
+        // 2. Chrome runtime (fingerprint site hay check)
+        if (!window.navigator.chrome) window.navigator.chrome = {};
+        window.navigator.chrome.runtime = {};
+
+        // 3. Permissions API
+        const _origQuery = window.navigator.permissions.query.bind(window.navigator.permissions);
+        window.navigator.permissions.query = (params) =>
+            params.name === 'notifications'
+                ? Promise.resolve({ state: Notification.permission })
+                : _origQuery(params);
+
+        // 4. Plugins — browser thật có ≥2 plugins
+        if (navigator.plugins.length === 0) {
+            Object.defineProperty(navigator, 'plugins', {
+                get: () => {
+                    const arr = [
+                        { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
+                        { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai', description: '' },
+                        { name: 'Native Client', filename: 'internal-nacl-plugin', description: '' },
+                    ];
+                    arr.item = (i) => arr[i] || null;
+                    arr.namedItem = (n) => arr.find(p => p.name === n) || null;
+                    arr.refresh = () => {};
+                    Object.defineProperty(arr, 'length', { get: () => 3 });
+                    return arr;
+                }
+            });
+        }
+
+        // 5. Languages
+        Object.defineProperty(navigator, 'languages', { get: () => ['vi-VN', 'vi', 'en-US', 'en'] });
+        Object.defineProperty(navigator, 'language',  { get: () => 'vi-VN' });
+
+        // 6. Platform
+        Object.defineProperty(navigator, 'platform', { get: () => 'Win32' });
+
+        // 7. Hardware concurrency (giả lập 8 core)
+        Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
+        Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 });
+
+        // 8. WebGL — ẩn SwiftShader (dấu hiệu bot rõ nhất)
+        const getParameter_orig = WebGLRenderingContext.prototype.getParameter;
+        WebGLRenderingContext.prototype.getParameter = function(param) {
+            if (param === 37445) return 'Intel Inc.';
+            if (param === 37446) return 'Intel Iris OpenGL Engine';
+            return getParameter_orig.call(this, param);
+        };
+        if (typeof WebGL2RenderingContext !== 'undefined') {
+            const getParameter2_orig = WebGL2RenderingContext.prototype.getParameter;
+            WebGL2RenderingContext.prototype.getParameter = function(param) {
+                if (param === 37445) return 'Intel Inc.';
+                if (param === 37446) return 'Intel Iris OpenGL Engine';
+                return getParameter2_orig.call(this, param);
+            };
+        }
+
+        // 9. Screen — đồng bộ với viewport
+        // (Playwright headful thường khớp rồi, chỉ cần đảm bảo)
+        Object.defineProperty(screen, 'colorDepth', { get: () => 24 });
+        Object.defineProperty(screen, 'pixelDepth',  { get: () => 24 });
+    });
+};
+
+/**
+ * Nhập text nhanh giống người paste (Ctrl+V) — kích hoạt đúng beforeinput/input events.
+ * insertText() nhanh như tức thì với mọi độ dài, React nhận đúng sự kiện, nút Send mở khóa.
+ * KHÔNG gõ từng ký tự — quá chậm với prompt dài 800+ chữ.
+ */
+const humanTypeText = async (page, locator, text) => {
+    await locator.click();
+    await page.waitForTimeout(150 + Math.floor(Math.random() * 150));
+
+    // insertText kích hoạt beforeinput/input/change events chuẩn W3C — giống Ctrl+V người thật
+    await page.keyboard.insertText(text);
+
+    // Pause nhỏ sau paste (người thật nhìn lại text vừa paste)
+    await page.waitForTimeout(200 + Math.floor(Math.random() * 300));
+
+    // Space + Backspace để đảm bảo React re-render nhận đúng value
+    await page.keyboard.press('Space');
+    await page.waitForTimeout(60 + Math.floor(Math.random() * 60));
+    await page.keyboard.press('Backspace');
+    await page.waitForTimeout(150 + Math.floor(Math.random() * 200));
 };
 
 export class Mutex {
@@ -234,17 +358,7 @@ export const generateBackgroundOnChatGPT = async (imagePath, promptsArray, abort
     let page = null;
     let isClosingContext = false;
     try {
-        context = await chromium.launchPersistentContext(userDataDir, {
-            headless: false,
-            args: [
-                '--window-position=100,100',
-                '--window-size=1280,720',
-                '--disable-dev-shm-usage',
-                '--disable-gpu',
-                '--no-sandbox'
-            ],
-            viewport: { width: 1280, height: 720 }
-        });
+        context = await chromium.launchPersistentContext(userDataDir, humanLaunchOptions());
         context.on('close', () => {
             if (!isClosingContext) {
                 console.error('⚠️ ChatGPT Chromium context đã đóng bất ngờ khi automation vẫn đang chạy.');
@@ -253,18 +367,7 @@ export const generateBackgroundOnChatGPT = async (imagePath, promptsArray, abort
         });
         page = context.pages().length > 0 ? context.pages()[0] : await context.newPage();
         await page.bringToFront();
-        
-        // Anti-fingerprint nâng cao (Xóa Webdriver)
-        await page.addInitScript(() => {
-            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-            window.navigator.chrome = { runtime: {} };
-            const originalQuery = window.navigator.permissions.query;
-            window.navigator.permissions.query = (parameters) => (
-                parameters.name === 'notifications' ?
-                    Promise.resolve({ state: Notification.permission }) :
-                    originalQuery(parameters)
-            );
-        });
+        await advancedAntiFingerprint(page);
         
         let targetUrl = getSettingValue('chatGptProjectUrl') || 'https://chatgpt.com/g/g-p-6a472fac29a08191bc9914d5a8c451ac/project';
         let savedChatId = null;
@@ -571,16 +674,11 @@ CRITICAL RULES:
                 }
             } catch (e) {}
 
-            // TỐI ƯU GÕ PHÍM: Sử dụng lệnh paste nhanh để tiết kiệm thời gian
-            const typingPortion = finalPrompt;
-            
-            console.log(`⏩ Đang dán (paste) toàn bộ prompt vào ô nhập liệu...`);
-            await promptLocator.fill(typingPortion);
-            await page.waitForTimeout(500);
-            
-            // Gõ thêm 1 dấu cách để kích hoạt event listener của React (phòng hờ fill không nhận dạng sự kiện)
-            await page.keyboard.type(' ');
-            await page.waitForTimeout(500);
+            // GÕ PHÍM GIỐNG NGƯỜI THẬT: dùng humanTypeText thay fill() để tránh bot detection
+            console.log(`✍️ Đang nhập prompt bằng humanTypeText (tránh bot detection)...`);
+            await promptLocator.fill(''); // Xóa text cũ trước
+            await page.waitForTimeout(150);
+            await humanTypeText(page, promptLocator, finalPrompt);
             
             // Chờ 3-7s cho ổn định sau khi dán xong (random, không cố định)
             await page.waitForTimeout(Math.floor(Math.random() * 4000) + 3000);
@@ -621,8 +719,10 @@ CRITICAL RULES:
                 const existingImages = await page.evaluate((minArea) => {
                     const valid = Array.from(document.images).filter(img => {
                         const isUi = !img.src || img.src.includes('avatar') || img.src.includes('favicon') || img.src.startsWith('data:image/svg');
-                        const rect = img.getBoundingClientRect();
-                        return !isUi && (rect.width * rect.height) >= minArea;
+                        // Dùng naturalWidth/naturalHeight thay getBoundingClientRect() vì ảnh ngoài viewport có rect=0
+                        const w = img.naturalWidth || img.width || 0;
+                        const h = img.naturalHeight || img.height || 0;
+                        return !isUi && (w * h) >= minArea;
                     });
                     return valid.map(img => img.currentSrc || img.src);
                 }, GENERATED_IMAGE_MIN_AREA);
@@ -638,7 +738,11 @@ CRITICAL RULES:
             let firstGeneratingMs = 0; // Timestamp lần đầu phát hiện "One last tweak" / "Đang tạo ảnh"
             for (let attempt = 0; attempt < MAX_IMAGE_WAIT_ATTEMPTS; attempt++) {
                 if (abortSignal && abortSignal.aborted) throw new Error('Abort requested');
-                await page.waitForTimeout(5000);
+                // Poll interval ngẫu nhiên 4-7s (không phải đúng 5000ms mãi — dễ bị detect)
+                await page.waitForTimeout(4000 + Math.floor(Math.random() * 3000));
+                // Scroll xuống cuối trang để force-render ảnh mới (tránh lazy-load)
+                try { await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight)); } catch(e) {}
+                await page.waitForTimeout(200 + Math.floor(Math.random() * 300));
                 // Anti-bot: Thỉnh thoảng di chuột/cuộn trang trong lúc chờ
                 if (attempt > 0 && attempt % 3 === 0) await humanBehavior.idleBehavior(page);
 
@@ -741,15 +845,18 @@ CRITICAL RULES:
 
                     const scanResult = await page.evaluate(({ minArea, oldSrc }) => {
                         const all = Array.from(document.images).map((img) => {
-                            const rect = img.getBoundingClientRect();
                             const src = img.currentSrc || img.src || '';
-                            const area = rect.width * rect.height;
+                            // Dùng naturalWidth/naturalHeight để đo kích thước thực của ảnh
+                            // getBoundingClientRect() trả về 0 nếu ảnh nằm ngoài viewport (lazy load)
+                            const w = img.naturalWidth || img.offsetWidth || 0;
+                            const h = img.naturalHeight || img.offsetHeight || 0;
+                            const area = w * h;
                             const isUi = !src || src.includes('avatar') || src.includes('favicon') || src.startsWith('data:image/svg');
                             return {
                                 src,
                                 area,
-                                width: rect.width,
-                                height: rect.height,
+                                width: w,
+                                height: h,
                                 isUi
                             };
                         });
@@ -1080,15 +1187,11 @@ export const createChatGPTTextSession = async ({
 
     try {
         log('[Playwright] Đang mở phiên ChatGPT dùng chung (không dùng API)...');
-        context = await chromium.launchPersistentContext(userDataDir, {
-            headless: false,
-            // Hiển thị trên màn hình chính để có thể quan sát/login/xử lý modal ChatGPT.
-            args: ['--window-position=100,100', '--window-size=1280,720'],
-            viewport: { width: 1280, height: 720 },
-        });
+        context = await chromium.launchPersistentContext(userDataDir, humanLaunchOptions());
 
         const page = context.pages()[0] || await context.newPage();
         await page.bringToFront();
+        await advancedAntiFingerprint(page);
 
         const generate = async (prompt, image = null, checkStop = null) => {
             if (closed) throw new Error('Phiên ChatGPT đã đóng.');
@@ -1258,13 +1361,10 @@ export const generateContentOnChatGPT = async (prompt, type, imagePath = null) =
     let context = null;
     let page = null;
     try {
-        context = await chromium.launchPersistentContext(userDataDir, {
-            headless: false,
-            args: ['--window-position=100,100', '--window-size=1280,720'],
-            viewport: { width: 1280, height: 720 }
-        });
+        context = await chromium.launchPersistentContext(userDataDir, humanLaunchOptions());
         page = context.pages().length > 0 ? context.pages()[0] : await context.newPage();
         await page.bringToFront();
+        await advancedAntiFingerprint(page);
         // Luôn sử dụng URL gốc của Dự án Content AI (Bảo đảm 100% chạy trong Dự án)
         let targetUrl = getSettingValue('chatGptContentProjectUrl') || 'https://chatgpt.com/g/g-p-6a472f6b41d48191a7d769ade350641d-content-watch-ai/project';
         
@@ -1481,14 +1581,10 @@ export const analyzeNewSampleImages = async () => {
     await aiMutex.lock();
     try {
         const userDataDir = path.join(__dirname, '../../chrome_data_chatgpt');
-        context = await chromium.launchPersistentContext(userDataDir, {
-            headless: false,
-            args: ['--window-position=100,100', '--window-size=1280,720'],
-            viewport: { width: 1280, height: 720 },
-            timeout: 60000 // 60s timeout
-        });
+        context = await chromium.launchPersistentContext(userDataDir, { ...humanLaunchOptions(), timeout: 60000 });
         page = context.pages().length > 0 ? context.pages()[0] : await context.newPage();
         await page.bringToFront();
+        await advancedAntiFingerprint(page);
     } catch (err) {
         console.error('❌ Lỗi khởi động trình duyệt:', err.message);
         if (err.message.includes('lock')) {
