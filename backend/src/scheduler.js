@@ -4,7 +4,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import cron from 'node-cron';
 import { spawn } from 'child_process';
-import { syncAllCRM } from './services/crm.service.js';
+import { startFastCRMInboxSync } from './services/crm.service.js';
 import { syncHashesFromSheets } from './services/image-hash.service.js';
 import { runNightlySelfLearning } from './services/self-learning.service.js';
 
@@ -12,6 +12,11 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const settingsPath = path.join(__dirname, '../config/settings.json');
 const heartbeatPath = path.join(__dirname, '../config/.heartbeat');
+// Không dùng đuôi .json cho file runtime: nodemon mặc định theo dõi JSON và sẽ
+// restart backend giữa một phiên Auto-Fill mỗi khi scheduler cập nhật file này.
+const lastRunStatePath = path.join(__dirname, '../config/last_run.state');
+const legacyLastRunPath = path.join(__dirname, '../config/last_run.json');
+const CRM_FAST_SYNC_INTERVAL_MS = Math.max(2000, Number.parseInt(process.env.CRM_FAST_SYNC_INTERVAL_MS || '2000', 10));
 
 let isSchedulerRunning = false; // Guard chống gọi scheduler 2 lần đồng thời
 let heartbeatInterval = null;
@@ -41,6 +46,44 @@ const startHeartbeat = () => {
   heartbeatInterval = setInterval(beat, 10000);
 };
 
+const readSchedulerSettings = () => {
+  try {
+    if (fs.existsSync(settingsPath)) {
+      return JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+    }
+  } catch (error) {
+    console.error('Không thể đọc settings.json.', error);
+  }
+  return {};
+};
+
+const getExpectedPublishPatterns = (settings) => {
+  if (settings.mode === 'test') {
+    const intervalMinutes = parseInt(settings.testInterval, 10) || 5;
+    return [`*/${intervalMinutes} * * * *`];
+  }
+
+  return (settings.timeSlots || [])
+    .filter((timeStr) => timeStr && timeStr.includes(':'))
+    .map((timeStr) => {
+      const [hour, minute] = timeStr.split(':').map(Number);
+      return `${minute} ${hour} * * *`;
+    });
+};
+
+const redisScheduleMatchesSettings = async (settings) => {
+  const expectedPatterns = getExpectedPublishPatterns(settings).sort();
+  const repeatableJobs = await publishQueue.getRepeatableJobs();
+  const actualPatterns = repeatableJobs
+    .filter((job) => job.name === 'autoPublishJob')
+    .map((job) => job.pattern)
+    .filter(Boolean)
+    .sort();
+
+  return expectedPatterns.length === actualPatterns.length
+    && expectedPatterns.every((pattern, index) => pattern === actualPatterns[index]);
+};
+
 export const startScheduler = async (isSettingsUpdate = false) => {
   if (isSchedulerRunning) {
     console.log('⚠️ Scheduler đang chạy, bỏ qua lần gọi thứ 2.');
@@ -61,6 +104,25 @@ export const startScheduler = async (isSettingsUpdate = false) => {
     // HOT RELOAD: Server vừa restart do sửa code → KHÔNG XÓA LỊCH
     // Các repeatable jobs vẫn còn nguyên trong Redis, Worker mới sẽ tự pick up
     console.log('🔥 [Hot Reload] Phát hiện server vừa restart nhanh (do sửa code). GIỮ NGUYÊN toàn bộ lịch đăng bài trong Redis!');
+
+    // Redis local có thể vừa khởi động mới hoặc mất dữ liệu trong lúc server restart.
+    // Không được chỉ tin heartbeat: luôn đối chiếu cron thật trong Redis với settings.
+    const settings = readSchedulerSettings();
+    let scheduleIsValid = false;
+    try {
+      scheduleIsValid = await redisScheduleMatchesSettings(settings);
+    } catch (error) {
+      console.warn('⚠️ Không kiểm tra được lịch trong Redis:', error.message);
+    }
+
+    if (!scheduleIsValid) {
+      console.log('🔧 [Tự sửa lịch] Redis đang trống hoặc sai khung giờ. Đang tạo lại lịch từ settings.json...');
+      isSchedulerRunning = false;
+      await startScheduler(true);
+      return;
+    }
+
+    console.log('✅ [Hot Reload] Đã xác minh lịch trong Redis khớp settings.json.');
   } else {
     // COLD START or SETTINGS UPDATE: Xóa lịch cũ và tạo lịch mới
     if (isSettingsUpdate) {
@@ -98,14 +160,7 @@ export const startScheduler = async (isSettingsUpdate = false) => {
     }
 
     // Đọc cấu hình settings.json
-    let settings = {};
-    try {
-      if (fs.existsSync(settingsPath)) {
-        settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
-      }
-    } catch (e) {
-      console.error('Không thể đọc settings.json.', e);
-    }
+    const settings = readSchedulerSettings();
 
     // Chỉ tạo lịch mới khi Cold Start
     if (settings.mode === 'test') {
@@ -149,7 +204,7 @@ export const startScheduler = async (isSettingsUpdate = false) => {
           if (redisLastRun) lastRunTime = parseInt(redisLastRun, 10);
         } catch (redisErr) {
           // Fallback: đọc từ file local nếu Redis lỗi
-          const lastRunPath = path.join(__dirname, '../config/last_run.json');
+          const lastRunPath = fs.existsSync(lastRunStatePath) ? lastRunStatePath : legacyLastRunPath;
           if (fs.existsSync(lastRunPath)) {
             const lastRunData = JSON.parse(fs.readFileSync(lastRunPath, 'utf8'));
             lastRunTime = lastRunData.timestamp || 0;
@@ -189,8 +244,7 @@ export const startScheduler = async (isSettingsUpdate = false) => {
           try {
             await redisConnection.set('last_run_timestamp', String(latestMissed));
           } catch (e) { /* ignore */ }
-          const lastRunPath = path.join(__dirname, '../config/last_run.json');
-          fs.writeFileSync(lastRunPath, JSON.stringify({ timestamp: latestMissed }), 'utf8');
+          fs.writeFileSync(lastRunStatePath, JSON.stringify({ timestamp: latestMissed }), 'utf8');
         }
       } catch (e) {
         console.error('Lỗi khi kiểm tra catch-up chạy bù:', e);
@@ -246,21 +300,7 @@ export const startScheduler = async (isSettingsUpdate = false) => {
   });
   console.log('✅ Đã lên lịch Sync Ảnh Google Sheets lúc 03:00 sáng mỗi ngày.');
 
-  // --- THÊM: Hẹn giờ đồng bộ CRM định kỳ 5 phút ---
-  // TẠM TẮT ĐỒNG BỘ TIN NHẮN TỰ ĐỘNG THEO YÊU CẦU
-  /*
-  if (!global.crmInterval) {
-    global.crmInterval = setInterval(async () => {
-      try {
-        console.log('🔄 Đang đồng bộ CRM ngầm...');
-        await syncAllCRM();
-      } catch (e) {
-        console.error('Lỗi khi đồng bộ CRM ngầm:', e.message);
-      }
-    }, 5 * 60 * 1000);
-    console.log('✅ Đã khởi động luồng đồng bộ CRM ngầm mỗi 5 phút.');
-  }
-  */
+  startFastCRMInboxSync(CRM_FAST_SYNC_INTERVAL_MS);
 
   isSchedulerRunning = false; // Reset để cho phép gọi lại khi user thay đổi settings
 };

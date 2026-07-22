@@ -12,6 +12,17 @@ const VECTOR_STORE_PATH = path.join(__dirname, '../../data/vector_store.json');
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const EMBEDDING_MODEL = 'gemini-embedding-2';
+let vectorStoreCache = null;
+let vectorStoreMtimeMs = 0;
+
+const getVectorStore = () => {
+  const stat = fs.statSync(VECTOR_STORE_PATH);
+  if (!vectorStoreCache || stat.mtimeMs !== vectorStoreMtimeMs) {
+    vectorStoreCache = JSON.parse(fs.readFileSync(VECTOR_STORE_PATH, 'utf8'));
+    vectorStoreMtimeMs = stat.mtimeMs;
+  }
+  return vectorStoreCache;
+};
 
 // Tính Cosine Similarity giữa 2 vector
 const cosineSimilarity = (vecA, vecB) => {
@@ -43,7 +54,7 @@ export const searchKnowledge = async (query, topK = 3) => {
 
   let vectorStore = [];
   try {
-    vectorStore = JSON.parse(fs.readFileSync(VECTOR_STORE_PATH, 'utf8'));
+    vectorStore = getVectorStore();
   } catch (error) {
     console.error('Lỗi đọc vector store:', error);
     return [];

@@ -2,8 +2,9 @@ import 'dotenv/config';
 import { Worker } from 'bullmq';
 import IORedis from 'ioredis';
 import { autoPublishRoutine, resetGlobalStop } from '../services/publish.service.js';
+import { localRedisUrl } from '../config/redis.config.js';
 
-const connection = new IORedis(process.env.REDIS_URL || 'redis://localhost:6379', {
+const connection = new IORedis(localRedisUrl, {
   maxRetriesPerRequest: null
 });
 

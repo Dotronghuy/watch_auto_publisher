@@ -1,10 +1,11 @@
 import 'dotenv/config';
 import { Queue } from 'bullmq';
 import IORedis from 'ioredis';
+import { localRedisUrl } from '../config/redis.config.js';
 
 const isSimulate = process.argv[1] && process.argv[1].includes('simulate_customers.js');
 
-const connection = new IORedis(process.env.REDIS_URL || 'redis://localhost:6379', {
+const connection = new IORedis(localRedisUrl, {
   maxRetriesPerRequest: null,
   retryStrategy: isSimulate ? () => null : (times) => Math.min(times * 50, 2000)
 });
@@ -15,7 +16,10 @@ connection.on('error', (err) => {
   }
 });
 
+connection.on('ready', () => {
+  if (!isSimulate) console.log('✅ Đã kết nối Redis local tại 127.0.0.1:6379.');
+});
+
 export { connection };
 export const publishQueue = new Queue('publishQueue', { connection });
 export const driveSyncQueue = new Queue('driveSyncQueue', { connection });
-

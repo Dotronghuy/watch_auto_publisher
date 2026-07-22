@@ -22,6 +22,14 @@ const storage = multer.diskStorage({
   }
 });
 const upload = multer({ storage });
+const configuredCredentialsPath = path.join(__dirname, '../config/credentials.json');
+const uploadedCredentialsPath = path.join(UPLOAD_DIR, 'credentials.json');
+
+function getCredentialsPath() {
+  if (fs.existsSync(configuredCredentialsPath)) return configuredCredentialsPath;
+  if (fs.existsSync(uploadedCredentialsPath)) return uploadedCredentialsPath;
+  return null;
+}
 
 let isRunning = false;
 const sseClients = new Set();
@@ -56,13 +64,13 @@ router.get('/log-stream', (req, res) => {
 });
 
 router.get('/status', (req, res) => {
-  const credPath = path.join(__dirname, '../config/credentials.json');
   const excelPath = path.join(UPLOAD_DIR, 'excel_prices.xlsx');
   
   res.json({ 
     isRunning,
-    hasCredentials: fs.existsSync(credPath),
-    hasExcel: fs.existsSync(excelPath)
+    hasCredentials: Boolean(getCredentialsPath()),
+    hasExcel: fs.existsSync(excelPath),
+    engine: 'playwright-chatgpt'
   });
 });
 
@@ -74,15 +82,24 @@ router.post('/start', async (req, res) => {
   if (isRunning) return res.json({ success: false, message: 'Tool đang chạy, vui lòng đợi...' });
 
   const { sheetUrl, aiTone } = req.body;
-  if (!sheetUrl) return res.json({ success: false, message: 'Thiếu URL Google Sheets' });
+  if (!sheetUrl) return res.status(400).json({ success: false, message: 'Thiếu URL Google Sheets' });
+  if (!/^https:\/\/docs\.google\.com\/spreadsheets\/d\/[a-zA-Z0-9-_]+/.test(sheetUrl)) {
+    return res.status(400).json({ success: false, message: 'URL Google Sheets không hợp lệ' });
+  }
 
-  const credentialsPath = path.join(__dirname, '../config/credentials.json');
-  if (!fs.existsSync(credentialsPath)) {
-    return res.json({ success: false, message: 'Chưa cấu hình file credentials.json trong backend/src/config' });
+  const credentialsPath = getCredentialsPath();
+  if (!credentialsPath) {
+    return res.status(400).json({ success: false, message: 'Chưa cấu hình file credentials.json trong backend/src/config' });
   }
   
   const excelPath = path.join(UPLOAD_DIR, 'excel_prices.xlsx');
-  const config = { sheetUrl, aiTone, credentialsPath, excelPath };
+  const allowedTones = ['Chuyên nghiệp', 'Thu hút (Engaging)', 'Kỹ thuật', 'Thuyết phục'];
+  const config = {
+    sheetUrl,
+    aiTone: allowedTones.includes(aiTone) ? aiTone : 'Thu hút (Engaging)',
+    credentialsPath,
+    excelPath,
+  };
 
   res.json({ success: true, message: 'Bắt đầu chạy...' });
 
@@ -92,7 +109,11 @@ router.post('/start', async (req, res) => {
   try {
     await runAutoFill(config, broadcastLog);
   } catch (err) {
-    broadcastLog(`❌ LỖI NGHIÊM TRỌNG: ${err.message}`);
+    if (err.code === 'CHATGPT_HISTORY_RATE_LIMIT') {
+      broadcastLog(`⏸️ TOOL ĐÃ DỪNG AN TOÀN ĐỂ KIỂM TRA CHATGPT: ${err.message}`);
+    } else {
+      broadcastLog(`❌ LỖI NGHIÊM TRỌNG: ${err.message}`);
+    }
   } finally {
     isRunning = false;
     broadcastStatus('done');

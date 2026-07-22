@@ -5,6 +5,7 @@ import cors from 'cors';
 import { startScheduler } from './scheduler.js';
 import { trackPostMetrics } from './services/tracking.service.js';
 import { startTelegramBot } from './services/telegram.service.js';
+import { startFastCRMInboxSync } from './services/crm.service.js';
 import authRoutes from './routes/auth.routes.js';
 import userRoutes from './routes/user.routes.js';
 import webhookRoutes from './routes/webhook.routes.js';
@@ -84,6 +85,12 @@ try { startTelegramBot(); } catch (e) { console.error('⚠️ Telegram bot lỗi
 
 app.listen(PORT, async () => {
   console.log(`🚀 Server is running on http://localhost:${PORT}`);
+
+  try {
+    startFastCRMInboxSync(process.env.CRM_FAST_SYNC_INTERVAL_MS || 2000);
+  } catch (error) {
+    console.error('⚠️ Không thể khởi động đồng bộ nhanh CRM Inbox:', error.message);
+  }
 
   // 1 & 2. Khởi động Scheduler & Worker (Bọc try-catch để bypass lỗi Redis Upstash Limit)
   try {

@@ -21,35 +21,49 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 
-:: ============================================
-:: BUOC 1: Cap nhat code moi nhat tu GitHub
-:: ============================================
-echo [1/4] Dang cap nhat code moi nhat tu GitHub...
-git config core.autocrlf true 2>nul
-git config core.safecrlf false 2>nul
-git fetch origin >nul 2>nul
-git reset --hard origin/master >nul 2>nul
-git pull origin master >nul 2>nul
-if %errorlevel% neq 0 (
-    echo    [CANH BAO] Khong the cap nhat code. Co the khong co mang hoac chua cau hinh git.
-    echo    Tiep tuc khoi dong voi code hien tai...
-) else (
-    echo    [OK] Code da cap nhat thanh cong tu GitHub.
+:: Khong cho mo hai ban Tool cung luc (gay tranh cong va backend restart lien tuc)
+netstat -ano | findstr /R /C:":3000 .*LISTENING" /C:":5173 .*LISTENING" >nul 2>&1
+if %errorlevel% equ 0 (
+    echo [LOI] Phat hien Tool cu van dang chay hoac bi ket.
+    echo Hay chay "3_TAT_TOOL_KHI_BI_LOI.bat" truoc, sau do mo lai file nay.
+    pause
+    exit /b 1
 )
+
+:: ============================================
+:: BUOC 1: Dong bo code moi nhat tu GitHub
+:: ============================================
+echo [1/4] Dang dong bo code moi nhat tu GitHub...
+if not exist ".git" (
+    echo    [LOI] Thu muc nay khong phai ban Git clone, khong the tu dong cap nhat.
+    pause
+    exit /b 1
+)
+
+where git >nul 2>&1
+if %errorlevel% neq 0 (
+    echo    [LOI] Khong tim thay Git tren may.
+    pause
+    exit /b 1
+)
+
+git pull --ff-only origin master
+if %errorlevel% neq 0 (
+    echo    [LOI] Khong the dong bo code. Hay kiem tra Internet hoac thay doi code cuc bo.
+    echo    Tool se khong khoi dong bang code cu de tranh chay sai phien ban.
+    pause
+    exit /b 1
+)
+echo    [OK] Code da dong bo thanh cong tu GitHub.
 
 :: ============================================
 :: BUOC 2: Kiem tra va cai dat thu vien moi (neu co)
 :: ============================================
 echo.
 echo [2/4] Dang kiem tra thu vien...
-call npm install --silent 2>nul
-cd backend
-call npm install --silent 2>nul
-call npx prisma db push --accept-data-loss 2>nul
-cd ..
-cd frontend
-call npm install --silent 2>nul
-cd ..
+if not exist "node_modules\concurrently\package.json" call npm install
+if not exist "backend\node_modules\playwright\package.json" call npm --prefix backend install
+if not exist "frontend\node_modules\vite\package.json" call npm --prefix frontend install
 echo    [OK] Thu vien da san sang.
 
 :: ============================================
@@ -61,13 +75,19 @@ echo [3/4] Dang khoi dong Redis...
 :: Kiem tra Redis co dang chay khong
 tasklist /FI "IMAGENAME eq redis-server.exe" 2>nul | find /I "redis-server.exe" >nul
 if %errorlevel% equ 0 (
-    echo    [OK] Redis da dang chay san.
+    echo    Redis local da co tien trinh dang chay, dang kiem tra ket noi...
 ) else (
-    :: Xoa file dump cu neu co
-    if exist "%~dp0dump.rdb" del /Q "%~dp0dump.rdb"
     start "Redis Server" /B "%~dp0Redis\redis-server.exe" "%~dp0Redis\redis.windows.conf"
-    echo    [OK] Redis da khoi dong.
+    timeout /t 2 /nobreak >nul
 )
+
+"%~dp0Redis\redis-cli.exe" -h 127.0.0.1 -p 6379 PING | find /I "PONG" >nul
+if errorlevel 1 (
+    echo    [LOI] Redis local khong phan hoi tai 127.0.0.1:6379.
+    pause
+    exit /b 1
+)
+echo    [OK] Redis local san sang tai 127.0.0.1:6379.
 
 :: ============================================
 :: BUOC 4: Khoi dong Tool (Backend + Frontend)
@@ -86,7 +106,7 @@ echo  !                                                       !
 echo  +======================================================+
 echo.
 
-call npm run dev:no-ngrok
+call npm run start:no-ngrok
 
 echo.
 echo Tool da dung lai.

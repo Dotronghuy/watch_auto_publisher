@@ -896,6 +896,339 @@ CRITICAL RULES:
     }
 };
 
+const CHATGPT_PROMPT_SELECTORS = [
+    '#prompt-textarea',
+    'div[contenteditable="true"][data-lexical-editor]',
+    'div[contenteditable="true"]',
+    'p[data-placeholder]',
+];
+
+const findChatGPTPrompt = async (page, timeout = 15000) => {
+    const deadline = Date.now() + timeout;
+    while (Date.now() < deadline) {
+        for (const selector of CHATGPT_PROMPT_SELECTORS) {
+            const locator = page.locator(selector).first();
+            if (await locator.isVisible().catch(() => false)) return locator;
+        }
+        await page.waitForTimeout(500);
+    }
+    return null;
+};
+
+const CHATGPT_HISTORY_RATE_LIMIT_SELECTOR = [
+    '[data-testid="modal-conversation-history-rate-limit"]',
+    '#modal-conversation-history-rate-limit',
+].join(', ');
+
+const CHATGPT_RATE_LIMIT_COOLDOWN_MS = 3 * 60 * 1000;
+const CHATGPT_REQUEST_GAP_MIN_MS = 12000;
+const CHATGPT_REQUEST_GAP_MAX_MS = 20000;
+const CHATGPT_REQUESTS_PER_CONVERSATION = 6;
+
+const createChatGPTHistoryRateLimitError = () => {
+    const error = new Error(
+        'ChatGPT vẫn đang tạm giới hạn do gửi yêu cầu quá nhanh sau thời gian chờ tự động. Vui lòng chờ thêm rồi chạy lại.'
+    );
+    error.code = 'CHATGPT_HISTORY_RATE_LIMIT';
+    return error;
+};
+
+const isChatGPTHistoryRateLimitError = (error) => (
+    error?.code === 'CHATGPT_HISTORY_RATE_LIMIT'
+    || String(error?.message || '').includes('modal-conversation-history-rate-limit')
+);
+
+const isChatGPTHistoryRateLimitVisible = async (page) => page
+    .locator(CHATGPT_HISTORY_RATE_LIMIT_SELECTOR)
+    .first()
+    .isVisible()
+    .catch(() => false);
+
+const getChatGPTHomeUrl = (targetUrl) => {
+    try {
+        const url = new URL(targetUrl);
+        url.pathname = '/';
+        url.search = '';
+        url.hash = '';
+        return url.toString();
+    } catch {
+        return 'https://chatgpt.com/';
+    }
+};
+
+const hasChatGPTProjectAccessError = async (page) => {
+    const bodyText = await page.locator('body').innerText().catch(() => '');
+    return /you don'?t have access to this project|không có quyền truy cập (vào )?dự án/i.test(bodyText);
+};
+
+const waitWithStopCheck = async ({ page, durationMs, checkStop, onMinute }) => {
+    let remainingMs = durationMs;
+    let lastReportedMinute = null;
+    while (remainingMs > 0) {
+        if (checkStop?.()) throw new Error('STOP_REQUESTED');
+        const remainingMinute = Math.ceil(remainingMs / 60000);
+        if (remainingMinute !== lastReportedMinute) {
+            lastReportedMinute = remainingMinute;
+            onMinute?.(remainingMinute);
+        }
+        const chunkMs = Math.min(15000, remainingMs);
+        await page.waitForTimeout(chunkMs);
+        remainingMs -= chunkMs;
+    }
+};
+
+const recoverFromChatGPTHistoryRateLimit = async ({
+    page,
+    targetUrl,
+    log,
+    checkStop,
+}) => {
+    if (!await isChatGPTHistoryRateLimitVisible(page)) return false;
+    if (checkStop?.()) throw new Error('STOP_REQUESTED');
+
+    log('[ChatGPT] ⚠️ ChatGPT báo "Too many requests" do gửi quá nhanh. Tool sẽ tự nghỉ rồi thử lại...');
+
+    const modal = page.locator(CHATGPT_HISTORY_RATE_LIMIT_SELECTOR).first();
+    const buttons = modal.locator('button');
+    const buttonCount = await buttons.count().catch(() => 0);
+
+    for (let index = 0; index < buttonCount; index++) {
+        const button = buttons.nth(index);
+        const label = [
+            await button.innerText().catch(() => ''),
+            await button.getAttribute('aria-label').catch(() => ''),
+        ].join(' ').trim();
+        if (!/got it|đã hiểu|tôi hiểu|^ok$/i.test(label)) continue;
+
+        await button.click({ timeout: 5000 }).catch(() => {});
+        break;
+    }
+
+    await waitWithStopCheck({
+        page,
+        durationMs: CHATGPT_RATE_LIMIT_COOLDOWN_MS,
+        checkStop,
+        onMinute: (minutes) => log(`[ChatGPT] ⏳ Đang nghỉ chống giới hạn, còn khoảng ${minutes} phút...`),
+    });
+
+    await page.goto(getChatGPTHomeUrl(targetUrl), {
+        waitUntil: 'domcontentloaded',
+        timeout: 60000,
+    });
+
+    const deadline = Date.now() + 30000;
+    while (Date.now() < deadline) {
+        if (checkStop?.()) throw new Error('STOP_REQUESTED');
+        const modalVisible = await isChatGPTHistoryRateLimitVisible(page);
+        const promptLocator = modalVisible ? null : await findChatGPTPrompt(page, 1000);
+        if (!modalVisible && promptLocator) {
+            log('[ChatGPT] ✅ Hết thời gian nghỉ; đã mở chat mới và sẽ thử lại SKU hiện tại.');
+            return true;
+        }
+        await page.waitForTimeout(500);
+    }
+
+    throw createChatGPTHistoryRateLimitError();
+};
+
+/**
+ * Mở một phiên ChatGPT dùng chung cho các tác vụ text liên tiếp.
+ * Phiên này luôn đi qua giao diện ChatGPT bằng Playwright, không gọi API AI.
+ */
+export const createChatGPTTextSession = async ({
+    log = console.log,
+    projectUrl = null,
+    checkStop = null,
+} = {}) => {
+    let waitingWasLogged = false;
+    while (aiMutex.isLocked()) {
+        if (checkStop?.()) throw new Error('STOP_REQUESTED');
+        if (!waitingWasLogged) {
+            log('[Playwright] ChatGPT đang xử lý tác vụ khác, Auto-Fill đang xếp hàng...');
+            waitingWasLogged = true;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+    await aiMutex.lock();
+    if (checkStop?.()) {
+        aiMutex.unlock();
+        throw new Error('STOP_REQUESTED');
+    }
+
+    const userDataDir = path.join(__dirname, '../../chrome_data_chatgpt');
+    const targetUrl = projectUrl
+        || getSettingValue('chatGptContentProjectUrl')
+        || 'https://chatgpt.com/';
+    let activeTargetUrl = targetUrl;
+    let context = null;
+    let closed = false;
+    let pageInitialized = false;
+    let requestsInCurrentConversation = 0;
+    let lastGenerationCompletedAt = 0;
+
+    const close = async () => {
+        if (closed) return;
+        closed = true;
+        if (context) {
+            try { await context.close(); } catch (error) {
+                console.warn('[Playwright ChatGPT] Không thể đóng browser sạch sẽ:', error.message);
+            }
+        }
+        aiMutex.unlock();
+    };
+
+    try {
+        log('[Playwright] Đang mở phiên ChatGPT dùng chung (không dùng API)...');
+        context = await chromium.launchPersistentContext(userDataDir, {
+            headless: false,
+            // Hiển thị trên màn hình chính để có thể quan sát/login/xử lý modal ChatGPT.
+            args: ['--window-position=100,100', '--window-size=1280,720'],
+            viewport: { width: 1280, height: 720 },
+        });
+
+        const page = context.pages()[0] || await context.newPage();
+        await page.bringToFront();
+
+        const generate = async (prompt, image = null, checkStop = null) => {
+            if (closed) throw new Error('Phiên ChatGPT đã đóng.');
+            if (checkStop?.()) throw new Error('STOP_REQUESTED');
+
+            if (lastGenerationCompletedAt > 0) {
+                const requestedGap = CHATGPT_REQUEST_GAP_MIN_MS + Math.floor(
+                    Math.random() * (CHATGPT_REQUEST_GAP_MAX_MS - CHATGPT_REQUEST_GAP_MIN_MS + 1)
+                );
+                const waitMs = requestedGap - (Date.now() - lastGenerationCompletedAt);
+                if (waitMs > 0) {
+                    log(`[ChatGPT] ⏱️ Nghỉ ${Math.ceil(waitMs / 1000)} giây trước lượt tiếp theo để tránh gửi quá nhanh...`);
+                    await waitWithStopCheck({ page, durationMs: waitMs, checkStop });
+                }
+            }
+
+            if (!pageInitialized || requestsInCurrentConversation >= CHATGPT_REQUESTS_PER_CONVERSATION) {
+                log('[Playwright] Đang mở cuộc trò chuyện ChatGPT mới và chuẩn bị nội dung...');
+                await page.goto(activeTargetUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+                await page.waitForTimeout(1500);
+
+                if (await hasChatGPTProjectAccessError(page)) {
+                    activeTargetUrl = getChatGPTHomeUrl(activeTargetUrl);
+                    log('[ChatGPT] ⚠️ Tài khoản không có quyền vào Project đã lưu; tự chuyển về ChatGPT thường.');
+                    await page.goto(activeTargetUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+                }
+
+                pageInitialized = true;
+                requestsInCurrentConversation = 0;
+            } else {
+                log(`[Playwright] Tiếp tục phiên chat hiện tại (${requestsInCurrentConversation + 1}/${CHATGPT_REQUESTS_PER_CONVERSATION})...`);
+            }
+
+            if (await isChatGPTHistoryRateLimitVisible(page)) {
+                await recoverFromChatGPTHistoryRateLimit({ page, targetUrl: activeTargetUrl, log, checkStop });
+                requestsInCurrentConversation = 0;
+            }
+
+            const sendOnce = async () => {
+                const promptLocator = await findChatGPTPrompt(page);
+                if (!promptLocator) {
+                    throw new Error('Không tìm thấy ô nhập ChatGPT. Hãy đăng nhập lại ChatGPT trong phần Cài đặt AI.');
+                }
+
+                // Đánh dấu trước khi gửi để không lấy nhầm câu trả lời của lần trước.
+                await page.evaluate(() => {
+                    document.querySelectorAll('div[data-message-author-role="assistant"]').forEach((element) => {
+                        element.setAttribute('data-autofill-processed', 'true');
+                    });
+                });
+
+                if (image?.buffer) {
+                    log('[Playwright] Đang đính kèm ảnh sản phẩm vào ChatGPT...');
+                    const fileInput = page.locator('input[type="file"]').last();
+                    if (await fileInput.count()) {
+                        await fileInput.setInputFiles({
+                            name: image.name || `watch-${Date.now()}.jpg`,
+                            mimeType: image.mimeType || 'image/jpeg',
+                            buffer: image.buffer,
+                        });
+                        await page.waitForTimeout(2000);
+                    } else {
+                        log('[Playwright] ⚠️ Không tìm thấy nút đính kèm; tiếp tục bằng thông số văn bản.');
+                    }
+                }
+
+                // Timeout ngắn để nhận diện modal giới hạn và phục hồi sớm,
+                // thay vì để Playwright đứng chờ click mặc định 30 giây.
+                await promptLocator.click({ timeout: 8000 });
+                await promptLocator.fill('');
+                await page.keyboard.insertText(prompt);
+                await page.keyboard.press('Space');
+                await page.keyboard.press('Backspace');
+
+                const sendButton = page.locator('button[data-testid="send-button"]:not([disabled])').first();
+                if (await sendButton.isVisible().catch(() => false)) await sendButton.click();
+                else await page.keyboard.press('Enter');
+
+                log('[Playwright] Đã gửi yêu cầu, đang chờ ChatGPT trả JSON...');
+                for (let attempt = 0; attempt < 150; attempt++) {
+                    if (checkStop?.()) {
+                        const stopButton = page.locator('button[data-testid="stop-button"]').first();
+                        if (await stopButton.isVisible().catch(() => false)) await stopButton.click().catch(() => {});
+                        throw new Error('STOP_REQUESTED');
+                    }
+                    if (await isChatGPTHistoryRateLimitVisible(page)) {
+                        throw createChatGPTHistoryRateLimitError();
+                    }
+
+                    await page.waitForTimeout(2000);
+                    const isGenerating = await page.locator('button[data-testid="stop-button"]').first()
+                        .isVisible().catch(() => false);
+                    if (isGenerating) continue;
+
+                    const messages = page.locator(
+                        'div[data-message-author-role="assistant"]:not([data-autofill-processed="true"])'
+                    );
+                    const count = await messages.count();
+                    if (count === 0) continue;
+
+                    const message = messages.nth(count - 1);
+                    const text = await message.evaluate((element) => {
+                        const markdown = element.querySelector('.markdown');
+                        return (markdown || element).innerText;
+                    });
+                    if (text?.trim()) return text.trim();
+                }
+
+                throw new Error('ChatGPT phản hồi quá thời gian 5 phút.');
+            };
+
+            for (let sendAttempt = 0; sendAttempt < 2; sendAttempt++) {
+                try {
+                    const result = await sendOnce();
+                    requestsInCurrentConversation++;
+                    lastGenerationCompletedAt = Date.now();
+                    return result;
+                } catch (error) {
+                    const hitHistoryLimit = isChatGPTHistoryRateLimitError(error)
+                        || await isChatGPTHistoryRateLimitVisible(page);
+                    if (!hitHistoryLimit) throw error;
+                    if (sendAttempt > 0) throw createChatGPTHistoryRateLimitError();
+
+                    await recoverFromChatGPTHistoryRateLimit({ page, targetUrl: activeTargetUrl, log, checkStop });
+                    pageInitialized = true;
+                    requestsInCurrentConversation = 0;
+                    log('[ChatGPT] 🔄 Đang gửi lại yêu cầu cho đúng SKU hiện tại (lần cuối)...');
+                }
+            }
+
+            throw createChatGPTHistoryRateLimitError();
+        };
+
+        log('[Playwright] ✅ Phiên ChatGPT đã sẵn sàng.');
+        return { generate, close };
+    } catch (error) {
+        await close();
+        throw error;
+    }
+};
+
 export const generateContentOnChatGPT = async (prompt, type, imagePath = null) => {
     // ── Toggle Check: Viết Content bằng API thay vì Playwright ──
     try {

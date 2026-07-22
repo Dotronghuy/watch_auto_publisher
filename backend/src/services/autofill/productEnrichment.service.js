@@ -1,92 +1,28 @@
 import { chromium } from 'playwright';
 import fs from 'fs';
-import { PrismaClient } from "@prisma/client";
-const prisma = new PrismaClient();
 
-// Utility copy từ shopeeSync để gọi AI xoay vòng (chống rate limit 429)
-async function callAIWithRotation(prompt, images = []) {
-  const geminiSetting = await prisma.setting.findUnique({ where: { key: "gemini_api_key" } });
-  const geminiKeys = (geminiSetting?.value || "").split(",").map((k) => k.trim()).filter((k) => k !== "");
-  const openaiSetting = await prisma.setting.findUnique({ where: { key: "openai_api_key" } });
-  const openaiKeys = (openaiSetting?.value || "").split(",").map((k) => k.trim()).filter((k) => k !== "");
-  
-  const { GoogleGenerativeAI } = await import("@google/generative-ai");
-  
-  for (let i = 0; i < geminiKeys.length; i++) {
-    const apiKey = geminiKeys[i];
-    let retryCount = 1;
-    while (true) {
-      try {
-        const ai = new GoogleGenerativeAI(apiKey);
-        const model = ai.getGenerativeModel({ model: "gemini-2.5-flash" });
-        const parts = [prompt, ...images.map((img) => ({ inlineData: { data: img.data, mimeType: img.mimeType } }))];
-        const result = await model.generateContent(parts);
-        const response = await result.response;
-        return response.text().trim();
-      } catch (error) {
-        if (error.message?.includes("429") || error.message?.includes("503") || error.status === 429 || error.status === 503) {
-          console.warn(`[AI] Gemini Key ${i + 1} báo bận (429/503). Đang chờ 5s để thử lại lần ${retryCount}...`);
-          await new Promise(res => setTimeout(res, 5000));
-          retryCount++;
-          if (retryCount > 5) break; // Thử lại 5 lần rồi chuyển key
-          continue;
-        }
-        console.error(`[AI] Lỗi Gemini Key ${i + 1}:`, error.message);
-        break; // Lỗi khác (ví dụ: sai key) thì bỏ qua key này luôn
-      }
-    }
-  }
-  
-  for (let i = 0; i < openaiKeys.length; i++) {
-    const apiKey = openaiKeys[i];
-    let retryCount = 1;
-    while (true) {
-      try {
-        console.log(`[AI] Đang thử sử dụng OpenAI (GPT-4o) làm dự phòng...`);
-        const fetch = (await import('node-fetch')).default || globalThis.fetch;
-        const response = await fetch("https://api.openai.com/v1/chat/completions", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${apiKey}`
-          },
-          body: JSON.stringify({
-            model: "gpt-4o",
-            messages: [
-              {
-                role: "user",
-                content: [
-                  { type: "text", text: prompt },
-                  ...images.map((img) => ({
-                    type: "image_url",
-                    image_url: { url: `data:${img.mimeType};base64,${img.data}` }
-                  }))
-                ]
-              }
-            ],
-            max_tokens: 800
-          })
-        });
-        const data = await response.json();
-        if (data.choices && data.choices[0]) {
-          return data.choices[0].message.content.trim();
-        } else if (data.error) {
-          throw new Error(data.error.message);
-        }
-      } catch (error) {
-        if (error.message?.includes("429") || error.message?.includes("503") || error.status === 429 || error.status === 503) {
-          console.warn(`[AI] OpenAI Key ${i + 1} báo bận (429/503). Đang chờ 5s để thử lại lần ${retryCount}...`);
-          await new Promise(res => setTimeout(res, 5000));
-          retryCount++;
-          if (retryCount > 3) break;
-          continue;
-        }
-        console.error(`[AI] Lỗi OpenAI Key ${i + 1}:`, error.message);
-        break;
-      }
-    }
-  }
-  throw new Error("Tất cả các API Key Gemini đều không khả dụng hoặc hết hạn mức.");
+export async function createWatchScraper() {
+  const browser = await chromium.launch({ headless: true });
+  const context = await browser.newContext({
+    locale: 'vi-VN',
+    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131 Safari/537.36',
+  });
+
+  // Không tải tài nguyên nặng vì tool chỉ cần HTML/text thông số.
+  await context.route('**/*', (route) => {
+    const resourceType = route.request().resourceType();
+    if (['image', 'media', 'font'].includes(resourceType)) return route.abort();
+    return route.continue();
+  });
+
+  const page = await context.newPage();
+  return {
+    page,
+    close: async () => {
+      await context.close().catch(() => {});
+      await browser.close().catch(() => {});
+    },
+  };
 }
 
 /**
@@ -105,37 +41,41 @@ export function detectStrapFromSku(sku) {
   return strapMap[suffix] ? { suffix, strapType: strapMap[suffix] } : null;
 }
 
-export async function scrapeWatchSpecs(sku, brand, sendLog, checkStop) {
+export async function scrapeWatchSpecs(sku, brand, sendLog, checkStop, scraper = null) {
   sendLog(`[Scrape] Tìm kiếm thông số kỹ thuật cho SKU: ${sku}...`);
   if (checkStop && checkStop()) throw new Error('STOP_REQUESTED');
 
   const strapInfo = detectStrapFromSku(sku);
   const skuSuffix = strapInfo ? strapInfo.suffix.toLowerCase() : null;
 
-  const browser = await chromium.launch({ headless: true });
-  const page = await browser.newPage();
+  const ownedScraper = scraper ? null : await createWatchScraper();
+  const activeScraper = scraper || ownedScraper;
+  const page = activeScraper.page;
   let specs = '';
 
   const modelCodeLower = sku.split('-')[0].trim().toLowerCase();
   const matchNumber = modelCodeLower.match(/\d+/);
-  const modelNumber = matchNumber ? matchNumber[0] : ''; 
+  const modelNumber = matchNumber ? matchNumber[0] : '';
+  const searchCode = modelNumber || modelCodeLower || sku.toLowerCase();
   const brandLower = brand ? brand.toLowerCase() : '';
 
   try {
-    sendLog(`[Scrape] Tìm kiếm mã ${modelNumber} trên Zenwatch...`);
-    await page.goto(`https://zenwatch.vn/?s=${encodeURIComponent(modelNumber)}&post_type=product`, {
+    sendLog(`[Scrape] Tìm kiếm mã ${searchCode} trên Zenwatch...`);
+    await page.goto(`https://zenwatch.vn/?s=${encodeURIComponent(searchCode)}&post_type=product`, {
       waitUntil: 'domcontentloaded',
       timeout: 15000,
     });
-    await page.waitForTimeout(1500);
+    await page.waitForTimeout(600);
+    if (checkStop?.()) throw new Error('STOP_REQUESTED');
 
     let extractedLinks = [];
     const currentUrl = page.url();
+    const directProductUrl = currentUrl.includes('/product/') ? currentUrl : null;
 
-    if (currentUrl.includes('/product/')) {
+    if (directProductUrl) {
       sendLog(`[Scrape] ⚡ Zenwatch tự redirect thẳng vào trang sản phẩm (1 kết quả).`);
       const title = await page.innerText('h1.product_title').catch(() => '');
-      extractedLinks = [{ href: currentUrl, text: title.toLowerCase() }];
+      extractedLinks = [{ href: directProductUrl, text: title.toLowerCase() }];
     } else {
       const selectors = '.product-item a, .product-card a, .product-name a, .product a, .woocommerce-LoopProduct-link';
       let productLinks = await page.$$(selectors);
@@ -149,14 +89,17 @@ export async function scrapeWatchSpecs(sku, brand, sendLog, checkStop) {
 
     extractedLinks = extractedLinks.filter(item => {
       if (!item.href || !item.href.startsWith('https://zenwatch.vn') || !item.href.includes('/product/')) return false;
-      const isModelMatch = item.href.includes(modelNumber) || item.text.includes(modelNumber);
+      // Search của Zenwatch chỉ redirect thẳng khi có đúng một kết quả; tin cậy
+      // kết quả đó ngay cả khi slug hoặc tiêu đề không lặp lại mã tìm kiếm.
+      if (directProductUrl && item.href === directProductUrl) return true;
+      const isModelMatch = item.href.toLowerCase().includes(searchCode) || item.text.includes(searchCode);
       const isBrandMatch = !brandLower || item.href.includes(brandLower.replace(/\s+/g, '-')) || item.text.includes(brandLower);
       return isModelMatch && isBrandMatch;
     });
     
     const uniqueHrefs = [...new Set(extractedLinks.map(i => i.href))];
 
-    sendLog(`[Scrape] Tìm thấy ${uniqueHrefs.length} link sản phẩm hợp lệ chứa mã ${modelNumber} và thương hiệu ${brand} trên Zenwatch.`);
+    sendLog(`[Scrape] Tìm thấy ${uniqueHrefs.length} link sản phẩm hợp lệ chứa mã ${searchCode} và thương hiệu ${brand || 'không xác định'} trên Zenwatch.`);
 
     let matchedUrl = null;
 
@@ -186,10 +129,12 @@ export async function scrapeWatchSpecs(sku, brand, sendLog, checkStop) {
       }
 
       if (matchedUrl) {
+        if (checkStop?.()) throw new Error('STOP_REQUESTED');
         await page.goto(matchedUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
       }
 
       await page.waitForSelector('#tab-description', { state: 'attached', timeout: 5000 }).catch(() => {});
+      if (checkStop?.()) throw new Error('STOP_REQUESTED');
       
       try {
         specs = await page.innerText('#tab-description', { timeout: 2000 });
@@ -203,44 +148,49 @@ export async function scrapeWatchSpecs(sku, brand, sendLog, checkStop) {
       return null;
     }
   } catch (err) {
+    if (err.message === 'STOP_REQUESTED') throw err;
     sendLog(`[Scrape] ⚠️ Lỗi khi cào web cho ${sku}: ${err.message}`);
   } finally {
-    await browser.close();
+    if (ownedScraper) await ownedScraper.close();
   }
 
   return specs ? specs.slice(0, 6000) : null;
 }
 
-export async function generateMarketingContent(sku, imagePath, scrapedSpecs, sendLog, checkStop, sheetSpecs) {
-  sendLog(`[AI] Đang kiểm tra trạng thái cấp nguồn API...`);
-  const allowAutoFill = await prisma.setting.findUnique({ where: { key: 'gemini_allow_autofill' } });
-  if (allowAutoFill && allowAutoFill.value === 'false') {
-    sendLog(`[AI] ❌ TÍNH NĂNG CẤP NGUỒN AI CHO "CÀO DỮ LIỆU" ĐANG BỊ TẮT!`);
-    throw new Error('AI đã bị tắt, không thể dịch ảnh hoặc xào thông số.');
+export async function generateMarketingContent(
+  sku,
+  imagePath,
+  scrapedSpecs,
+  sendLog,
+  checkStop,
+  sheetSpecs,
+  chatGptSession,
+  aiTone = 'Thu hút (Engaging)'
+) {
+  if (!chatGptSession?.generate) {
+    throw new Error('Phiên Playwright ChatGPT chưa sẵn sàng.');
   }
 
-  sendLog(`[AI] Đang gọi AI (Gemini/OpenAI) sinh nội dung cho SKU: ${sku}...`);
+  sendLog(`[ChatGPT] Đang sinh nội dung bằng Playwright cho SKU: ${sku} (không dùng API)...`);
   if (checkStop && checkStop()) throw new Error('STOP_REQUESTED');
 
-  let images = [];
+  let image = null;
   if (imagePath && typeof imagePath === 'string') {
     try {
       if (imagePath.startsWith('http')) {
-        sendLog(`[AI] Đang tải ảnh từ web để phân tích...`);
-        const fetch = (await import('node-fetch')).default || globalThis.fetch;
-        const response = await fetch(imagePath);
+        sendLog(`[ChatGPT] Đang tải ảnh sản phẩm để đính kèm...`);
+        const response = await globalThis.fetch(imagePath, { signal: AbortSignal.timeout(20000) });
         if (!response.ok) throw new Error(`Lỗi HTTP: ${response.status}`);
-        const buffer = await response.arrayBuffer();
-        const base64Data = Buffer.from(buffer).toString('base64');
+        const buffer = Buffer.from(await response.arrayBuffer());
         const mimeType = response.headers.get('content-type') || 'image/jpeg';
-        images.push({ data: base64Data, mimeType });
+        image = { buffer, mimeType, name: `watch-${sku}.jpg` };
       } else if (fs.existsSync(imagePath)) {
-        const base64Data = fs.readFileSync(imagePath, { encoding: 'base64' });
+        const buffer = fs.readFileSync(imagePath);
         const mimeType = imagePath.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg';
-        images.push({ data: base64Data, mimeType });
+        image = { buffer, mimeType, name: `watch-${sku}${mimeType === 'image/png' ? '.png' : '.jpg'}` };
       }
     } catch (err) {
-      sendLog(`[AI] ⚠️ Không thể tải/đọc ảnh để phân tích: ${err.message}`);
+      sendLog(`[ChatGPT] ⚠️ Không thể tải/đọc ảnh; tiếp tục bằng thông số text: ${err.message}`);
     }
   }
 
@@ -282,10 +232,9 @@ Bắt buộc:
 + phong cách thời trang
 - Có CTA cuối bài
 
-Tone:
-- premium
-- modern luxury
-- masculine
+  Tone:
+  - Giọng điệu người dùng chọn: ${aiTone}
+  - premium, modern luxury, masculine
 
 Output:
 - mô tả ngắn 60–100 từ
@@ -316,12 +265,17 @@ Hãy tạo ra JSON sau (KHÔNG MARKDOWN, CHỈ JSON THUẦN):
 Trả về ĐÚNG JSON THUẦN, không có backtick hay markdown. Nếu thiếu thông tin, hãy dự đoán chuyên nghiệp dựa trên ảnh.`;
 
   try {
-    const rawResult = await callAIWithRotation(promptText, images);
-    const jsonStr = rawResult.replace(/```json/gi, '').replace(/```/gi, '').trim();
-    return JSON.parse(jsonStr);
+    const rawResult = await chatGptSession.generate(promptText, image, checkStop);
+    const cleaned = rawResult.replace(/```json/gi, '').replace(/```/gi, '').trim();
+    const firstBrace = cleaned.indexOf('{');
+    const lastBrace = cleaned.lastIndexOf('}');
+    const jsonText = firstBrace >= 0 && lastBrace > firstBrace
+      ? cleaned.slice(firstBrace, lastBrace + 1)
+      : cleaned;
+    return JSON.parse(jsonText);
   } catch (err) {
     if (err.message === 'STOP_REQUESTED') throw err;
-    sendLog(`[AI] ❌ Lỗi khi sinh content: ${err.message}`);
+    sendLog(`[ChatGPT] ❌ Lỗi khi sinh content: ${err.message}`);
     throw err;
   }
 }

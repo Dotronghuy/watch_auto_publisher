@@ -1,7 +1,8 @@
 import { Worker } from 'bullmq';
 import IORedis from 'ioredis';
+import { localRedisUrl } from '../config/redis.config.js';
 
-const connection = new IORedis(process.env.REDIS_URL || 'redis://localhost:6379');
+const connection = new IORedis(localRedisUrl);
 
 const worker = new Worker('driveSyncQueue', async job => {
   console.log(`Processing drive sync job: ${job.id}`);

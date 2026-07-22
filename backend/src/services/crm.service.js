@@ -2,7 +2,7 @@ import axios from 'axios';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { saveConversation, saveMessage, getConversationById, getMessageById, getMessagesByConversation } from '../utils/crm.db.js';
+import { saveConversation, saveMessage, getConversationById, getMessageById, removeLocalOutgoingMessageDuplicates } from '../utils/crm.db.js';
 import dotenv from 'dotenv';
 dotenv.config();
 
@@ -32,17 +32,22 @@ const getActiveAccounts = () => {
 /**
  * Lấy Facebook Inbox
  */
-export const fetchFacebookInbox = async (pageToken, accountId, fbPageId) => {
+export const fetchFacebookInbox = async (pageToken, accountId, fbPageId, options = {}) => {
   if (!pageToken) return;
   try {
+    const conversationLimit = Math.max(1, Number.parseInt(options.conversationLimit, 10) || 25);
+    const messageLimit = Math.max(1, Number.parseInt(options.messageLimit, 10) || 20);
     const res = await axios.get(`${GRAPH_API_BASE}/me/conversations`, {
       params: {
-        fields: 'id,updated_time,snippet,participants,messages.limit(20){id,created_time,message,from,attachments{image_data,video_data,file_url}}',
+        fields: `id,updated_time,snippet,participants,messages.limit(${messageLimit}){id,created_time,message,from,attachments{image_data,video_data,file_url}}`,
+        limit: conversationLimit,
         access_token: pageToken
       }
     });
 
     const conversations = res.data.data || [];
+    let hasAnyNewCustomerMessage = false;
+
     for (const conv of conversations) {
       const participants = conv.participants?.data || [];
       // Lọc bỏ chính Page ra khỏi danh sách để tìm đúng khách hàng
@@ -73,35 +78,36 @@ export const fetchFacebookInbox = async (pageToken, accountId, fbPageId) => {
             else if (att.file_url) text += `\n[FILE: ${att.file_url}]`;
           }
         }
-        
+        const textToSave = text.trim() || '📸 Tệp đính kèm';
         const existingMsg = await getMessageById(msg.id);
-        await saveMessage(msg.id, conv.id, text.trim() || '📸 Tệp đính kèm', isFromPage, msg.created_time);
+
+        if (isFromPage) {
+          await removeLocalOutgoingMessageDuplicates(conv.id, textToSave, msg.id);
+        }
         
+        await saveMessage(msg.id, conv.id, textToSave, isFromPage, msg.created_time);
+
         if (!existingMsg && !isFromPage) {
           hasNewCustomerMessage = true;
-          textToProcess = text.trim() || '📸 Tệp đính kèm';
+          hasAnyNewCustomerMessage = true;
+          textToProcess = textToSave;
           imageUrlToProcess = imageUrl;
         }
       }
 
       if (hasNewCustomerMessage) {
-        const allMsgs = await getMessagesByConversation(conv.id);
-        if (allMsgs.length > 0) {
-          const latestMsg = allMsgs[allMsgs.length - 1];
-          // Chỉ trigger chatbot nếu tin nhắn mới nhất của toàn bộ hội thoại là từ khách hàng
-          if (latestMsg.is_from_page === 0) {
-            try {
-              const { handleIncomingMessage } = await import('./chatbot.service.js');
-              handleIncomingMessage(conv.id, textToProcess, imageUrlToProcess).catch(e => console.error('Chatbot Sync FB error:', e.message));
-            } catch (err) {
-              console.error('Không thể nạp chatbot service cho FB sync:', err.message);
-            }
-          }
+        try {
+          const { handleIncomingMessage } = await import('./chatbot.service.js');
+          handleIncomingMessage(conv.id, textToProcess, imageUrlToProcess).catch(e => console.error('Chatbot Sync FB error:', e.message));
+        } catch (err) {
+          console.error('Không thể nạp chatbot service cho FB sync:', err.message);
         }
       }
     }
+    return hasAnyNewCustomerMessage;
   } catch (error) {
     console.error(`❌ Lỗi FB Inbox (Account ${accountId}):`, error.response?.data || error.message);
+    return false;
   }
 };
 
@@ -139,15 +145,18 @@ export const fetchFacebookComments = async (pageToken, accountId) => {
 /**
  * Lấy Instagram Inbox
  */
-export const fetchInstagramInbox = async (pageToken, accountId, igUserId) => {
+export const fetchInstagramInbox = async (pageToken, accountId, igUserId, options = {}) => {
   if (!pageToken) return;
   try {
+    const conversationLimit = Math.max(1, Number.parseInt(options.conversationLimit, 10) || 25);
+    const messageLimit = Math.max(1, Number.parseInt(options.messageLimit, 10) || 20);
     const fetchFolder = async (folderName) => {
       const res = await axios.get(`${GRAPH_API_BASE}/me/conversations`, {
         params: {
           platform: 'instagram',
           folder: folderName,
-          fields: 'id,updated_time,snippet,participants,messages.limit(20){id,created_time,message,from,attachments{image_data,video_data,file_url}}',
+          fields: `id,updated_time,snippet,participants,messages.limit(${messageLimit}){id,created_time,message,from,attachments{image_data,video_data,file_url}}`,
+          limit: conversationLimit,
           access_token: pageToken
         }
       });
@@ -160,6 +169,8 @@ export const fetchInstagramInbox = async (pageToken, accountId, igUserId) => {
     ]);
 
     const conversations = [...inboxConvs, ...pendingConvs];
+    let hasAnyNewCustomerMessage = false;
+
     for (const conv of conversations) {
       const participants = conv.participants?.data || [];
       let sender = participants.find(p => igUserId ? p.id !== igUserId : p.id);
@@ -190,33 +201,36 @@ export const fetchInstagramInbox = async (pageToken, accountId, igUserId) => {
           }
         }
 
+        const textToSave = text.trim() || '📸 Tệp đính kèm';
         const existingMsg = await getMessageById(msg.id);
-        await saveMessage(msg.id, conv.id, text.trim() || '📸 Tệp đính kèm', isFromPage, msg.created_time);
+
+        if (isFromPage) {
+          await removeLocalOutgoingMessageDuplicates(conv.id, textToSave, msg.id);
+        }
+
+        await saveMessage(msg.id, conv.id, textToSave, isFromPage, msg.created_time);
 
         if (!existingMsg && !isFromPage) {
           hasNewCustomerMessage = true;
-          textToProcess = text.trim() || '📸 Tệp đính kèm';
+          hasAnyNewCustomerMessage = true;
+          textToProcess = textToSave;
           imageUrlToProcess = imageUrl;
         }
       }
 
       if (hasNewCustomerMessage) {
-        const allMsgs = await getMessagesByConversation(conv.id);
-        if (allMsgs.length > 0) {
-          const latestMsg = allMsgs[allMsgs.length - 1];
-          if (latestMsg.is_from_page === 0) {
-            try {
-              const { handleIncomingMessage } = await import('./chatbot.service.js');
-              handleIncomingMessage(conv.id, textToProcess, imageUrlToProcess).catch(e => console.error('Chatbot Sync IG error:', e.message));
-            } catch (err) {
-              console.error('Không thể nạp chatbot service cho IG sync:', err.message);
-            }
-          }
+        try {
+          const { handleIncomingMessage } = await import('./chatbot.service.js');
+          handleIncomingMessage(conv.id, textToProcess, imageUrlToProcess).catch(e => console.error('Chatbot Sync IG error:', e.message));
+        } catch (err) {
+          console.error('Không thể nạp chatbot service cho IG sync:', err.message);
         }
       }
     }
+    return hasAnyNewCustomerMessage;
   } catch (error) {
     console.error(`❌ Lỗi IG Inbox (Account ${accountId}):`, error.response?.data || error.message);
+    return false;
   }
 };
 
@@ -290,6 +304,70 @@ export const syncAllCRM = async () => {
 };
 
 /**
+ * Đồng bộ nhanh chỉ phần inbox để chatbot bắt tin mới khi Webhook chưa bắn đúng.
+ * Không quét comments ở luồng này để giảm tải Graph API.
+ */
+export const syncCRMInboxes = async () => {
+  const activeAccounts = getActiveAccounts();
+  if (activeAccounts.length === 0) {
+    return false;
+  }
+
+  const accountResults = await Promise.all(activeAccounts.map(async (acc) => {
+    const { id, fbAccessToken, igAccessToken, igUserId, fbPageId } = acc;
+    const syncTasks = [];
+    const fastOptions = { conversationLimit: 10, messageLimit: 5 };
+
+    if (fbAccessToken) {
+      syncTasks.push(fetchFacebookInbox(fbAccessToken, id, fbPageId, fastOptions));
+    }
+
+    if (igAccessToken || igUserId) {
+      syncTasks.push(fetchInstagramInbox(igAccessToken || fbAccessToken, id, igUserId, fastOptions));
+    }
+
+    const results = await Promise.all(syncTasks);
+    return results.some(Boolean);
+  }));
+
+  return accountResults.some(Boolean);
+};
+
+export const startFastCRMInboxSync = (intervalMs = 2000) => {
+  const safeIntervalMs = Math.max(2000, Number.parseInt(intervalMs, 10) || 2000);
+  if (global.crmFastSyncInterval) {
+    return global.crmFastSyncInterval;
+  }
+
+  global.crmFastSyncRunning = false;
+
+  const runFastInboxSync = async () => {
+    if (global.crmFastSyncRunning) return;
+    global.crmFastSyncRunning = true;
+
+    try {
+      const hasNewMessages = await syncCRMInboxes();
+      if (hasNewMessages) {
+        const [{ getConversations }, { broadcastCRM }] = await Promise.all([
+          import('../utils/crm.db.js'),
+          import('../routes/api.routes.js')
+        ]);
+        broadcastCRM('conversations_updated', await getConversations());
+      }
+    } catch (e) {
+      console.error('Lỗi khi đồng bộ nhanh CRM Inbox:', e.message);
+    } finally {
+      global.crmFastSyncRunning = false;
+    }
+  };
+
+  global.crmFastSyncInterval = setInterval(runFastInboxSync, safeIntervalMs);
+  setTimeout(runFastInboxSync, 1000);
+  console.log(`✅ Đã bật đồng bộ nhanh CRM Inbox mỗi ${safeIntervalMs / 1000}s.`);
+  return global.crmFastSyncInterval;
+};
+
+/**
  * Trả lời tin nhắn hoặc comment
  */
 export const replyCRM = async (targetId, message, type, conversationId) => {
@@ -333,5 +411,51 @@ export const replyCRM = async (targetId, message, type, conversationId) => {
   } catch (err) {
     console.error('❌ Lỗi khi gửi reply CRM:', err.response?.data || err.message);
     throw err;
+  }
+};
+
+/**
+ * Gửi ảnh sản phẩm qua Facebook Messenger / Instagram DM
+ */
+export const replyImageCRM = async (targetId, imageUrl, type, conversationId) => {
+  const conversation = await getConversationById(conversationId);
+  if (!conversation || !conversation.account_id) {
+    throw new Error('Không tìm thấy thông tin Conversation hoặc Account ID');
+  }
+
+  const activeAccounts = getActiveAccounts();
+  const acc = activeAccounts.find(a => a.id === conversation.account_id);
+  if (!acc) {
+    throw new Error('Tài khoản gắn với tin nhắn này không tồn tại hoặc đã bị vô hiệu hóa.');
+  }
+
+  const token = (conversation.platform === 'instagram' && acc.igAccessToken)
+                 ? acc.igAccessToken
+                 : acc.fbAccessToken;
+  if (!token) throw new Error(`Không tìm thấy token hợp lệ cho tài khoản ${acc.name}`);
+
+  try {
+    if (type === 'inbox') {
+      const res = await axios.post(`${GRAPH_API_BASE}/me/messages`, {
+        recipient: { id: targetId },
+        message: {
+          attachment: {
+            type: 'image',
+            payload: {
+              url: imageUrl,
+              is_reusable: true
+            }
+          }
+        }
+      }, {
+        params: { access_token: token }
+      });
+      return res.data;
+    }
+    // Instagram DM cũng dùng cùng format
+    // Comment thì không gửi ảnh được
+  } catch (err) {
+    console.error('❌ Lỗi khi gửi ảnh CRM:', err.response?.data || err.message);
+    // Không throw để không làm crash luồng chính - ảnh là bonus, text là chính
   }
 };

@@ -1444,7 +1444,9 @@ export const autoPublishRoutine = async () => {
   liveLog('🤖 Bắt đầu tiến trình tự động đăng bài...', 'info', 'System');
 
   try {
-    const lastRunPath = path.join(__dirname, '../../config/last_run.json');
+    // File runtime không dùng đuôi .json để tránh nodemon restart backend giữa
+    // lúc Auto-Fill đang chạy mỗi khi lịch đăng bài cập nhật timestamp.
+    const lastRunPath = path.join(__dirname, '../../config/last_run.state');
     fs.writeFileSync(lastRunPath, JSON.stringify({ timestamp: Date.now() }), 'utf8');
   } catch (e) {}
 

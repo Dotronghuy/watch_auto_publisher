@@ -21,8 +21,8 @@ const SocialConnections = () => {
   // AI Chatbot Settings
   const [botEnabled, setBotEnabled] = useState(false);
   const [botPauseHours, setBotPauseHours] = useState(2);
-  const [botDelayMin, setBotDelayMin] = useState(3);
-  const [botDelayMax, setBotDelayMax] = useState(8);
+  const [botDelayMin, setBotDelayMin] = useState(0);
+  const [botDelayMax, setBotDelayMax] = useState(0);
 
   const [geminiApiKey, setGeminiApiKey] = useState('');
   const [showGeminiKey, setShowGeminiKey] = useState(false);
@@ -74,8 +74,8 @@ const SocialConnections = () => {
         
         setBotEnabled(data.botEnabled || false);
         setBotPauseHours(data.botPauseHours || 2);
-        setBotDelayMin(data.botDelayMin || 3);
-        setBotDelayMax(data.botDelayMax || 8);
+        setBotDelayMin(data.botDelayMin ?? 0);
+        setBotDelayMax(data.botDelayMax ?? 0);
         if (data.connectedSocials) {
           setConnectedSocials(data.connectedSocials);
         }

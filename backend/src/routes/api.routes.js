@@ -93,7 +93,15 @@ let isScanningDrive = false;
 // CRM SSE: Realtime push cho CRM Inbox
 let crmClients = [];
 
+// Gửi ping mỗi 15 giây để giữ connection không bị rớt (chống Vite/Nginx proxy timeout)
+setInterval(() => {
+  crmClients.forEach(client => {
+    client.res.write(`data: {"type": "ping", "time": ${Date.now()}}\n\n`);
+  });
+}, 15000);
+
 export const broadcastCRM = (eventType, data) => {
+  console.log(`[SSE] Broadcasting '${eventType}' to ${crmClients.length} clients`);
   const payload = JSON.stringify({ type: eventType, data, time: Date.now() });
   crmClients.forEach(client => {
     client.res.write(`data: ${payload}\n\n`);
@@ -1202,6 +1210,7 @@ router.get('/crm/stream', (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no'); // Vô hiệu hóa buffer của Nginx/Vite Proxy
   res.flushHeaders();
 
   const clientId = Date.now();
@@ -1268,17 +1277,19 @@ router.post('/crm/reply', async (req, res) => {
   try {
     const { conversationId, targetId, message, type } = req.body;
     const result = await replyCRM(targetId, message, type, conversationId);
+    const localMessageId = result?.message_id || result?.id || ('msg_' + Date.now());
+    const createdTime = new Date().toISOString();
     
     // Lưu vào DB ở local ngay lập tức
     // Push message to CRM SSE clients instantly
-    broadcastCRM('new_message', { conversationId, message: { id: 'msg_' + Date.now(), conversation_id: conversationId, message, is_from_page: 1, created_time: new Date().toISOString() } });
+    broadcastCRM('new_message', { conversationId, message: { id: localMessageId, conversation_id: conversationId, message, is_from_page: 1, created_time: createdTime } });
 
     await saveMessage(
-      'msg_' + Date.now(), 
+      localMessageId,
       conversationId, 
       message, 
       true, 
-      new Date().toISOString()
+      createdTime
     );
 
     res.json({ success: true, data: result });
@@ -1473,6 +1484,7 @@ router.get('/arena/stream', (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no'); // Vô hiệu hóa buffer của Nginx/Vite Proxy
   res.flushHeaders();
   
   const client = { id: Date.now(), res };

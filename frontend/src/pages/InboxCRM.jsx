@@ -11,6 +11,34 @@ import Swal from 'sweetalert2';
 import { useAuth } from '../context/AuthContext';
 import './InboxCRM.css';
 
+const normalizeArrayPayload = (payload, key) => {
+  if (Array.isArray(payload)) return payload;
+  if (Array.isArray(payload?.[key])) return payload[key];
+  if (Array.isArray(payload?.data)) return payload.data;
+  return [];
+};
+
+const parseMessageTime = (value) => {
+  const normalized = String(value || '').replace(/([+-]\d{2})(\d{2})$/, '$1:$2');
+  const timestamp = Date.parse(normalized);
+  return Number.isFinite(timestamp) ? timestamp : 0;
+};
+
+const dedupeMirroredOutgoingMessages = (items) => {
+  const remoteMessages = items.filter(msg => msg?.is_from_page && !String(msg.id || '').startsWith('msg_'));
+
+  return items.filter(msg => {
+    if (!msg?.is_from_page || !String(msg.id || '').startsWith('msg_')) return true;
+
+    const localTime = parseMessageTime(msg.created_time);
+    return !remoteMessages.some(remote => {
+      if (remote.message !== msg.message) return false;
+      const remoteTime = parseMessageTime(remote.created_time);
+      return !localTime || !remoteTime || Math.abs(remoteTime - localTime) <= 120000;
+    });
+  });
+};
+
 const InboxCRM = () => {
   const { hasPermission } = useAuth();
   const [conversations, setConversations] = useState([]);
@@ -38,6 +66,12 @@ const InboxCRM = () => {
   const [customerTagsMap, setCustomerTagsMap] = useState({}); // { senderId: [tags] }
   const [isTesting, setIsTesting] = useState(false);
   const [testMessage, setTestMessage] = useState('');
+  const conversationList = useMemo(() => normalizeArrayPayload(conversations, 'conversations'), [conversations]);
+  const messageList = useMemo(
+    () => dedupeMirroredOutgoingMessages(normalizeArrayPayload(messages, 'messages')),
+    [messages]
+  );
+  const accountList = useMemo(() => normalizeArrayPayload(accounts, 'accounts'), [accounts]);
 
   const predefinedTags = ['Khách mới', 'Đã đặt', 'Bảo hành', 'Quan tâm', 'Khách buôn', 'Khách VIP'];
   
@@ -64,7 +98,7 @@ const InboxCRM = () => {
     try {
       const res = await fetch('/api/crm/conversations');
       const data = await res.json();
-      setConversations(data);
+      setConversations(normalizeArrayPayload(data, 'conversations'));
     } catch (e) {
       console.error('Lỗi fetch conversations', e);
     }
@@ -74,7 +108,7 @@ const InboxCRM = () => {
     try {
       const res = await fetch('/api/accounts');
       const data = await res.json();
-      setAccounts(data);
+      setAccounts(normalizeArrayPayload(data, 'accounts'));
     } catch (e) {
       console.error('Lỗi fetch accounts', e);
     }
@@ -84,7 +118,7 @@ const InboxCRM = () => {
     try {
       const res = await fetch(`/api/crm/conversations/${encodeURIComponent(convId)}/messages`);
       const data = await res.json();
-      setMessages(data);
+      setMessages(normalizeArrayPayload(data, 'messages'));
     } catch (e) {
       console.error('Lỗi fetch messages', e);
     }
@@ -138,17 +172,43 @@ const InboxCRM = () => {
         
         if (payload.type === 'conversations_updated') {
           // Server đã sync xong, cập nhật danh sách hội thoại ngay lập tức
-          setConversations(payload.data);
+          setConversations(normalizeArrayPayload(payload.data, 'conversations'));
         }
         
         if (payload.type === 'new_message') {
+          const conversationId = payload.data?.conversationId;
+          const newMessage = payload.data?.message;
+
+          if (conversationId && newMessage) {
+            setConversations(prev => {
+              const list = normalizeArrayPayload(prev, 'conversations');
+              const currentConversation = list.find(conv => conv.id === conversationId);
+              if (!currentConversation) return list;
+
+              const updatedConversation = {
+                ...currentConversation,
+                snippet: newMessage.message || currentConversation.snippet,
+                updated_at: newMessage.created_time || currentConversation.updated_at
+              };
+
+              return [updatedConversation, ...list.filter(conv => conv.id !== conversationId)];
+            });
+
+            setActiveConv(prev => prev?.id === conversationId
+              ? {
+                  ...prev,
+                  snippet: newMessage.message || prev.snippet,
+                  updated_at: newMessage.created_time || prev.updated_at
+                }
+              : prev
+            );
+          }
+
           // Có tin nhắn mới → refresh messages nếu đang xem đúng conversation đó
           const current = activeConvRef.current;
-          if (current && current.id === payload.data.conversationId) {
+          if (current && current.id === conversationId) {
             fetchMessages(current.id);
           }
-          // Cũng refresh danh sách conversations để cập nhật snippet
-          fetchConversations();
         }
       } catch {
         // ignore parse errors
@@ -183,7 +243,7 @@ const InboxCRM = () => {
   useEffect(() => {
     const fetchAllTags = async () => {
       const tagsMap = {};
-      for (const conv of conversations) {
+      for (const conv of conversationList) {
         if (!conv.sender_id || customerTagsMap[conv.sender_id]) continue;
         try {
           const res = await fetch(`/api/crm/customers/${encodeURIComponent(conv.sender_id)}`);
@@ -197,8 +257,8 @@ const InboxCRM = () => {
         setCustomerTagsMap(prev => ({ ...prev, ...tagsMap }));
       }
     };
-    if (conversations.length > 0) fetchAllTags();
-  }, [conversations, customerTagsMap]);
+    if (conversationList.length > 0) fetchAllTags();
+  }, [conversationList, customerTagsMap]);
 
   // Handle clicking outside to close emoji picker
   useEffect(() => {
@@ -229,9 +289,9 @@ const InboxCRM = () => {
 
   // Auto extract phone from messages if missing
   useEffect(() => {
-    if (messages.length > 0 && customerProfile && !customerProfile.phone) {
+    if (messageList.length > 0 && customerProfile && !customerProfile.phone) {
       const phoneRegex = /(0[3|5|7|8|9])+([0-9]{8})\b/;
-      for (const msg of messages) {
+      for (const msg of messageList) {
         if (!msg.is_from_page && msg.message) {
           const match = msg.message.match(phoneRegex);
           if (match) {
@@ -241,7 +301,7 @@ const InboxCRM = () => {
         }
       }
     }
-  }, [messages, customerProfile, handleUpdateProfile]);
+  }, [messageList, customerProfile, handleUpdateProfile]);
 
   const addTag = (e) => {
     if (e.key === 'Enter' && newTag.trim()) {
@@ -289,7 +349,7 @@ const InboxCRM = () => {
       try {
         await fetch(`/api/crm/conversations/${encodeURIComponent(conv.id)}/read`, { method: 'POST' });
         // Cập nhật local state ngay lập tức
-        setConversations(prev => prev.map(c => 
+        setConversations(prev => normalizeArrayPayload(prev, 'conversations').map(c =>
           c.id === conv.id ? { ...c, needs_reply: 0, is_read: 1 } : c
         ));
       } catch (e) {
@@ -300,7 +360,7 @@ const InboxCRM = () => {
 
   // Đánh dấu đã đọc tất cả
   const handleMarkAllRead = async () => {
-    const unreadConvs = conversations.filter(c => c.needs_reply);
+    const unreadConvs = conversationList.filter(c => c.needs_reply);
     if (unreadConvs.length === 0) return;
     try {
       await Promise.all(
@@ -308,15 +368,15 @@ const InboxCRM = () => {
           fetch(`/api/crm/conversations/${encodeURIComponent(c.id)}/read`, { method: 'POST' })
         )
       );
-      setConversations(prev => prev.map(c => ({ ...c, needs_reply: 0, is_read: 1 })));
+      setConversations(prev => normalizeArrayPayload(prev, 'conversations').map(c => ({ ...c, needs_reply: 0, is_read: 1 })));
     } catch (e) {
       console.error('Lỗi đánh dấu tất cả đã đọc:', e);
     }
   };
 
   useEffect(() => {
-    if (messages.length > 0) {
-      const currentLastId = messages[messages.length - 1].id;
+    if (messageList.length > 0) {
+      const currentLastId = messageList[messageList.length - 1].id;
       if (currentLastId !== prevLastMsgIdRef.current) {
         scrollToBottom();
       }
@@ -324,10 +384,10 @@ const InboxCRM = () => {
     } else {
       prevLastMsgIdRef.current = null;
     }
-  }, [messages, scrollToBottom]);
+  }, [messageList, scrollToBottom]);
 
   // Lấy tất cả ảnh từ messages hiện tại
-  const allImages = useMemo(() => messages.reduce((acc, msg) => {
+  const allImages = useMemo(() => messageList.reduce((acc, msg) => {
     if (!msg.message) return acc;
     const matches = msg.message.match(/\[IMAGE: (.*?)\]/g);
     if (matches) {
@@ -337,7 +397,7 @@ const InboxCRM = () => {
       });
     }
     return acc;
-  }, []), [messages]);
+  }, []), [messageList]);
 
   // Keyboard: ESC đóng, Left/Right chuyển ảnh
   useEffect(() => {
@@ -408,12 +468,12 @@ const InboxCRM = () => {
   };
 
   const getAccountName = (accountId) => {
-    const acc = accounts.find(a => a.id === accountId);
+    const acc = accountList.find(a => a.id === accountId);
     return acc ? acc.name : 'Unknown Page';
   };
 
   const getAccountPageId = (accountId) => {
-    const acc = accounts.find(a => a.id === accountId);
+    const acc = accountList.find(a => a.id === accountId);
     return acc ? acc.fbPageId?.trim() : null;
   };
 
@@ -453,7 +513,7 @@ const InboxCRM = () => {
     setReplyText('');
 
     try {
-      const targetId = activeConv.type === 'comment' ? (messages[messages.length-1]?.id || activeConv.sender_id) : activeConv.sender_id;
+      const targetId = activeConv.type === 'comment' ? (messageList[messageList.length - 1]?.id || activeConv.sender_id) : activeConv.sender_id;
       
       const res = await fetch('/api/crm/reply', {
         method: 'POST',
@@ -611,20 +671,20 @@ const InboxCRM = () => {
         <div className="inbox-filter-tabs">
           <button className={`filter-tab ${filterType === 'inbox' ? 'active' : ''}`} onClick={() => setFilterType('inbox')}>
             <Mail size={14} /> Tin nhắn
-            {conversations.filter(c => c.type === 'inbox' && c.needs_reply).length > 0 && (
-              <span className="unreplied-badge">{conversations.filter(c => c.type === 'inbox' && c.needs_reply).length}</span>
+            {conversationList.filter(c => c.type === 'inbox' && c.needs_reply).length > 0 && (
+              <span className="unreplied-badge">{conversationList.filter(c => c.type === 'inbox' && c.needs_reply).length}</span>
             )}
           </button>
           <button className={`filter-tab ${filterType === 'comment' ? 'active' : ''}`} onClick={() => setFilterType('comment')}>
             <MessageSquare size={14} /> Bình luận
-            {conversations.filter(c => c.type === 'comment' && c.needs_reply).length > 0 && (
-              <span className="unreplied-badge">{conversations.filter(c => c.type === 'comment' && c.needs_reply).length}</span>
+            {conversationList.filter(c => c.type === 'comment' && c.needs_reply).length > 0 && (
+              <span className="unreplied-badge">{conversationList.filter(c => c.type === 'comment' && c.needs_reply).length}</span>
             )}
           </button>
         </div>
 
         {/* Account Filter Dropdown */}
-        {accounts.length > 1 && (
+        {accountList.length > 1 && (
           <div style={{ position: 'relative', padding: '0 12px', marginBottom: '8px' }}>
             <button 
               onClick={() => { setShowAccountFilter(!showAccountFilter); setShowTagFilter(false); }}
@@ -638,7 +698,7 @@ const InboxCRM = () => {
             >
               <span style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                 {filterAccount ? (() => {
-                  const acc = accounts.find(a => a.id === filterAccount);
+                  const acc = accountList.find(a => a.id === filterAccount);
                   return acc ? (
                     <>
                       {acc.fbPageId?.trim() ? (
@@ -685,7 +745,7 @@ const InboxCRM = () => {
                   </span>
                   Tất cả tài khoản
                 </div>
-                {accounts.filter(a => a.isActive).map(acc => (
+                {accountList.filter(a => a.isActive).map(acc => (
                   <div 
                     key={acc.id}
                     onClick={() => { setFilterAccount(acc.id); setShowAccountFilter(false); }}
@@ -774,7 +834,7 @@ const InboxCRM = () => {
         </div>
 
         <div className="conversations-list">
-          {conversations
+          {conversationList
             .filter(conv => conv.type === filterType)
             .filter(conv => {
               if (!filterAccount) return true;
@@ -793,7 +853,7 @@ const InboxCRM = () => {
               {filterType === 'inbox' ? 'Chưa có tin nhắn. Hãy bấm Đồng bộ.' : 'Chưa có bình luận nào.'}
             </div>
           ) : (
-            conversations
+            conversationList
             .filter(conv => conv.type === filterType)
             .filter(conv => {
               if (!filterAccount) return true;
@@ -956,7 +1016,7 @@ const InboxCRM = () => {
                 <span>TUESDAY, OCT 24</span>
               </div>
 
-              {messages.map((msg, index) => (
+              {messageList.map((msg, index) => (
                 <div key={msg.id} className={`message-bubble-wrapper ${msg.is_from_page ? 'from-page' : 'from-customer'}`}>
                   <div className="message-bubble">
                     {renderMessageText(msg.message)}
@@ -989,7 +1049,7 @@ const InboxCRM = () => {
                   )}
 
                   {/* Read Receipts */}
-                  {index === messages.length - 1 && (
+                  {index === messageList.length - 1 && (
                     <div className="message-readers" style={{ display: 'flex', justifyContent: msg.is_from_page ? 'flex-end' : 'flex-start', gap: '4px', marginTop: '4px', paddingRight: msg.is_from_page ? '15px' : '0' }}>
                       <img 
                         src={`/api/crm/avatar/${activeConv.account_id}/${activeConv.sender_id}?name=${encodeURIComponent(activeConv.sender_name || 'User')}`} 

@@ -1,6 +1,12 @@
 import { connectToSheet } from './googleSheets.service.js';
 import { buildPriceMap } from './excel.service.js';
-import { scrapeWatchSpecs, generateMarketingContent, detectStrapFromSku } from './productEnrichment.service.js';
+import {
+  createWatchScraper,
+  scrapeWatchSpecs,
+  generateMarketingContent,
+  detectStrapFromSku,
+} from './productEnrichment.service.js';
+import { createChatGPTTextSession } from '../playwright.service.js';
 import fs from 'fs';
 import path from 'path';
 
@@ -10,19 +16,8 @@ export function stopAutoFill() {
   isStopRequested = true;
 }
 
-function createStopRacer() {
-  return new Promise((_, reject) => {
-    const interval = setInterval(() => {
-      if (isStopRequested) {
-        clearInterval(interval);
-        reject(new Error('STOP_REQUESTED'));
-      }
-    }, 200);
-  });
-}
-
 export async function runAutoFill(config, sendLog) {
-  const { sheetUrl, excelPath, credentialsPath } = config;
+  const { sheetUrl, excelPath, credentialsPath, aiTone } = config;
 
   isStopRequested = false;
 
@@ -52,11 +47,18 @@ export async function runAutoFill(config, sendLog) {
   let skipped = 0;
   const specsCache = new Map();
   const aiSharedCache = new Map();
+  let scraperSession = null;
+  let chatGptSession = null;
 
   // Biến lưu model number cũ để biết khi nào chuyển sang model mới
   let lastModelNumber = null;
 
-  for (let i = 0; i < rows.length; i++) {
+  try {
+    sendLog('[Playwright] Đang khởi động trình cào dữ liệu tối ưu...');
+    scraperSession = await createWatchScraper();
+    sendLog('[Playwright] ✅ Trình cào Zenwatch đã sẵn sàng và sẽ được tái sử dụng cho toàn bộ danh sách.');
+
+    for (let i = 0; i < rows.length; i++) {
     if (isStopRequested) {
       sendLog('[System] 🛑 Tiến trình đã được dừng bởi người dùng.');
       break;
@@ -72,13 +74,14 @@ export async function runAutoFill(config, sendLog) {
     const baseModelCode = generalSku.split('-')[0];
     const matchNumber = baseModelCode.match(/\d+/);
     const modelNumber = matchNumber ? matchNumber[0] : '';
+    const modelCacheKey = modelNumber || baseModelCode || generalSku;
 
-    if (lastModelNumber && lastModelNumber !== modelNumber) {
+    if (lastModelNumber && lastModelNumber !== modelCacheKey) {
       specsCache.clear();
       aiSharedCache.clear();
-      sendLog(`[System] 🧹 Đã xóa cache khi chuyển sang mã mới: ${modelNumber}`);
+      sendLog(`[System] 🧹 Đã xóa cache khi chuyển sang mã mới: ${modelCacheKey}`);
     }
-    lastModelNumber = modelNumber;
+    lastModelNumber = modelCacheKey;
 
     let salePriceRaw = row.get('Giá sale') || '';
     if (priceMap.has(sku)) {
@@ -131,8 +134,8 @@ export async function runAutoFill(config, sendLog) {
         }
       }
 
-      if (!aiSharedCache.has(modelNumber)) {
-        aiSharedCache.set(modelNumber, {
+      if (!aiSharedCache.has(modelCacheKey)) {
+        aiSharedCache.set(modelCacheKey, {
           phong_cach: row.get('Phong cách') || '',
           muc_do_luxury: row.get('Mức độ luxury') || '',
           lay_cam_hung_tu: row.get('Lấy cảm hứng từ') || '',
@@ -174,10 +177,13 @@ export async function runAutoFill(config, sendLog) {
       sendLog(`[Scrape] ⚡ Dùng cache thông số cho model: ${generalSku} (bỏ qua cào web)`);
     } else {
       try {
-        specs = await Promise.race([
-          scrapeWatchSpecs(sku, brand, sendLog, () => isStopRequested),
-          createStopRacer()
-        ]);
+        specs = await scrapeWatchSpecs(
+          sku,
+          brand,
+          sendLog,
+          () => isStopRequested,
+          scraperSession
+        );
         specsCache.set(generalSku, specs);
         if (specs === null) {
           sendLog(`[Scrape] ⏭️ Bỏ qua SKU: ${sku} (không tìm thấy biến thể trên Zenwatch)`);
@@ -198,7 +204,8 @@ export async function runAutoFill(config, sendLog) {
       const matchField = (fieldNames) => {
         for (const fieldRaw of fieldNames) {
           const field = fieldRaw.normalize('NFC');
-          const regex = new RegExp(`${field}[:\uff1a]\s*([^\n\r]+)`, 'i');
+          const escapedField = field.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          const regex = new RegExp(`${escapedField}[:：]\\s*([^\\n\\r]+)`, 'i');
           const m = normalizedSpecs.match(regex);
           if (m) return m[1].trim().replace(/\u00a0/g, ' ');
         }
@@ -262,7 +269,7 @@ export async function runAutoFill(config, sendLog) {
         'Độ chịu nước': matchField(['Độ chịu nước']),
         'Mô tả độ chịu nước': formatMoTaChiuNuoc(matchField(['Độ chịu nước'])),
         'Bảo hành': formatBaoHanh(matchField(['Bảo hành', 'Thời gian bảo hành'])),
-        'Mặt kính': matchField(['Mặt kính']),
+        'Chất liệu kính': matchField(['Mặt kính', 'Chất liệu kính']),
         'Chất liệu vỏ': matchField(['Chất liệu vỏ']),
       };
 
@@ -296,13 +303,26 @@ export async function runAutoFill(config, sendLog) {
         'Mô tả độ chịu nước': row.get('Mô tả độ chịu nước') || updates['Mô tả độ chịu nước'] || ''
       };
 
-      const aiData = await Promise.race([
-        generateMarketingContent(sku, firstImagePath, specs, sendLog, () => isStopRequested, sheetSpecs),
-        createStopRacer()
-      ]);
+      if (!chatGptSession) {
+        chatGptSession = await createChatGPTTextSession({
+          log: sendLog,
+          checkStop: () => isStopRequested,
+        });
+      }
 
-      if (!aiSharedCache.has(modelNumber)) {
-        aiSharedCache.set(modelNumber, {
+      const aiData = await generateMarketingContent(
+        sku,
+        firstImagePath,
+        specs,
+        sendLog,
+        () => isStopRequested,
+        sheetSpecs,
+        chatGptSession,
+        aiTone
+      );
+
+      if (!aiSharedCache.has(modelCacheKey)) {
+        aiSharedCache.set(modelCacheKey, {
           phong_cach: aiData.phong_cach || '',
           muc_do_luxury: aiData.muc_do_luxury || '',
           lay_cam_hung_tu: aiData.lay_cam_hung_tu || '',
@@ -310,10 +330,10 @@ export async function runAutoFill(config, sendLog) {
           dip_su_dung: aiData.dip_su_dung || '',
           tinh_cach_phu_hop: aiData.tinh_cach_phu_hop || ''
         });
-        sendLog(`[AI] 💾 Đã lưu cache thông tin chung cho model: ${modelNumber}`);
+        sendLog(`[ChatGPT] 💾 Đã lưu cache thông tin chung cho model: ${modelCacheKey}`);
       }
 
-      const sharedFields = aiSharedCache.get(modelNumber);
+      const sharedFields = aiSharedCache.get(modelCacheKey);
 
       Object.assign(updates, {
         'Màu mặt số': aiData.mau_mat_so || '',
@@ -328,10 +348,14 @@ export async function runAutoFill(config, sendLog) {
         'Phối đồ': aiData.phoi_do || '',
       });
 
-      sendLog(`[AI] ✅ Sinh nội dung xong cho SKU: ${sku}`);
+      sendLog(`[ChatGPT] ✅ Sinh nội dung xong cho SKU: ${sku}`);
     } catch (err) {
       if (err.message === 'STOP_REQUESTED') break;
-      sendLog(`[AI] ❌ Lỗi sinh content cho ${sku}: ${err.message}`);
+      if (err.code === 'CHATGPT_HISTORY_RATE_LIMIT') {
+        sendLog(`[ChatGPT] ⏸️ Tạm dừng tại SKU ${sku}: ${err.message}`);
+        throw err;
+      }
+      sendLog(`[ChatGPT] ❌ Lỗi sinh content cho ${sku}: ${err.message}`);
     }
 
     if (priceMap.has(sku)) {
@@ -357,16 +381,18 @@ export async function runAutoFill(config, sendLog) {
         endColumnIndex: sheet.headerValues.length
       });
 
-      const skipFields = [
+      const technicalFields = new Set([
         'Kích thước mặt', 'Độ dày', 'Loại máy', 'Chất liệu vỏ', 'Chất liệu dây', 
         'Chất liệu kính', 'Mặt kính', 'Độ chịu nước', 'Mô tả độ chịu nước', 'Bảo hành',
         'Xuất xứ máy', 'Mô tả bộ máy', 'Mô tả kính'
-      ];
+      ]);
 
       for (const [key, value] of Object.entries(updates)) {
         const colIndex = sheet.headerValues.indexOf(key);
         if (colIndex !== -1) {
-          if (skipFields.includes(key)) continue;
+          // Thông số cào chỉ điền vào ô trống, không ghi đè dữ liệu đã được kiểm duyệt.
+          const currentValue = row.get(key);
+          if (technicalFields.has(key) && currentValue?.toString().trim()) continue;
           const cell = sheet.getCell(rowIndex, colIndex);
           cell.value = value;
         }
@@ -377,6 +403,11 @@ export async function runAutoFill(config, sendLog) {
     } catch (err) {
       sendLog(`[Sheets] ❌ Lỗi lưu dòng ${sku}: ${err.message}`);
     }
+    }
+  } finally {
+    if (chatGptSession) await chatGptSession.close();
+    if (scraperSession) await scraperSession.close();
+    sendLog('[Playwright] Đã đóng các phiên trình duyệt an toàn.');
   }
 
   if (isStopRequested) {

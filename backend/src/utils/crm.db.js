@@ -198,6 +198,37 @@ export const saveMessage = (id, conversation_id, message, is_from_page, created_
   });
 };
 
+export const removeLocalOutgoingMessageDuplicates = (conversationId, message, remoteMessageId) => {
+  return new Promise((resolve, reject) => {
+    db.run(
+      `DELETE FROM messages
+       WHERE conversation_id = ?
+         AND is_from_page = 1
+         AND message = ?
+         AND id LIKE 'msg_%'
+         AND id != ?`,
+      [conversationId, message, remoteMessageId],
+      function(err) {
+        if (err) reject(err);
+        else resolve(this.changes);
+      }
+    );
+  });
+};
+
+export const checkDuplicateCustomerMessage = (conversationId, text) => {
+  return new Promise((resolve, reject) => {
+    db.get(`
+      SELECT id FROM messages
+      WHERE conversation_id = ? AND is_from_page = 0 AND message = ?
+      ORDER BY created_time DESC LIMIT 1
+    `, [conversationId, text], (err, row) => {
+      if (err) reject(err);
+      else resolve(!!row);
+    });
+  });
+};
+
 export const getConversations = () => {
   return new Promise((resolve, reject) => {
     db.all(`

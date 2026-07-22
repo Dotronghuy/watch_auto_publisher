@@ -1,0 +1,13 @@
+{
+  "watch": ["src"],
+  "ext": "js,mjs,cjs",
+  "ignore": [
+    "config/**",
+    "uploads/**",
+    "temp_images/**",
+    "chrome_data_*/**",
+    "*.db*",
+    "*.log"
+  ],
+  "delay": "500"
+}
