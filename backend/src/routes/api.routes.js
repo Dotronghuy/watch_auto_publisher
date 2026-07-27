@@ -12,7 +12,11 @@ import { startScheduler } from '../scheduler.js';
 import { autoPublishRoutine, dryRunRoutine, resetGlobalStop, triggerGlobalStop, getIsRunning, forceResetRunningState, trainImageOnly, trainContentOnly, getToneInstructionText } from '../services/publish.service.js';
 import { getProductInfoBySku } from '../services/sheet.service.js';
 import { openLoginHelper, generateContentOnChatGPT, generateBackgroundOnChatGPT, analyzeNewSampleImages, isAiIdle } from '../services/playwright.service.js';
-import { publishQueue } from '../workers/queue.js';
+import { connection as redisConnection, publishQueue } from '../workers/queue.js';
+import {
+  hasSuccessfulPublishResult,
+  markLastSuccessfulRun,
+} from '../services/publish-run-state.service.js';
 import { recentActivities, addActivity } from '../utils/activity.js';
 import { getAllPostedHistory, getTodayEngagement } from '../utils/history.js';
 import { trackPostMetrics } from '../services/tracking.service.js';
@@ -359,7 +363,16 @@ router.post('/trigger-workflow', async (req, res) => {
   sendLogToClients({ time: new Date().toLocaleTimeString(), sender: 'System', message: '🚀 Bắt đầu luồng thực tế...', type: 'info' });
 
   autoPublishRoutine()
-    .then(() => {
+    .then(async (result) => {
+      if (hasSuccessfulPublishResult(result)) {
+        try {
+          await markLastSuccessfulRun(redisConnection);
+        } catch (stateError) {
+          console.error(
+            `Bài đã đăng nhưng không thể cập nhật last_run: ${stateError.message}`,
+          );
+        }
+      }
       sendLogToClients({ time: new Date().toLocaleTimeString(), sender: 'System', message: '✅ Luồng kết thúc thành công!', type: 'success' });
       addActivity('Luồng Auto kết thúc thành công', 'success');
     })

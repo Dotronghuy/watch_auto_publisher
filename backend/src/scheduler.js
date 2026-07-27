@@ -6,15 +6,18 @@ import cron from 'node-cron';
 import { spawn } from 'child_process';
 import { syncHashesFromSheets } from './services/image-hash.service.js';
 import { runNightlySelfLearning } from './services/self-learning.service.js';
+import { readLastSuccessfulRun } from './services/publish-run-state.service.js';
+import {
+  AUTO_PUBLISH_POLICY_REDIS_KEY,
+  AUTO_PUBLISH_POLICY_VERSION,
+  buildMissedSlotJobId,
+  createAutoPublishJobOptions,
+} from './workers/publish-job-policy.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const settingsPath = path.join(__dirname, '../config/settings.json');
 const heartbeatPath = path.join(__dirname, '../config/.heartbeat');
-// Không dùng đuôi .json cho file runtime: nodemon mặc định theo dõi JSON và sẽ
-// restart backend giữa một phiên Auto-Fill mỗi khi scheduler cập nhật file này.
-const lastRunStatePath = path.join(__dirname, '../config/last_run.state');
-const legacyLastRunPath = path.join(__dirname, '../config/last_run.json');
 
 let isSchedulerRunning = false; // Guard chống gọi scheduler 2 lần đồng thời
 let heartbeatInterval = null;
@@ -78,8 +81,15 @@ const redisScheduleMatchesSettings = async (settings) => {
     .filter(Boolean)
     .sort();
 
-  return expectedPatterns.length === actualPatterns.length
+  const patternsMatch = expectedPatterns.length === actualPatterns.length
     && expectedPatterns.every((pattern, index) => pattern === actualPatterns[index]);
+  if (!patternsMatch) return false;
+
+  // Ép lịch cũ được tạo lại một lần khi chính sách attempts/backoff thay đổi.
+  const storedPolicyVersion = await redisConnection.get(
+    AUTO_PUBLISH_POLICY_REDIS_KEY,
+  );
+  return storedPolicyVersion === AUTO_PUBLISH_POLICY_VERSION;
 };
 
 export const startScheduler = async (isSettingsUpdate = false) => {
@@ -164,9 +174,9 @@ export const startScheduler = async (isSettingsUpdate = false) => {
     if (settings.mode === 'test') {
       const intervalMinutes = parseInt(settings.testInterval) || 5;
       const cronPattern = `*/${intervalMinutes} * * * *`;
-      await publishQueue.add('autoPublishJob', {}, {
+      await publishQueue.add('autoPublishJob', {}, createAutoPublishJobOptions({
         repeat: { pattern: cronPattern, tz: 'Asia/Ho_Chi_Minh' }
-      });
+      }));
       console.log(`✅ [Chế Độ TEST] Đã lên lịch tự động đăng bài mỗi ${intervalMinutes} phút (Cron: ${cronPattern})`);
     } else {
       // Chế độ Đăng Thật
@@ -183,9 +193,9 @@ export const startScheduler = async (isSettingsUpdate = false) => {
         const [hour, minute] = timeStr.split(':');
         const cronPattern = `${parseInt(minute)} ${parseInt(hour)} * * *`;
 
-        await publishQueue.add('autoPublishJob', {}, {
+        await publishQueue.add('autoPublishJob', {}, createAutoPublishJobOptions({
           repeat: { pattern: cronPattern, tz: 'Asia/Ho_Chi_Minh' }
-        });
+        }));
         console.log(`✅ Đã lên lịch đăng bài cho Khung giờ: ${timeStr} (Cron: ${cronPattern})`);
       }
 
@@ -194,20 +204,8 @@ export const startScheduler = async (isSettingsUpdate = false) => {
       // --- CƠ CHẾ CHẠY BÙ (CATCH-UP) --- Dùng Redis Cloud để đồng bộ giữa các máy
       try {
         const now = new Date();
-        let lastRunTime = 0;
-        
-        // Đọc last_run từ Redis Cloud (đồng bộ giữa máy công ty & máy nhà)
-        try {
-          const redisLastRun = await redisConnection.get('last_run_timestamp');
-          if (redisLastRun) lastRunTime = parseInt(redisLastRun, 10);
-        } catch (redisErr) {
-          // Fallback: đọc từ file local nếu Redis lỗi
-          const lastRunPath = fs.existsSync(lastRunStatePath) ? lastRunStatePath : legacyLastRunPath;
-          if (fs.existsSync(lastRunPath)) {
-            const lastRunData = JSON.parse(fs.readFileSync(lastRunPath, 'utf8'));
-            lastRunTime = lastRunData.timestamp || 0;
-          }
-        }
+        // Chỉ timestamp của một lần đăng THÀNH CÔNG mới được tính là last_run.
+        const lastRunTime = await readLastSuccessfulRun(redisConnection);
 
         const currentMinutes = now.getHours() * 60 + now.getMinutes();
         let missedSlots = [];
@@ -233,20 +231,34 @@ export const startScheduler = async (isSettingsUpdate = false) => {
           console.log(`⚡ Phát hiện bị lỡ ${missedSlots.length} khung giờ: ${missedSlots.map(s => s.time).join(', ')}. Đang kích hoạt chạy bù...`);
           // Chạy bù cho TỪNG khung giờ bị lỡ, cách nhau 30 giây
           for (let i = 0; i < missedSlots.length; i++) {
-            await publishQueue.add('autoPublishJob', { catchUp: true, missedTime: missedSlots[i].time }, { delay: 10000 + (i * 30000) });
+            const missedSlot = missedSlots[i];
+            await publishQueue.add(
+              'autoPublishJob',
+              {
+                catchUp: true,
+                missedTime: missedSlot.time,
+                missedTimestamp: missedSlot.timestamp,
+              },
+              createAutoPublishJobOptions({
+                delay: 10000 + (i * 30000),
+                jobId: buildMissedSlotJobId(missedSlot.timestamp),
+              }),
+            );
             console.log(`  📌 Đã lên lịch chạy bù cho khung ${missedSlots[i].time} (delay ${10 + i * 30}s)`);
           }
-          
-          // Cập nhật last_run lên Redis Cloud + file local (backup)
-          const latestMissed = missedSlots[missedSlots.length - 1].timestamp;
-          try {
-            await redisConnection.set('last_run_timestamp', String(latestMissed));
-          } catch (e) { /* ignore */ }
-          fs.writeFileSync(lastRunStatePath, JSON.stringify({ timestamp: latestMissed }), 'utf8');
         }
       } catch (e) {
         console.error('Lỗi khi kiểm tra catch-up chạy bù:', e);
       }
+    }
+
+    try {
+      await redisConnection.set(
+        AUTO_PUBLISH_POLICY_REDIS_KEY,
+        AUTO_PUBLISH_POLICY_VERSION,
+      );
+    } catch (error) {
+      console.warn('⚠️ Không lưu được phiên bản chính sách retry/backoff:', error.message);
     }
   }
 

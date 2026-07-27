@@ -2,6 +2,7 @@ import 'dotenv/config';
 import { Queue } from 'bullmq';
 import IORedis from 'ioredis';
 import { localRedisUrl } from '../config/redis.config.js';
+import { createAutoPublishJobOptions } from './publish-job-policy.js';
 
 const isSimulate = process.argv[1] && process.argv[1].includes('simulate_customers.js');
 
@@ -21,5 +22,8 @@ connection.on('ready', () => {
 });
 
 export { connection };
-export const publishQueue = new Queue('publishQueue', { connection });
+export const publishQueue = new Queue('publishQueue', {
+  connection,
+  defaultJobOptions: createAutoPublishJobOptions(),
+});
 export const driveSyncQueue = new Queue('driveSyncQueue', { connection });

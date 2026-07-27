@@ -21,6 +21,7 @@ import { publishToInstagram, publishCarouselToInstagram, publishFBReels, publish
 import { addMusicToVideo, hasAudioStream } from './video.service.js';
 import { addActivity } from '../utils/activity.js';
 import { liveLog } from '../utils/liveLog.js';
+import { shouldTryNextSkuAfterAiFailure } from './auto-publish-policy.js';
 import { computeHashFromBuffer } from './image-hash.service.js';
 import { checkAdbDevice, dumpUI, findNodeByKeyword, tap, inputText, runAdbCommand, sleep } from './adb.service.js';
 import { saveImageHash } from '../utils/crm.db.js';
@@ -1432,8 +1433,16 @@ export const trainContentOnly = async () => {
   }
 };
 
-export const autoPublishRoutine = async () => {
-  isRoutineRunning = true;
+export const autoPublishRoutine = async (retryContext = null) => {
+  const isRootAttempt = retryContext === null;
+  const context = retryContext || { failedAiSkus: new Set() };
+
+  if (isRootAttempt) {
+    if (isRoutineRunning) {
+      throw new Error('Hệ thống đang chạy một tiến trình khác!');
+    }
+    isRoutineRunning = true;
+  }
 
   const checkAbort = () => {
     if (globalStopController.signal.aborted) {
@@ -1443,14 +1452,9 @@ export const autoPublishRoutine = async () => {
     }
   };
 
-  liveLog('🤖 Bắt đầu tiến trình tự động đăng bài...', 'info', 'System');
-
-  try {
-    // File runtime không dùng đuôi .json để tránh nodemon restart backend giữa
-    // lúc Auto-Fill đang chạy mỗi khi lịch đăng bài cập nhật timestamp.
-    const lastRunPath = path.join(__dirname, '../../config/last_run.state');
-    fs.writeFileSync(lastRunPath, JSON.stringify({ timestamp: Date.now() }), 'utf8');
-  } catch (e) {}
+  if (isRootAttempt) {
+    liveLog('🤖 Bắt đầu tiến trình tự động đăng bài...', 'info', 'System');
+  }
 
   const cleanTempDirectory = () => {
     const tempDir = path.join(__dirname, '../../temp_images');
@@ -1476,6 +1480,7 @@ export const autoPublishRoutine = async () => {
   let finalPostId = "N/A";
   let finalSkuName = "Unknown";
   let publishSucceeded = false;
+  const successfulPlatforms = new Set();
 
   try {
         const brandFolders = await getFoldersInFolder(ROOT_DRIVE_FOLDER_ID);
@@ -1510,6 +1515,11 @@ export const autoPublishRoutine = async () => {
     };
 
     for (const skuFolder of skuFolders) {
+      if (context.failedAiSkus.has(skuFolder.name)) {
+        console.log(`⏭️ Bỏ qua SKU ${skuFolder.name}: AI đã lỗi trong lượt job hiện tại.`);
+        continue;
+      }
+
       const productInfo = allProductsInfo.find(p => p.sku === skuFolder.name);
 
       if (productInfo && productInfo.postDate) {
@@ -1531,6 +1541,11 @@ export const autoPublishRoutine = async () => {
     }
 
     if (eligibleSkus.length === 0) {
+      if (context.failedAiSkus.size > 0) {
+        throw new Error(
+          `Đã thử và loại ${context.failedAiSkus.size} SKU lỗi AI; không còn SKU hợp lệ kế tiếp trong lượt này.`,
+        );
+      }
       liveLog('⚠️ Tất cả các mã SKU đang trong thời gian chờ (Cooldown). Không có mã nào hợp lệ!', 'error', 'Google Sheets');
       throw new Error('Tất cả các mã SKU đang trong thời gian chờ (Cooldown). Không có mã nào hợp lệ để đăng!');
     }
@@ -1840,7 +1855,13 @@ export const autoPublishRoutine = async () => {
             liveLog('⏹️ Đã dừng tiến trình theo yêu cầu.', 'error', 'System');
             throw pwError;
           }
-          liveLog(`❌ [AUTO PUBLISH] Tạo ảnh AI thất bại: ${pwError.message}. Đã dừng để tránh đăng sai ảnh.`, 'error', 'ChatGPT');
+          pwError.isAiSkuFailure = true;
+          pwError.failedSku = selectedSku?.name || null;
+          liveLog(
+            `❌ [AUTO PUBLISH] Tạo ảnh AI cho SKU ${selectedSku?.name || 'không xác định'} thất bại: ${pwError.message}. Đang chuyển sang SKU hợp lệ kế tiếp.`,
+            'error',
+            'ChatGPT',
+          );
           throw pwError;
         }
       }
@@ -2020,8 +2041,15 @@ export const autoPublishRoutine = async () => {
             if (pageToken) {
               try {
                 postId = await publishFBReels(finalVideoPath, postContent, { fbAccessToken: pageToken });
-                await addPostMetric('facebook_reels', postId, selectedSku.name, postContent);
-                if (postId) publishSucceeded = true;
+                if (postId) {
+                  publishSucceeded = true;
+                  successfulPlatforms.add('facebook');
+                }
+                try {
+                  await addPostMetric('facebook_reels', postId, selectedSku.name, postContent);
+                } catch (metricError) {
+                  console.warn(`⚠️ FB Reels đã đăng nhưng không lưu được metric: ${metricError.message}`);
+                }
                 liveLog(`✅ [${account.name}] Đăng FB Reels thành công! (ID: ${postId})`, 'success', 'Facebook');
               } catch (e) { liveLog(`❌ [${account.name}] Lỗi FB Reels: ${e.message}`, 'error', 'Facebook'); }
             }
@@ -2039,6 +2067,7 @@ export const autoPublishRoutine = async () => {
                     await publishIGReels(finalVideoPath, igContent, [], { igAccessToken: igTokenToUse, igUserId: igUserToUse });
                     igSuccess = true;
                     publishSucceeded = true;
+                    successfulPlatforms.add('instagram');
                     liveLog(`✅ [${account.name}] Đăng IG Reels thành công!`, 'success', 'Instagram');
                     break; 
                   } catch (igErr) {
@@ -2067,8 +2096,15 @@ export const autoPublishRoutine = async () => {
                   });
                   const photoId = uploadRes.data.id;
                   postId = uploadRes.data.post_id || uploadRes.data.id;
-                  await addPostMetric('facebook', postId, selectedSku.name, postContent);
-                  if (postId) publishSucceeded = true;
+                  if (postId) {
+                    publishSucceeded = true;
+                    successfulPlatforms.add('facebook');
+                  }
+                  try {
+                    await addPostMetric('facebook', postId, selectedSku.name, postContent);
+                  } catch (metricError) {
+                    console.warn(`⚠️ Bài Facebook đã đăng nhưng không lưu được metric: ${metricError.message}`);
+                  }
                   liveLog(`✅ [${account.name}] Đăng FB 1 ảnh thành công! (ID: ${postId})`, 'success', 'Facebook');
 
                   // --- MOBILE EMULATOR: TỰ ĐỘNG GẮN LINK SHOPEE ---
@@ -2107,6 +2143,7 @@ export const autoPublishRoutine = async () => {
                     if (delayMs > 0) await sleep(delayMs, globalStopController.signal);
                     await publishToInstagram(igContent, publicUrl, [], { igAccessToken: igTokenToUse, igUserId: igUserToUse });
                     publishSucceeded = true;
+                    successfulPlatforms.add('instagram');
                     liveLog(`✅ [${account.name}] Đăng IG 1 ảnh thành công!`, 'success', 'Instagram');
                   }
                } catch (e) { liveLog(`❌ [${account.name}] Lỗi đăng FB 1 ảnh: ${e.response?.data?.error?.message || e.message}`, 'error', 'Facebook'); }
@@ -2147,8 +2184,15 @@ export const autoPublishRoutine = async () => {
                     access_token: pageToken
                   });
                   postId = feedRes.data.id;
-                  await addPostMetric('facebook', postId, selectedSku.name, postContent);
-                  if (postId) publishSucceeded = true;
+                  if (postId) {
+                    publishSucceeded = true;
+                    successfulPlatforms.add('facebook');
+                  }
+                  try {
+                    await addPostMetric('facebook', postId, selectedSku.name, postContent);
+                  } catch (metricError) {
+                    console.warn(`⚠️ Album Facebook đã đăng nhưng không lưu được metric: ${metricError.message}`);
+                  }
                   liveLog(`✅ [${account.name}] Đăng Album FB thành công! (ID: ${postId})`, 'success', 'Facebook');
 
                   // --- MOBILE EMULATOR: TỰ ĐỘNG GẮN LINK SHOPEE ---
@@ -2184,6 +2228,7 @@ export const autoPublishRoutine = async () => {
                     const igRes = await publishCarouselToInstagram(igContent, publicUrls, [], { igAccessToken: igTokenToUse, igUserId: igUserToUse });
                     if (igRes && igRes.mediaId) {
                        publishSucceeded = true;
+                       successfulPlatforms.add('instagram');
                        await addPostMetric('instagram', igRes.mediaId, selectedSku.name, igContent);
                        liveLog(`✅ [${account.name}] Đăng Album IG thành công!`, 'success', 'Instagram');
                     }
@@ -2209,7 +2254,16 @@ export const autoPublishRoutine = async () => {
       addActivity(`Đăng thành công sản phẩm ${selectedSku.name} lên ${activeAccounts.length} Page!`, 'success');
 
       // Lưu Post ID và Ngày đăng lên Google Sheets
-      await updateProductPostInfo(selectedSku.name, postId);
+      try {
+        await updateProductPostInfo(selectedSku.name, postId);
+      } catch (sheetError) {
+        // Bài đã lên nền tảng: không được làm cả job retry và đăng trùng chỉ vì Sheet lỗi.
+        liveLog(
+          `⚠️ Bài đã đăng thành công nhưng chưa cập nhật được lịch sử SKU ${selectedSku.name} trên Google Sheets: ${sheetError.message}`,
+          'warning',
+          'Google Sheets',
+        );
+      }
 
     } catch (e) {
       // Nếu lỗi do lệnh STOP → dừng ngay
@@ -2223,21 +2277,51 @@ export const autoPublishRoutine = async () => {
 
     // 6. Chỉ lưu ID media sau khi ít nhất một nền tảng đã đăng thành công.
     for (const img of selectedImages) {
-      await addPostedImageId(img.id);
+      try {
+        await addPostedImageId(img.id);
+      } catch (historyError) {
+        liveLog(
+          `⚠️ Bài đã đăng nhưng chưa lưu được media ${img.id} vào lịch sử: ${historyError.message}`,
+          'warning',
+          'System',
+        );
+      }
     }
 
     // 7. Dọn sạch toàn bộ thư mục temp_images để tránh tích tụ file rác (ảnh gốc, rmbg, resize, chatgpt...)
     cleanTempDirectory();
 
-    return { success: true, postId: finalPostId, sku: finalSkuName };
+    return {
+      success: true,
+      publishSucceeded,
+      publishedPlatforms: [...successfulPlatforms],
+      postId: finalPostId,
+      sku: finalSkuName,
+    };
 
   } catch (error) {
     // Dọn rác nếu lỗi
     cleanTempDirectory();
+
+    if (shouldTryNextSkuAfterAiFailure({
+      error,
+      aborted: globalStopController.signal.aborted,
+    })) {
+      context.failedAiSkus.add(error.failedSku);
+      liveLog(
+        `⏭️ Đã loại SKU ${error.failedSku} khỏi lượt hiện tại. Tool sẽ thử SKU hợp lệ kế tiếp (${context.failedAiSkus.size} SKU AI đã lỗi).`,
+        'warning',
+        'System',
+      );
+      return await autoPublishRoutine(context);
+    }
+
     console.error('❌ Tiến trình tự động thất bại:', error.response?.data || error.message);
     throw error;
   } finally {
-    isRoutineRunning = false;
+    if (isRootAttempt) {
+      isRoutineRunning = false;
+    }
   }
 }
 

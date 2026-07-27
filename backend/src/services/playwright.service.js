@@ -6,6 +6,10 @@ import { fileURLToPath } from 'url';
 import { liveLog } from '../utils/liveLog.js';
 import sharp from 'sharp';
 import { PrismaClient } from '@prisma/client';
+import {
+    hasNewUserMessage,
+    hasRequiredAttachmentPreviews,
+} from './chatgpt-submission-policy.js';
 
 const prisma = new PrismaClient();
 const __filename = fileURLToPath(import.meta.url);
@@ -550,6 +554,110 @@ const withWatchStrapIntegrityGuard = (prompt = '') => {
     return `${text}\n\n${WATCH_STRAP_INTEGRITY_GUARD}`;
 };
 
+const getChatGPTAttachmentPreviewCount = async (promptLocator) => promptLocator
+    .evaluate((promptElement) => {
+        const root = promptElement.closest('form')
+            || promptElement.parentElement?.parentElement
+            || promptElement.parentElement;
+        if (!root) return 0;
+
+        const isVisible = (element) => {
+            const style = window.getComputedStyle(element);
+            const rect = element.getBoundingClientRect();
+            return style.display !== 'none'
+                && style.visibility !== 'hidden'
+                && rect.width >= 20
+                && rect.height >= 20;
+        };
+
+        const previewImages = Array.from(root.querySelectorAll('img'))
+            .filter((image) => {
+                if (!isVisible(image)) return false;
+                const src = String(image.currentSrc || image.src || '').toLowerCase();
+                return !src.includes('avatar')
+                    && !src.includes('favicon')
+                    && !src.startsWith('data:image/svg');
+            });
+
+        const removeButtons = Array.from(root.querySelectorAll([
+            'button[aria-label*="Remove file" i]',
+            'button[aria-label*="Remove attachment" i]',
+            'button[aria-label*="Xóa tệp" i]',
+            'button[aria-label*="Xóa ảnh" i]',
+            'button[data-testid*="remove-attachment" i]',
+        ].join(', '))).filter(isVisible);
+
+        return Math.max(previewImages.length, removeButtons.length);
+    })
+    .catch(() => 0);
+
+const waitForChatGPTAttachmentPreviews = async ({
+    page,
+    promptLocator,
+    baselineCount,
+    expectedIncrease,
+    abortSignal,
+    timeout = 30_000,
+}) => {
+    const expectedCount = baselineCount + Math.max(1, expectedIncrease);
+    const deadline = Date.now() + timeout;
+    let lastObservedCount = baselineCount;
+    let stablePolls = 0;
+
+    while (Date.now() < deadline) {
+        if (abortSignal?.aborted) throw new Error('Abort requested');
+
+        const observedCount = await getChatGPTAttachmentPreviewCount(promptLocator);
+        if (hasRequiredAttachmentPreviews({
+            baselineCount,
+            observedCount,
+            expectedIncrease,
+        })) {
+            stablePolls++;
+            if (stablePolls >= 2) return observedCount;
+        } else {
+            stablePolls = 0;
+        }
+        lastObservedCount = observedCount;
+        await page.waitForTimeout(400);
+    }
+
+    const error = new Error(
+        `Không xác nhận được thumbnail ảnh đính kèm (${lastObservedCount}/${expectedCount}).`,
+    );
+    error.code = 'CHATGPT_ATTACHMENT_NOT_CONFIRMED';
+    throw error;
+};
+
+const waitForNewChatGPTUserMessage = async ({
+    page,
+    baselineUserMessageCount,
+    abortSignal,
+    timeout = 20_000,
+}) => {
+    const deadline = Date.now() + timeout;
+
+    while (Date.now() < deadline) {
+        if (abortSignal?.aborted) throw new Error('Abort requested');
+
+        const userMessageCount = await page
+            .locator('div[data-message-author-role="user"]')
+            .count()
+            .catch(() => 0);
+        if (hasNewUserMessage({
+            baselineCount: baselineUserMessageCount,
+            observedCount: userMessageCount,
+        })) return userMessageCount;
+        await page.waitForTimeout(300);
+    }
+
+    const error = new Error(
+        'Đã nhấn gửi nhưng không thấy tin nhắn user mới xuất hiện trong cuộc trò chuyện ChatGPT.',
+    );
+    error.code = 'CHATGPT_USER_MESSAGE_NOT_CONFIRMED';
+    throw error;
+};
+
 export const generateBackgroundOnChatGPT = async (imagePath, promptsArray, abortSignal = null, sampleImagePath = null, isNewSession = true, extraWatchImages = []) => {
     // ── Toggle Check: Tạo Ảnh AI ──
     // BẬT (true) = Bỏ qua Playwright, dùng ảnh gốc (vì Gemini API không sinh ảnh được)
@@ -729,7 +837,9 @@ export const generateBackgroundOnChatGPT = async (imagePath, promptsArray, abort
                 filesToUpload.push(copyToUniqueTemp(currentSampleImage));
                 console.log(`✅ Đã chọn kèm ảnh bố cục mẫu (${path.basename(currentSampleImage)})`);
             }
-            
+
+            const attachmentPreviewBaseline = await getChatGPTAttachmentPreviewCount(promptLocator);
+
             if (filesToUpload.length > 0) {
                 try {
                     console.log('👆 Đang click nút (+) để chọn "Đính kèm ảnh & tệp"...');
@@ -806,6 +916,24 @@ export const generateBackgroundOnChatGPT = async (imagePath, promptsArray, abort
                     } catch (e) {}
                 }
             } catch (e) {}
+
+            if (filesToUpload.length > 0) {
+                const previewCount = await waitForChatGPTAttachmentPreviews({
+                    page,
+                    promptLocator,
+                    baselineCount: attachmentPreviewBaseline,
+                    expectedIncrease: filesToUpload.length,
+                    abortSignal,
+                });
+                console.log(
+                    `✅ Đã xác nhận ${previewCount - attachmentPreviewBaseline}/${filesToUpload.length} thumbnail ảnh đính kèm xuất hiện.`,
+                );
+                liveLog(
+                    `✅ Ảnh ${i + 1}: Đã xác nhận đủ ${filesToUpload.length} thumbnail trước khi gửi.`,
+                    'success',
+                    'ChatGPT',
+                );
+            }
 
             console.log(`✍️ Đang gõ prompt số ${i + 1}...`);
             await promptLocator.click();
@@ -935,6 +1063,9 @@ CRITICAL RULES:
                     return {
                         assistantMessageCount: assistantMessages.length,
                         assistantImageSrcs: valid.map(img => img.currentSrc || img.src),
+                        userMessageCount: document.querySelectorAll(
+                            'div[data-message-author-role="user"]',
+                        ).length,
                     };
                 }, GENERATED_IMAGE_MIN_AREA);
             } catch (error) {
@@ -947,11 +1078,26 @@ CRITICAL RULES:
 
             console.log(
                 `📍 Mốc an toàn trước khi gửi: ${generationBaseline.assistantMessageCount} phản hồi assistant, ` +
-                `${generationBaseline.assistantImageSrcs.length} ảnh cũ.`
+                `${generationBaseline.assistantImageSrcs.length} ảnh cũ, ` +
+                `${generationBaseline.userMessageCount} tin nhắn user.`
             );
 
             // Chỉ dùng phím Enter theo yêu cầu
+            await promptLocator.focus();
             await page.keyboard.press('Enter');
+
+            console.log('🔎 Đang xác nhận tin nhắn user đã xuất hiện trong cuộc trò chuyện...');
+            await waitForNewChatGPTUserMessage({
+                page,
+                baselineUserMessageCount: generationBaseline.userMessageCount,
+                abortSignal,
+            });
+            console.log('✅ Đã xác nhận ChatGPT nhận tin nhắn user mới.');
+            liveLog(
+                `✅ Ảnh ${i + 1}: Thumbnail và tin nhắn user đều đã được xác nhận.`,
+                'success',
+                'ChatGPT',
+            );
 
             console.log(`⏳ Đang chờ ChatGPT vẽ ảnh ${i + 1} (có thể mất 60-100 giây)...`);
 
