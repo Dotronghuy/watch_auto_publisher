@@ -10,6 +10,7 @@ import {
     hasNewUserMessage,
     hasRequiredAttachmentPreviews,
 } from './chatgpt-submission-policy.js';
+import { selectNewChatGptImageCandidate } from './chatgpt-image-detection-policy.js';
 
 const prisma = new PrismaClient();
 const __filename = fileURLToPath(import.meta.url);
@@ -498,48 +499,132 @@ export const findNewAssistantImageCandidate = async (page, {
     baselineAssistantMessageCount,
     baselineAssistantImageSrcs = [],
     rejectedSrcs = [],
-}) => page.evaluate(({
-    minArea: minimumArea,
-    baselineAssistantMessageCount: baselineMessageCount,
-    baselineAssistantImageSrcs: baselineImageSrcs,
-    rejectedSrcs: rejectedImageSrcs,
 }) => {
-    const assistantMessages = Array.from(document.querySelectorAll('[data-message-author-role="assistant"]'));
-    const newAssistantMessages = assistantMessages.slice(baselineMessageCount);
-    const all = newAssistantMessages.flatMap(message =>
-        Array.from(message.querySelectorAll('img'))
-    ).map((img) => {
-        const src = img.currentSrc || img.src || '';
-        const width = img.naturalWidth || img.offsetWidth || 0;
-        const height = img.naturalHeight || img.offsetHeight || 0;
-        const isUi = !src || src.includes('avatar') || src.includes('favicon') || src.startsWith('data:image/svg');
-        return { src, area: width * height, width, height, isUi };
+    const domScan = await page.evaluate(({
+        baselineAssistantMessageCount: baselineMessageCount,
+    }) => {
+        const assistantSelector = [
+            '[data-message-author-role="assistant"]',
+            '[data-turn="assistant"]',
+        ].join(', ');
+        const userSelector = [
+            '[data-message-author-role="user"]',
+            '[data-turn="user"]',
+        ].join(', ');
+        const turnSelector = [
+            'article[data-testid^="conversation-turn-"]',
+            '[data-testid^="conversation-turn-"]',
+        ].join(', ');
+        const conversationSurfaceSelector = [
+            'main',
+            '[role="main"]',
+            'article[data-testid^="conversation-turn-"]',
+            '[data-testid^="conversation-turn-"]',
+        ].join(', ');
+        const composerSelector = [
+            'form',
+            '[data-testid*="composer" i]',
+            '#prompt-textarea',
+            '[contenteditable="true"]',
+        ].join(', ');
+        const uiContainerSelector = [
+            'nav',
+            'aside',
+            'header',
+            '[data-testid*="sidebar" i]',
+            '[aria-label*="sidebar" i]',
+        ].join(', ');
+
+        const canonicalTurn = (element) => element.closest(turnSelector) || element;
+        const assistantMessages = [];
+        const seenAssistantMessages = new Set();
+        document.querySelectorAll(assistantSelector).forEach((element) => {
+            const message = canonicalTurn(element);
+            if (!seenAssistantMessages.has(message)) {
+                seenAssistantMessages.add(message);
+                assistantMessages.push(message);
+            }
+        });
+
+        const newAssistantMessages = assistantMessages.slice(baselineMessageCount);
+        const latestUserMessage = Array.from(document.querySelectorAll(userSelector)).at(-1) || null;
+        const followsLatestUserMessage = (element) => {
+            if (!latestUserMessage) return false;
+            return Boolean(
+                latestUserMessage.compareDocumentPosition(element)
+                & Node.DOCUMENT_POSITION_FOLLOWING
+            );
+        };
+        const isVisible = (element) => {
+            const style = window.getComputedStyle(element);
+            const rect = element.getBoundingClientRect();
+            return style.display !== 'none'
+                && style.visibility !== 'hidden'
+                && rect.width > 0
+                && rect.height > 0;
+        };
+
+        const candidates = Array.from(document.querySelectorAll('img')).map((img) => {
+            const src = img.currentSrc || img.src || '';
+            const rect = img.getBoundingClientRect();
+            const width = img.naturalWidth || img.offsetWidth || rect.width || 0;
+            const height = img.naturalHeight || img.offsetHeight || rect.height || 0;
+            const isInNewAssistantMessage = newAssistantMessages.some(
+                (message) => message === img || message.contains(img)
+            );
+            const isInAssistantTurn = Boolean(
+                img.closest(assistantSelector)
+                || img.closest(turnSelector)?.querySelector(assistantSelector)
+            );
+            const isInUserMessage = Boolean(
+                img.closest(userSelector)
+                || img.closest(turnSelector)?.querySelector(userSelector)
+            );
+            const isInComposer = Boolean(img.closest(composerSelector));
+            const isInUiContainer = Boolean(img.closest(uiContainerSelector));
+            const lowerSrc = src.toLowerCase();
+
+            return {
+                src,
+                area: width * height,
+                width,
+                height,
+                source: isInNewAssistantMessage || isInAssistantTurn
+                    ? 'assistant'
+                    : 'fallback',
+                isAfterLatestUser: followsLatestUserMessage(img),
+                isConversationSurface: Boolean(img.closest(conversationSurfaceSelector)),
+                isInUserMessage,
+                isInComposer,
+                isUi: !isVisible(img)
+                    || isInUiContainer
+                    || !src
+                    || lowerSrc.includes('avatar')
+                    || lowerSrc.includes('favicon')
+                    || lowerSrc.startsWith('data:image/svg'),
+            };
+        });
+
+        return {
+            candidates,
+            assistantMessageCount: assistantMessages.length,
+            newAssistantMessageCount: newAssistantMessages.length,
+        };
+    }, {
+        baselineAssistantMessageCount,
     });
 
-    const baselineSrcSet = new Set(baselineImageSrcs);
-    const rejectedSrcSet = new Set(rejectedImageSrcs);
-    const validImages = all.filter((img) =>
-        !img.isUi &&
-        img.area >= minimumArea &&
-        !baselineSrcSet.has(img.src) &&
-        !rejectedSrcSet.has(img.src)
-    );
-    const lastValid = validImages.length > 0 ? validImages[validImages.length - 1] : null;
-
     return {
-        target: lastValid,
-        total: all.length,
-        validCount: validImages.length,
-        bestVisible: lastValid,
-        assistantMessageCount: assistantMessages.length,
-        newAssistantMessageCount: newAssistantMessages.length,
+        ...selectNewChatGptImageCandidate({
+            candidates: domScan.candidates,
+            minArea,
+            baselineImageSrcs: baselineAssistantImageSrcs,
+            rejectedSrcs,
+        }),
+        assistantMessageCount: domScan.assistantMessageCount,
+        newAssistantMessageCount: domScan.newAssistantMessageCount,
     };
-}, {
-    minArea,
-    baselineAssistantMessageCount,
-    baselineAssistantImageSrcs,
-    rejectedSrcs,
-});
+};
 
 const WATCH_STRAP_INTEGRITY_GUARD = `[MANDATORY WATCH STRAP INTEGRITY RULE]
 - First identify the exact bracelet/strap material, shape, width, stitching, texture, and color from Image 1. Preserve Image 1's bracelet/strap even if the scene/sample image shows a different steel bracelet, leather strap, rubber strap, or silicone strap.
@@ -1051,23 +1136,37 @@ CRITICAL RULES:
             // nằm ở message role=user nên tuyệt đối không được dùng làm ảnh đầu ra.
             let generationBaseline = null;
             try {
-                generationBaseline = await page.evaluate((minArea) => {
-                    const assistantMessages = Array.from(document.querySelectorAll('[data-message-author-role="assistant"]'));
-                    const assistantImages = assistantMessages.flatMap(message => Array.from(message.querySelectorAll('img')));
-                    const valid = assistantImages.filter(img => {
-                        const isUi = !img.src || img.src.includes('avatar') || img.src.includes('favicon') || img.src.startsWith('data:image/svg');
-                        const w = img.naturalWidth || img.width || 0;
-                        const h = img.naturalHeight || img.height || 0;
-                        return !isUi && (w * h) >= minArea;
+                generationBaseline = await page.evaluate(() => {
+                    const assistantSelector = [
+                        '[data-message-author-role="assistant"]',
+                        '[data-turn="assistant"]',
+                    ].join(', ');
+                    const turnSelector = [
+                        'article[data-testid^="conversation-turn-"]',
+                        '[data-testid^="conversation-turn-"]',
+                    ].join(', ');
+                    const assistantMessages = [];
+                    const seenAssistantMessages = new Set();
+                    document.querySelectorAll(assistantSelector).forEach((element) => {
+                        const message = element.closest(turnSelector) || element;
+                        if (!seenAssistantMessages.has(message)) {
+                            seenAssistantMessages.add(message);
+                            assistantMessages.push(message);
+                        }
                     });
+                    // Lưu mọi URL ảnh đang có trước khi gửi. Selector role của ChatGPT
+                    // có thể đổi, nhưng URL cũ vẫn là mốc an toàn để không lấy nhầm ảnh.
+                    const imageSrcs = Array.from(document.querySelectorAll('img'))
+                        .map((img) => img.currentSrc || img.src || '')
+                        .filter(Boolean);
                     return {
                         assistantMessageCount: assistantMessages.length,
-                        assistantImageSrcs: valid.map(img => img.currentSrc || img.src),
+                        assistantImageSrcs: [...new Set(imageSrcs)],
                         userMessageCount: document.querySelectorAll(
-                            'div[data-message-author-role="user"]',
+                            '[data-message-author-role="user"], [data-turn="user"]',
                         ).length,
                     };
-                }, GENERATED_IMAGE_MIN_AREA);
+                });
             } catch (error) {
                 throw new Error(`Không lập được mốc ảnh ChatGPT an toàn trước khi gửi: ${error.message}`);
             }
