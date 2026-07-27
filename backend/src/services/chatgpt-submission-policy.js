@@ -1,3 +1,8 @@
+export const CHATGPT_USER_MESSAGE_SELECTOR = [
+  '[data-message-author-role="user"]',
+  '[data-turn="user"]',
+].join(', ');
+
 export const hasRequiredAttachmentPreviews = ({
   baselineCount,
   observedCount,

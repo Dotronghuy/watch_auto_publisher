@@ -7,6 +7,7 @@ import { liveLog } from '../utils/liveLog.js';
 import sharp from 'sharp';
 import { PrismaClient } from '@prisma/client';
 import {
+    CHATGPT_USER_MESSAGE_SELECTOR,
     hasNewUserMessage,
     hasRequiredAttachmentPreviews,
 } from './chatgpt-submission-policy.js';
@@ -726,7 +727,7 @@ const waitForNewChatGPTUserMessage = async ({
         if (abortSignal?.aborted) throw new Error('Abort requested');
 
         const userMessageCount = await page
-            .locator('div[data-message-author-role="user"]')
+            .locator(CHATGPT_USER_MESSAGE_SELECTOR)
             .count()
             .catch(() => 0);
         if (hasNewUserMessage({
@@ -1136,7 +1137,7 @@ CRITICAL RULES:
             // nằm ở message role=user nên tuyệt đối không được dùng làm ảnh đầu ra.
             let generationBaseline = null;
             try {
-                generationBaseline = await page.evaluate(() => {
+                generationBaseline = await page.evaluate((userMessageSelector) => {
                     const assistantSelector = [
                         '[data-message-author-role="assistant"]',
                         '[data-turn="assistant"]',
@@ -1162,11 +1163,9 @@ CRITICAL RULES:
                     return {
                         assistantMessageCount: assistantMessages.length,
                         assistantImageSrcs: [...new Set(imageSrcs)],
-                        userMessageCount: document.querySelectorAll(
-                            '[data-message-author-role="user"], [data-turn="user"]',
-                        ).length,
+                        userMessageCount: document.querySelectorAll(userMessageSelector).length,
                     };
-                });
+                }, CHATGPT_USER_MESSAGE_SELECTOR);
             } catch (error) {
                 throw new Error(`Không lập được mốc ảnh ChatGPT an toàn trước khi gửi: ${error.message}`);
             }

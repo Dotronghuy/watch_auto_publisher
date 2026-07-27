@@ -1,9 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  CHATGPT_USER_MESSAGE_SELECTOR,
   hasNewUserMessage,
   hasRequiredAttachmentPreviews,
 } from './chatgpt-submission-policy.js';
+
+test('baseline and post-submit checks share both ChatGPT user-turn selectors', () => {
+  assert.match(CHATGPT_USER_MESSAGE_SELECTOR, /data-message-author-role="user"/);
+  assert.match(CHATGPT_USER_MESSAGE_SELECTOR, /data-turn="user"/);
+});
 
 test('all newly attached thumbnails must be visible before sending', () => {
   assert.equal(
