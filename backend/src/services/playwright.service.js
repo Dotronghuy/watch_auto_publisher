@@ -12,6 +12,7 @@ import {
     hasRequiredAttachmentPreviews,
 } from './chatgpt-submission-policy.js';
 import { selectNewChatGptImageCandidate } from './chatgpt-image-detection-policy.js';
+import { sanitizeGeneratedSocialContent } from './generated-content-sanitizer.js';
 
 const prisma = new PrismaClient();
 const __filename = fileURLToPath(import.meta.url);
@@ -1794,7 +1795,7 @@ export const generateContentOnChatGPT = async (prompt, type, imagePath = null) =
         }
         const result = await callGeminiAPIDirectly(prompt, images);
         console.log('[Toggle] ✅ Đã nhận content từ Gemini API thành công!');
-        return result;
+        return sanitizeGeneratedSocialContent(result);
       }
     } catch (e) {
       console.warn('[Toggle] ⚠️ Lỗi gọi Gemini API, fallback về Playwright:', e.message);
@@ -1917,12 +1918,23 @@ export const generateContentOnChatGPT = async (prompt, type, imagePath = null) =
             if (newMessages.length > 0) {
                 const lastMsg = newMessages[newMessages.length - 1];
                 const text = await page.evaluate((el) => {
-                    // ChatGPT để nội dung chính trong thẻ .markdown, các nút Edit/Copy nằm ngoài
-                    const markdownDiv = el.querySelector('.markdown');
-                    return markdownDiv ? markdownDiv.innerText : el.innerText;
+                    // Chỉ đọc phần văn bản. Các chip nguồn/tệp của ChatGPT Project
+                    // thường là button/role=button nằm ngay trong khối markdown.
+                    const contentRoot = el.querySelector('.markdown') || el;
+                    const cleanRoot = contentRoot.cloneNode(true);
+                    cleanRoot.querySelectorAll([
+                        'button',
+                        '[role="button"]',
+                        '[data-testid*="source" i]',
+                        '[data-testid*="citation" i]',
+                        '[data-testid*="file" i]',
+                        '[aria-label*="source" i]',
+                        '[aria-label*="nguồn" i]',
+                    ].join(',')).forEach((node) => node.remove());
+                    return cleanRoot.innerText || cleanRoot.textContent || '';
                 }, lastMsg);
                 console.log('✅ Đã lấy xong nội dung!');
-                return text.trim();
+                return sanitizeGeneratedSocialContent(text);
             }
         }
 
