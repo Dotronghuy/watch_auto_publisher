@@ -15,6 +15,8 @@ Image 2 is only the scene, wrist, lighting, camera angle, and background referen
 
 Remove the watch currently visible in Image 2 and replace it with the watch from Image 1.
 Preserve the watch from Image 1 as closely as possible: case shape, bezel, dial layout, hands, bracelet or strap style, color, and overall proportions.
+The dial logo, brand wordmark, model text, markers, and every other marking already visible on the watch in Image 1 are part of the exact product. Preserve their original spelling, shape, position, color, size, and orientation as faithfully as possible. Do not erase, replace, translate, restyle, or invent any dial text or logo.
+Remove every logo, brand mark, watermark, caption, promotional text, label, badge, and store name that comes from Image 2, including markings on Image 2's original watch, background, packaging, clothing, and props. Never transfer any branding or text from Image 2 into the final image.
 Do not copy the watch design from Image 2.
 Keep the watch at a realistic adult wristwatch size. On wrist shots, the watch case should look prominent and natural on the wrist, not tiny or miniature.
 On wrist shots, the bracelet or strap must look physically real: both sides must attach cleanly to the lugs, curve naturally around the wrist, keep the same material/width/detail from Image 1, and create subtle contact shadows where it touches skin or sleeve. The strap must not look like a flat black patch, painted band, melted cuff, floating slab, broken strip, oversized cuff, or fake sticker on the wrist.
@@ -29,7 +31,7 @@ If scene fit conflicts with product accuracy, prioritize the watch design from I
 **English instruction for GPT:**
 > Use only the two images attached in this message.
 
-CRITICAL DALL-E SAFETY RULE: To avoid copyright rejection, NEVER mention real-world watch brand names, logos, or trademarks (e.g., Rolex, Patek, Omega) when generating the image. Describe the watch generically (e.g., "high-end luxury mechanical watch with silver bracelet").
+CRITICAL DALL-E SAFETY RULE: Do not name, invent, or add any third-party brand, logo, or trademark in the instruction or final image. This rule does not permit removing the authentic dial logo or wordmark already visible on the exact product watch in Image 1; preserve that existing visual product detail without typing or recreating a different brand.
 
 Image 1 is the exact product watch.
 Image 2 is only the scene, wrist, lighting, camera angle, and background reference.
@@ -40,6 +42,8 @@ If Image 2 DOES NOT contain a human hand, wrist, or forearm, DO NOT add any huma
 
 Remove the watch currently visible in Image 2 and replace it with the watch from Image 1.
 Preserve the watch from Image 1 as closely as possible: case shape, bezel, dial layout, hands, bracelet or strap style, color, and overall proportions.
+The dial logo, brand wordmark, model text, markers, and every other marking already visible on the watch in Image 1 are part of the exact product. Preserve their original spelling, shape, position, color, size, and orientation as faithfully as possible. Do not erase, replace, translate, restyle, or invent any dial text or logo.
+Remove every logo, brand mark, watermark, caption, promotional text, label, badge, and store name that comes from Image 2, including markings on Image 2's original watch, background, packaging, clothing, and props. Never transfer any branding or text from Image 2 into the final image.
 Do not copy the watch design from Image 2.
 Keep the watch at a realistic adult wristwatch size. On wrist shots, the watch case should look prominent and natural on the wrist, not tiny or miniature.
 On wrist shots, the bracelet or strap must look physically real: both sides must attach cleanly to the lugs, curve naturally around the wrist, keep the same material/width/detail from Image 1, and create subtle contact shadows where it touches skin or sleeve. The strap must not look like a flat black patch, painted band, melted cuff, floating slab, broken strip, oversized cuff, or fake sticker on the wrist.
@@ -56,7 +60,7 @@ If scene fit conflicts with product accuracy, prioritize the watch design from I
 **English instruction for GPT:**
 > Use only the two images attached in this message.
 
-CRITICAL DALL-E SAFETY RULE: To avoid copyright rejection, NEVER mention real-world watch brand names, logos, or trademarks (e.g., Rolex, Patek, Omega) when generating the image. Describe the watch generically (e.g., "high-end luxury mechanical watch with silver bracelet").
+CRITICAL DALL-E SAFETY RULE: Do not name, invent, or add any third-party brand, logo, or trademark in the instruction or final image. This rule does not permit removing the authentic dial logo or wordmark already visible on the exact product watch in Image 1; preserve that existing visual product detail without typing or recreating a different brand.
 
 Image 1 is the exact product watch.
 Image 2 is only the scene, wrist, lighting, camera angle, and background reference.
@@ -67,6 +71,8 @@ If Image 2 DOES NOT contain a human hand, wrist, or forearm, DO NOT add any huma
 
 Remove the watch currently visible in Image 2 and replace it with the watch from Image 1.
 Preserve the watch from Image 1 as closely as possible: case shape, bezel, dial layout, hands, bracelet or strap style, color, and overall proportions.
+The dial logo, brand wordmark, model text, markers, and every other marking already visible on the watch in Image 1 are part of the exact product. Preserve their original spelling, shape, position, color, size, and orientation as faithfully as possible. Do not erase, replace, translate, restyle, or invent any dial text or logo.
+Remove every logo, brand mark, watermark, caption, promotional text, label, badge, and store name that comes from Image 2, including markings on Image 2's original watch, background, packaging, clothing, and props. Never transfer any branding or text from Image 2 into the final image.
 Do not copy the watch design from Image 2.
 Keep the watch at a realistic adult wristwatch size. On wrist shots, the watch case should look prominent and natural on the wrist, not tiny or miniature.
 On wrist shots, the bracelet or strap must look physically real: both sides must attach cleanly to the lugs, curve naturally around the wrist, keep the same material/width/detail from Image 1, and create subtle contact shadows where it touches skin or sleeve. The strap must not look like a flat black patch, painted band, melted cuff, floating slab, broken strip, oversized cuff, or fake sticker on the wrist.
@@ -83,7 +89,7 @@ If scene fit conflicts with product accuracy, prioritize the watch design from I
 **English instruction for GPT:**
 > Use only the two images attached in this message.
 
-CRITICAL DALL-E SAFETY RULE: To avoid copyright rejection, NEVER mention real-world watch brand names, logos, or trademarks (e.g., Rolex, Patek, Omega) when generating the image. Describe the watch generically (e.g., "high-end luxury mechanical watch with silver bracelet").
+CRITICAL DALL-E SAFETY RULE: Do not name, invent, or add any third-party brand, logo, or trademark in the instruction or final image. This rule does not permit removing the authentic dial logo or wordmark already visible on the exact product watch in Image 1; preserve that existing visual product detail without typing or recreating a different brand.
 
 Image 1 is the exact product watch.
 Image 2 is only the scene, wrist, lighting, camera angle, and background reference.
@@ -92,6 +98,8 @@ If Image 2 DOES NOT contain a human hand, wrist, or forearm, DO NOT add any huma
 
 Remove the watch currently visible in Image 2 and replace it with the watch from Image 1.
 Preserve the watch from Image 1 as closely as possible: case shape, bezel, dial layout, hands, bracelet or strap style, color, and overall proportions.
+The dial logo, brand wordmark, model text, markers, and every other marking already visible on the watch in Image 1 are part of the exact product. Preserve their original spelling, shape, position, color, size, and orientation as faithfully as possible. Do not erase, replace, translate, restyle, or invent any dial text or logo.
+Remove every logo, brand mark, watermark, caption, promotional text, label, badge, and store name that comes from Image 2, including markings on Image 2's original watch, background, packaging, clothing, and props. Never transfer any branding or text from Image 2 into the final image.
 Do not copy the watch design from Image 2.
 Keep the watch at a realistic adult wristwatch size. On wrist shots, the watch case should look prominent and natural on the wrist, not tiny or miniature.
 On wrist shots, the bracelet or strap must look physically real: both sides must attach cleanly to the lugs, curve naturally around the wrist, keep the same material/width/detail from Image 1, and create subtle contact shadows where it touches skin or sleeve. The strap must not look like a flat black patch, painted band, melted cuff, floating slab, broken strip, oversized cuff, or fake sticker on the wrist.
