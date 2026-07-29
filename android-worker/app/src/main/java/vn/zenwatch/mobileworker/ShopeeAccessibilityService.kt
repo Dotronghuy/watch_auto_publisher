@@ -13,7 +13,8 @@ import android.view.accessibility.AccessibilityNodeInfo
 class ShopeeAccessibilityService : AccessibilityService() {
     private val handler = Handler(Looper.getMainLooper())
     private val processRunnable = Runnable { processCurrentStep() }
-    private val menuTapRecoveryAttempts = mutableMapOf<String, Int>()
+    private val menuSemanticTapAttempts = mutableMapOf<String, Int>()
+    private val menuFallbackTapAttempts = mutableMapOf<String, Int>()
     private val saveFallbackAttempts = mutableSetOf<String>()
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -82,7 +83,8 @@ class ShopeeAccessibilityService : AccessibilityService() {
         }
 
         val fallbackKey = "${active.job.id}:${active.job.attempt}"
-        val tapAttempts = menuTapRecoveryAttempts[fallbackKey] ?: 0
+        val semanticTapAttempts = menuSemanticTapAttempts[fallbackKey] ?: 0
+        val fallbackTapAttempts = menuFallbackTapAttempts[fallbackKey] ?: 0
         val button = findBestNode(
             root,
             listOf(
@@ -100,9 +102,14 @@ class ShopeeAccessibilityService : AccessibilityService() {
                 "more_button",
             ),
         )
-        if (button != null && tapAttempts == 0 && activate(button)) {
-            menuTapRecoveryAttempts[fallbackKey] = 1
-            scheduleNext(1_000)
+        if (button != null && semanticTapAttempts < POST_MENU_SEMANTIC_TAP_LIMIT) {
+            // Facebook can report ACTION_CLICK as accepted without actually opening
+            // the menu. Dispatch a real accessibility gesture at the detected node
+            // first, and retry it before using screen-coordinate fallbacks.
+            val gestureDispatched = tapNodeByGesture(button)
+            val clicked = if (!gestureDispatched) click(button) else false
+            menuSemanticTapAttempts[fallbackKey] = semanticTapAttempts + 1
+            scheduleNext(if (gestureDispatched || clicked) 1_000 else 450)
             return
         }
 
@@ -110,21 +117,26 @@ class ShopeeAccessibilityService : AccessibilityService() {
         val tapTargets = postMenuTapTargets(anchorYFraction)
         if (
             elapsedInStep(active) >= 1_500
-            && tapAttempts < tapTargets.size
+            && fallbackTapAttempts < tapTargets.size
         ) {
-            val geometryButton = if (tapAttempts == 0) {
+            val geometryButton = if (fallbackTapAttempts == 0) {
                 findPostMenuByGeometry(root, anchorYFraction)
             } else {
                 null
             }
-            val clicked = geometryButton?.let { activate(it) } == true
-            val gestureDispatched = if (!clicked) {
-                tapPostMenuByGesture(tapTargets[tapAttempts])
+            val geometryGestureDispatched = geometryButton?.let { tapNodeByGesture(it) } == true
+            val geometryClicked = if (!geometryGestureDispatched) {
+                geometryButton?.let { click(it) } == true
             } else {
                 false
             }
-            menuTapRecoveryAttempts[fallbackKey] = tapAttempts + 1
-            if (clicked || gestureDispatched) {
+            val coordinateGestureDispatched = if (!geometryGestureDispatched && !geometryClicked) {
+                tapPostMenuByGesture(tapTargets[fallbackTapAttempts])
+            } else {
+                false
+            }
+            menuFallbackTapAttempts[fallbackKey] = fallbackTapAttempts + 1
+            if (geometryGestureDispatched || geometryClicked || coordinateGestureDispatched) {
                 scheduleNext(1_200)
                 return
             }
@@ -576,6 +588,7 @@ class ShopeeAccessibilityService : AccessibilityService() {
     }
 
     companion object {
+        private const val POST_MENU_SEMANTIC_TAP_LIMIT = 3
         private const val FACEBOOK_PACKAGE = "com.facebook.katana"
         private const val EVENT_SETTLE_MS = 600L
         private const val ROOT_RETRY_MS = 500L
