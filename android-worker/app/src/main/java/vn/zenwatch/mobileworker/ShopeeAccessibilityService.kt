@@ -86,6 +86,8 @@ class ShopeeAccessibilityService : AccessibilityService() {
         val button = findBestNode(
             root,
             listOf(
+                "Lựa chọn khác cho bài viết",
+                "Lựa chọn khác",
                 "Tùy chọn khác",
                 "Tùy chọn bài viết",
                 "Hành động đối với bài viết",
@@ -583,6 +585,7 @@ class ShopeeAccessibilityService : AccessibilityService() {
             """(?i)(^|\s)(vừa xong|\d+\s*(giây|phút|giờ|ngày|tuần|tháng|năm|sec|secs|min|mins|hr|hrs|day|days|week|weeks|month|months|year|years|s|m|h|d|w|y))(\s|[·•]|$)""",
         )
         private val POST_MENU_LABEL_HINTS = listOf(
+            "lựa chọn khác",
             "tùy chọn",
             "hành động đối với bài viết",
             "more options",
