@@ -3,7 +3,13 @@ import fs from 'fs';
 import FormData from 'form-data';
 import sharp from 'sharp';
 import { getFolderIdByName, getImagesInFolder, getVideosInFolder, downloadFileFromDrive, getFoldersInFolder } from './drive.service.js';
-import { getProductInfoBySku, updateProductPostInfo, getAllProductsPostInfo, clearExpiredPostInfo } from './sheet.service.js';
+import {
+  getProductInfoBySku,
+  getShopeeLinkFromProductInfo,
+  updateProductPostInfo,
+  getAllProductsPostInfo,
+  clearExpiredPostInfo,
+} from './sheet.service.js';
 import { readFromSheet } from './sheets.service.js';
 import { getPostedImageIds, addPostedImageId, addPostMetric } from '../utils/history.js';
 import path from 'path';
@@ -23,8 +29,8 @@ import { addActivity } from '../utils/activity.js';
 import { liveLog } from '../utils/liveLog.js';
 import { shouldTryNextSkuAfterAiFailure } from './auto-publish-policy.js';
 import { computeHashFromBuffer } from './image-hash.service.js';
-import { checkAdbDevice, dumpUI, findNodeByKeyword, tap, inputText, runAdbCommand, sleep } from './adb.service.js';
 import { saveImageHash } from '../utils/crm.db.js';
+import { enqueueMobileLinkJob, isAllowedShopeeUrl } from './mobileLinkJob.service.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -2107,17 +2113,16 @@ export const autoPublishRoutine = async (retryContext = null) => {
                   }
                   liveLog(`✅ [${account.name}] Đăng FB 1 ảnh thành công! (ID: ${postId})`, 'success', 'Facebook');
 
-                  // --- MOBILE EMULATOR: TỰ ĐỘNG GẮN LINK SHOPEE ---
+                  // --- ANDROID WORKER: TỰ ĐỘNG GẮN LINK SHOPEE ---
                   try {
-                    let shopeeLinkToAttach = `https://shopee.vn/search?keyword=${selectedSku.name}`;
-                    const variant = await prisma.variant.findUnique({ where: { sku: selectedSku.name } });
-                    if (variant && variant.shopeeProductId) {
-                       shopeeLinkToAttach = `https://shopee.vn/product/0/${variant.shopeeProductId}`; // Format chuẩn nếu có ID
-                    }
-                    liveLog(`🤖 [Mobile Emulator] Bắt đầu tiến trình gắn link Shopee...`, 'typing', 'Facebook');
-                    await attachShopeeLinkMobile(postId, shopeeLinkToAttach);
+                    await dispatchShopeeLinkForProduct({
+                      postId,
+                      pageToken,
+                      sku: selectedSku.name,
+                      productInfo,
+                    });
                   } catch (e) {
-                    console.error('Lỗi khi gọi giả lập mobile gắn link:', e);
+                    console.error('Lỗi khi xếp hàng tác vụ Android Worker:', e);
                   }
                   // ------------------------------------------------
 
@@ -2195,17 +2200,16 @@ export const autoPublishRoutine = async (retryContext = null) => {
                   }
                   liveLog(`✅ [${account.name}] Đăng Album FB thành công! (ID: ${postId})`, 'success', 'Facebook');
 
-                  // --- MOBILE EMULATOR: TỰ ĐỘNG GẮN LINK SHOPEE ---
+                  // --- ANDROID WORKER: TỰ ĐỘNG GẮN LINK SHOPEE ---
                   try {
-                    let shopeeLinkToAttach = `https://shopee.vn/search?keyword=${selectedSku.name}`;
-                    const variant = await prisma.variant.findUnique({ where: { sku: selectedSku.name } });
-                    if (variant && variant.shopeeProductId) {
-                       shopeeLinkToAttach = `https://shopee.vn/product/0/${variant.shopeeProductId}`;
-                    }
-                    liveLog(`🤖 [Mobile Emulator] Bắt đầu tiến trình gắn link Shopee...`, 'typing', 'Facebook');
-                    await attachShopeeLinkMobile(postId, shopeeLinkToAttach);
+                    await dispatchShopeeLinkForProduct({
+                      postId,
+                      pageToken,
+                      sku: selectedSku.name,
+                      productInfo,
+                    });
                   } catch (e) {
-                    console.error('Lỗi khi gọi giả lập mobile gắn link:', e);
+                    console.error('Lỗi khi xếp hàng tác vụ Android Worker:', e);
                   }
                   // ------------------------------------------------
 
@@ -2325,94 +2329,96 @@ export const autoPublishRoutine = async (retryContext = null) => {
   }
 }
 
-export async function attachShopeeLinkMobile(postId, shopeeLinkToAttach) {
-  liveLog(`🤖 [ADB Emulator] Mở giả lập Android để gắn link cho post: ${postId}...`, 'info', 'Facebook');
-  
-  try {
-    const deviceId = await checkAdbDevice();
-    liveLog(`🤖 [ADB Emulator] Đã kết nối giả lập: ${deviceId}`, 'info', 'Facebook');
-    
-    // Mở ứng dụng Facebook bằng deep link đến bài viết (nếu hỗ trợ) hoặc mở app Facebook thường
-    // fb://page/{page_id} hoặc fb://post/{post_id}
-    // Tuy nhiên, do cấu trúc ID của Graph API phức tạp (pageId_postId), an toàn nhất là mở ứng dụng
-    liveLog(`🤖 [ADB Emulator] Đang mở ứng dụng Facebook...`, 'typing', 'Facebook');
-    await runAdbCommand('shell monkey -p com.facebook.katana -c android.intent.category.LAUNCHER 1');
-    await sleep(8000); // Chờ App load xong
-    
-    // Yêu cầu: Giả lập phải ĐANG MỞ SẴN ở màn hình Trang cá nhân (Profile Fanpage) và vừa mới đăng bài.
-    // Thực hiện thao tác vuốt để Refresh trang
-    liveLog(`🤖 [ADB Emulator] Đang làm mới bảng tin Fanpage...`, 'typing', 'Facebook');
-    await runAdbCommand('shell input swipe 500 400 500 1200 600');
-    await sleep(5000); 
-    
-    liveLog(`🤖 [ADB Emulator] Đang tìm dấu 3 chấm của bài viết đầu tiên...`, 'typing', 'Facebook');
-    let xml = await dumpUI();
-    // Trên App Facebook tiếng Việt, dấu 3 chấm bài viết thường có content-desc là "Tùy chọn khác" hoặc "Tùy chọn bài viết"
-    let moreBtn = await findNodeByKeyword(xml, ['Tùy chọn khác', 'Tùy chọn bài viết', 'Hành động đối với bài viết']);
-    
-    // Nếu không tìm thấy, thử vuốt xuống 1 chút
-    if (!moreBtn) {
-        await runAdbCommand('shell input swipe 500 1000 500 500 500');
-        await sleep(3000);
-        xml = await dumpUI();
-        moreBtn = await findNodeByKeyword(xml, ['Tùy chọn khác', 'Tùy chọn bài viết', 'Hành động đối với bài viết']);
-    }
-
-    if (moreBtn) {
-        liveLog(`🤖 [ADB Emulator] Đã tìm thấy nút 3 chấm, đang bấm...`, 'typing', 'Facebook');
-        await tap(moreBtn.x, moreBtn.y);
-        await sleep(3000); // Chờ menu pop-up hiện lên
-        
-        liveLog(`🤖 [ADB Emulator] Tìm nút "Quản lý liên kết đến sản phẩm"...`, 'typing', 'Facebook');
-        xml = await dumpUI();
-        const manageLinkBtn = await findNodeByKeyword(xml, ['Quản lý liên kết đến sản phẩm', 'Thêm liên kết sản phẩm']);
-        
-        if (manageLinkBtn) {
-            await tap(manageLinkBtn.x, manageLinkBtn.y);
-            await sleep(3000); // Chờ form chuyển trang
-            
-            liveLog(`🤖 [ADB Emulator] Đang nhập URL Shopee...`, 'typing', 'Facebook');
-            xml = await dumpUI();
-            
-            // Tìm ô URL
-            const urlInput = await findNodeByKeyword(xml, ['URL', 'Nhập URL', 'Liên kết']);
-            if (urlInput) {
-                await tap(urlInput.x, urlInput.y);
-                await sleep(1000);
-                await inputText(shopeeLinkToAttach);
-                await sleep(1000);
-                // Bấm nút Next / Enter trên bàn phím ảo để thoát focus
-                await runAdbCommand('shell input keyevent 66');
-            }
-            
-            liveLog(`🤖 [ADB Emulator] Đang nhập Tên liên kết...`, 'typing', 'Facebook');
-            xml = await dumpUI();
-            const nameInput = await findNodeByKeyword(xml, ['Tên liên kết', 'Mua ở đây']);
-            if (nameInput) {
-                await tap(nameInput.x, nameInput.y);
-                await sleep(1000);
-                await inputText('Mua ở đây');
-                await sleep(1000);
-                await runAdbCommand('shell input keyevent 66'); // Ẩn bàn phím
-            }
-            
-            liveLog(`🤖 [ADB Emulator] Bấm nút Lưu...`, 'typing', 'Facebook');
-            xml = await dumpUI();
-            const saveBtn = await findNodeByKeyword(xml, ['Lưu']);
-            if (saveBtn) {
-                await tap(saveBtn.x, saveBtn.y);
-                await sleep(3000);
-                liveLog(`✅ [ADB Emulator] Đã gắn link Shopee thành công!`, 'success', 'Facebook');
-            } else {
-                liveLog(`❌ [ADB Emulator] Lỗi: Không tìm thấy nút Lưu.`, 'error', 'Facebook');
-            }
-        } else {
-            liveLog(`❌ [ADB Emulator] Lỗi: Không tìm thấy dòng "Quản lý liên kết đến sản phẩm" trong Menu 3 chấm.`, 'error', 'Facebook');
-        }
-    } else {
-        liveLog(`❌ [ADB Emulator] Lỗi: Không tìm thấy nút 3 chấm nào trên màn hình app.`, 'error', 'Facebook');
-    }
-  } catch (error) {
-    liveLog(`❌ [ADB Emulator] Bị lỗi: ${error.message}`, 'error', 'Facebook');
+const fallbackFacebookPostUrl = (postId) => {
+  const normalized = String(postId || '').trim();
+  const separator = normalized.indexOf('_');
+  if (separator > 0) {
+    const pageId = normalized.slice(0, separator);
+    const storyId = normalized.slice(separator + 1);
+    return `https://www.facebook.com/${pageId}/posts/${storyId}`;
   }
+  return `https://www.facebook.com/${normalized}`;
+};
+
+const resolveFacebookPostUrl = async (postId, pageToken) => {
+  if (pageToken) {
+    try {
+      const response = await axios.get(`https://graph.facebook.com/v21.0/${postId}`, {
+        params: {
+          fields: 'permalink_url',
+          access_token: pageToken,
+        },
+        timeout: 15000,
+      });
+      if (response.data?.permalink_url) return response.data.permalink_url;
+    } catch (error) {
+      liveLog(
+        `[Android Worker] Khong lay duoc permalink tu Graph API, dung URL du phong: ${error.message}`,
+        'warning',
+        'Facebook',
+      );
+    }
+  }
+  return fallbackFacebookPostUrl(postId);
+};
+
+export async function dispatchShopeeLinkMobile(postId, shopeeLinkToAttach, pageToken) {
+  const mode = String(process.env.MOBILE_SHOPEE_LINK_MODE || 'android_worker')
+    .trim()
+    .toLowerCase();
+
+  if (mode === 'disabled' || mode === 'off' || mode === 'none') {
+    liveLog('[Android Worker] Tu dong gan link Shopee dang tat.', 'info', 'Facebook');
+    return null;
+  }
+
+  const postUrl = await resolveFacebookPostUrl(postId, pageToken);
+  const job = await enqueueMobileLinkJob({
+    postId,
+    postUrl,
+    shopeeUrl: shopeeLinkToAttach,
+    linkName: process.env.MOBILE_SHOPEE_LINK_NAME || 'Mua ở đây',
+  });
+
+  liveLog(
+    `[Android Worker] Da xep hang tac vu ${job.id} cho bai ${postId}.`,
+    'success',
+    'Facebook',
+  );
+  return job;
+}
+
+async function dispatchShopeeLinkForProduct({
+  postId,
+  pageToken,
+  sku,
+  productInfo,
+}) {
+  const normalizedSku = String(sku || '').trim();
+  const shopeeLinkToAttach = getShopeeLinkFromProductInfo(productInfo);
+
+  if (!shopeeLinkToAttach) {
+    liveLog(
+      `[Android Worker] Bỏ qua gắn link cho SKU ${normalizedSku}: dòng Products chưa có Link shoppe.`,
+      'warning',
+      'Facebook',
+    );
+    return null;
+  }
+
+  if (!isAllowedShopeeUrl(shopeeLinkToAttach)) {
+    liveLog(
+      `[Android Worker] Bỏ qua gắn link cho SKU ${normalizedSku}: Link shoppe không phải URL Shopee HTTPS hợp lệ.`,
+      'warning',
+      'Facebook',
+    );
+    return null;
+  }
+
+  liveLog(
+    `[Android Worker] SKU ${normalizedSku} đã khớp đúng dòng Products; đang xếp hàng link Shopee.`,
+    'typing',
+    'Facebook',
+  );
+  return dispatchShopeeLinkMobile(postId, shopeeLinkToAttach, pageToken);
 }

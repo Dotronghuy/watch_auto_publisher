@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">ZenWatch Link Worker</string>
+    <string name="accessibility_service_name">ZenWatch – Gắn link Shopee</string>
+    <string name="accessibility_service_description">Thực hiện chuỗi thao tác cố định để gắn URL Shopee vào bài Fanpage do chính bạn quản lý.</string>
+</resources>

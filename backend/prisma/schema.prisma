@@ -95,3 +95,24 @@ model ZaloPostHistory {
   productId String   @unique
   postedAt  DateTime @default(now())
 }
+
+model MobileLinkJob {
+  id             String    @id @default(uuid())
+  postId         String    @unique
+  postUrl        String
+  shopeeUrl      String
+  linkName       String    @default("Mua ở đây")
+  status         String    @default("PENDING")
+  deviceId       String?
+  attempt        Int       @default(0)
+  claimedAt      DateTime?
+  leaseExpiresAt DateTime?
+  completedAt    DateTime?
+  errorMessage   String?
+  resultMessage  String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([status, createdAt])
+  @@index([deviceId, status])
+}

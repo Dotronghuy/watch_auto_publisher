@@ -33,7 +33,7 @@ if %errorlevel% equ 0 (
 :: ============================================
 :: BUOC 1: Dong bo code moi nhat tu GitHub
 :: ============================================
-echo [1/4] Dang dong bo code moi nhat tu GitHub...
+echo [1/6] Dang dong bo code moi nhat tu GitHub...
 if not exist ".git" (
     echo    [LOI] Thu muc nay khong phai ban Git clone, khong the tu dong cap nhat.
     pause
@@ -60,7 +60,7 @@ echo    [OK] Code da dong bo thanh cong tu GitHub.
 :: BUOC 2: Kiem tra va cai dat thu vien moi (neu co)
 :: ============================================
 echo.
-echo [2/4] Dang kiem tra thu vien...
+echo [2/6] Dang kiem tra thu vien...
 if not exist "node_modules\concurrently\package.json" call npm install
 if not exist "backend\node_modules\playwright\package.json" call npm --prefix backend install
 if not exist "frontend\node_modules\vite\package.json" call npm --prefix frontend install
@@ -70,7 +70,7 @@ echo    [OK] Thu vien da san sang.
 :: BUOC 3: Khoi dong Redis
 :: ============================================
 echo.
-echo [3/4] Dang khoi dong Redis...
+echo [3/6] Dang khoi dong Redis...
 
 :: Kiem tra Redis co dang chay khong
 tasklist /FI "IMAGENAME eq redis-server.exe" 2>nul | find /I "redis-server.exe" >nul
@@ -90,10 +90,43 @@ if errorlevel 1 (
 echo    [OK] Redis local san sang tai 127.0.0.1:6379.
 
 :: ============================================
-:: BUOC 4: Khoi dong Tool (Backend + Frontend)
+:: BUOC 4: Khoi dong Mobile Worker Gateway
 :: ============================================
 echo.
-echo [4/4] Dang khoi dong Tool...
+echo [4/6] Dang khoi dong Mobile Worker Gateway...
+netstat -ano | findstr /R /C:":3100 .*LISTENING" >nul 2>&1
+if errorlevel 1 (
+    start "ZenWatch Mobile Worker Gateway" /MIN cmd /k "cd /d ""%~dp0backend"" && npm.cmd run start:mobile-worker-gateway"
+    timeout /t 2 /nobreak >nul
+)
+
+netstat -ano | findstr /R /C:":3100 .*LISTENING" >nul 2>&1
+if errorlevel 1 (
+    echo    [CANH BAO] Mobile Worker Gateway chua mo duoc cong 3100.
+    echo    Tool chinh van se khoi dong, nhung dien thoai chua the nhan tac vu.
+) else (
+    echo    [OK] Mobile Worker Gateway san sang tai 127.0.0.1:3100.
+)
+
+:: ============================================
+:: BUOC 5: Khoi dong Tailscale Funnel
+:: ============================================
+echo.
+echo [5/6] Dang kiem tra Tailscale Funnel...
+call npm --prefix backend run start:mobile-worker-funnel
+if errorlevel 1 (
+    echo    [CANH BAO] Khong the bat Tailscale Funnel.
+    echo    Hay kiem tra Tailscale da cai dat, dang nhap va da cho phep Funnel.
+    echo    Tool chinh van se khoi dong, nhung dien thoai co the khong ket noi duoc.
+) else (
+    echo    [OK] Tailscale Funnel da san sang.
+)
+
+:: ============================================
+:: BUOC 6: Khoi dong Tool (Backend + Frontend)
+:: ============================================
+echo.
+echo [6/6] Dang khoi dong Tool...
 echo.
 echo  +======================================================+
 echo  !                                                       !

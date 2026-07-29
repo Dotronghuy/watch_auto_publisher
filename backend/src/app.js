@@ -13,6 +13,7 @@ import shopeeRoutes from './routes/shopee.routes.js';
 import zenwatchRoutes from './routes/zenwatch.routes.js';
 import bannerRoutes from './routes/banner.routes.js';
 import autofillRoutes from './routes/autofill.routes.js';
+import mobileWorkerRoutes from './routes/mobileWorker.routes.js';
 // Worker sẽ được khởi động SAU khi scheduler dọn sạch queue
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -57,6 +58,7 @@ app.use('/api/shopee', shopeeRoutes);
 app.use('/api/zenwatch', zenwatchRoutes);
 app.use('/api/banner', bannerRoutes);
 app.use('/api/autofill', autofillRoutes);
+app.use('/api/mobile-worker', mobileWorkerRoutes);
 // app.use('/api/drive', driveRoutes);
 // app.use('/api/publish', publishRoutes);
 

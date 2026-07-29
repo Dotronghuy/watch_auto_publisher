@@ -1437,37 +1437,6 @@ router.post('/crm/bot/test', async (req, res) => {
   }
 });
 
-// Helper mở mobile emulator để login Facebook thủ công
-router.post('/facebook/mobile-login-helper', async (req, res) => {
-  try {
-    const { chromium } = await import('playwright-extra');
-    const path = await import('path');
-    const { fileURLToPath } = await import('url');
-    const __filename = fileURLToPath(import.meta.url);
-    const __dirname = path.dirname(__filename);
-    const userDataDir = path.join(__dirname, '../../chrome_data_facebook');
-    
-    // Launch với cấu hình mobile giống hàm attachShopeeLinkMobile
-    const context = await chromium.launchPersistentContext(userDataDir, {
-      headless: false,
-      userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 14_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0.3 Mobile/15E148 Safari/604.1',
-      viewport: { width: 390, height: 844 },
-      deviceScaleFactor: 3,
-      isMobile: true,
-      hasTouch: true,
-      args: ['--disable-dev-shm-usage', '--disable-gpu', '--no-sandbox']
-    });
-    
-    const page = context.pages().length > 0 ? context.pages()[0] : await context.newPage();
-    await page.goto('https://m.facebook.com', { waitUntil: 'domcontentloaded' });
-    
-    console.log('\n\n=== HÃY ĐĂNG NHẬP FACEBOOK TRÊN CỬA SỔ MOBILE NÀY RỒI ĐÓNG LẠI ===\n\n');
-    res.json({ success: true, message: 'Đã mở cửa sổ login Facebook. Vui lòng thao tác trên máy chủ.' });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
 // --- AI Arena Endpoints ---
 
 let arenaClients = [];

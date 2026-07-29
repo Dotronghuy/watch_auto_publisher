@@ -8,7 +8,15 @@
     "dev": "nodemon src/app.js",
     "dev:watch": "node --watch-path=src src/app.js",
     "start": "node src/app.js",
-    "scan": "node src/scripts/scan_drive.js"
+    "start:mobile-worker-gateway": "node --env-file=.env src/mobileWorkerGateway.js",
+    "start:mobile-worker-stack": "node --env-file=.env src/scripts/start_mobile_worker_stack.js",
+    "start:mobile-worker-funnel": "node src/scripts/start_mobile_worker_funnel.js",
+    "scan": "node src/scripts/scan_drive.js",
+    "configure:mobile-worker": "node src/scripts/configure_mobile_worker.js",
+    "test:mobile-worker": "node src/scripts/test_mobile_worker.js",
+    "test:mobile-worker-gateway": "node src/scripts/test_mobile_worker_gateway.js",
+    "test:mobile-worker-public": "node src/scripts/test_mobile_worker_public.js",
+    "retry:latest-mobile-link": "node --env-file=.env src/scripts/retry_latest_failed_mobile_link_job.js"
   },
   "keywords": [],
   "author": "",

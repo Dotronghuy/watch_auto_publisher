@@ -11,6 +11,19 @@ const LEGACY_KEYFILEPATH = path.join(__dirname, '../../config/credentials.json')
 const KEYFILEPATH = fs.existsSync(PRIMARY_KEYFILEPATH) ? PRIMARY_KEYFILEPATH : LEGACY_KEYFILEPATH;
 const DEFAULT_CATALOG_SHEET_ID = '1y2U9cuBNTT6SoHNHsHycLqVlwVM9yjvsSp6Nq2DPwxo';
 const SCOPES = ['https://www.googleapis.com/auth/spreadsheets'];
+const PRODUCT_SHEET_RANGE = 'A:AL';
+const normalizeHeader = (value) => String(value || '')
+  .trim()
+  .toLocaleLowerCase('vi-VN')
+  .replace(/\s+/g, ' ');
+const normalizeSku = (value) => String(value || '').trim().toLocaleUpperCase('vi-VN');
+const SHOPEE_LINK_HEADERS = new Set([
+  'link shopee',
+  'link shoppe',
+  'shopee link',
+  'url shopee',
+  'link sản phẩm shopee',
+]);
 
 const auth = new google.auth.GoogleAuth({
   keyFile: KEYFILEPATH,
@@ -30,13 +43,24 @@ const getSheetId = () => {
   return process.env.CATALOG_SHEET_ID || DEFAULT_CATALOG_SHEET_ID;
 };
 
+export const getShopeeLinkFromProductInfo = (productInfo) => {
+  if (!productInfo || typeof productInfo !== 'object') return '';
+
+  for (const [header, value] of Object.entries(productInfo)) {
+    if (SHOPEE_LINK_HEADERS.has(normalizeHeader(header))) {
+      return String(value || '').trim();
+    }
+  }
+  return '';
+};
 
 export const getProductInfoBySku = async (sku) => {
   try {
     console.log(`Đang tra cứu thông tin SKU ${sku} trên Google Sheets...`);
     const res = await sheets.spreadsheets.values.get({
       spreadsheetId: getSheetId(),
-      range: 'A:AH', // Lấy từ cột A đến AH theo như ảnh cung cấp
+      // Link shoppe đang nằm ở cột AL trong tab Products.
+      range: PRODUCT_SHEET_RANGE,
     });
 
     const rows = res.data.values;
@@ -46,7 +70,9 @@ export const getProductInfoBySku = async (sku) => {
     }
 
     const headers = rows[0];
-    const skuIndex = headers.indexOf('Mã sản phẩm');
+    const skuIndex = headers.findIndex(
+      (header) => normalizeHeader(header) === normalizeHeader('Mã sản phẩm'),
+    );
     
     if (skuIndex === -1) {
       console.log('Không tìm thấy cột "Mã sản phẩm" trong Sheet.');
@@ -56,7 +82,7 @@ export const getProductInfoBySku = async (sku) => {
     // Tìm dòng có SKU tương ứng
     for (let i = 1; i < rows.length; i++) {
       const row = rows[i];
-      if (row[skuIndex] === sku) {
+      if (normalizeSku(row[skuIndex]) === normalizeSku(sku)) {
         const productInfo = {};
         headers.forEach((header, index) => {
           if (header && row[index]) {
@@ -201,7 +227,7 @@ export const syncProductCatalog = async () => {
   try {
     const res = await sheets.spreadsheets.values.get({
       spreadsheetId: getSheetId(),
-      range: 'A:AH',
+      range: PRODUCT_SHEET_RANGE,
     });
 
     const rows = res.data.values;
