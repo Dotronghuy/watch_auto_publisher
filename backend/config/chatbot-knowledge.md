@@ -88,9 +88,23 @@ A: Dạ có ạ. Mẫu này có mức chống nước là `{dữ liệu tại c�
 
 #### Q: Đồng hồ là hàng chính hãng hay hàng sao chép?
 
-A: Dạ sản phẩm bên em được cung cấp với thông tin nguồn gốc, thông số và chính sách bảo hành rõ ràng ạ. Em có thể gửi anh/chị hình ảnh thực tế, hộp, sổ, thẻ và thông tin bảo hành của mẫu đang quan tâm để mình kiểm tra kỹ hơn ạ.
+A: Nếu xác định được mã sản phẩm có trong dữ liệu Product: “Dạ, mẫu `{SKU}` của `{THƯƠNG HIỆU}` bên shop là hàng chính hãng ạ.”
 
-> Bot chỉ được khẳng định “chính hãng” khi thông tin sản phẩm trong hệ thống xác nhận rõ ràng.
+Nếu khách hỏi một thương hiệu có trong dữ liệu Product: “Dạ, các mẫu `{THƯƠNG HIỆU}` bên shop là hàng chính hãng ạ.”
+
+Nếu chưa xác định được mẫu hoặc thương hiệu: “Dạ, shop chưa có đủ thông tin để xác nhận mẫu này có phải hàng chính hãng không ạ.”
+
+Nếu khách hỏi chung về hàng của shop: “Dạ, các thương hiệu bên shop đang bán đều là hàng chính hãng ạ.”
+
+> Khi trả lời câu hỏi chính hãng, chỉ gửi một câu xác nhận ngắn. Không gửi form, thông số, ảnh, giá, link mua hàng, bảo hành hoặc câu hỏi báo giá. Không dùng các từ nội bộ như “danh mục”, “hệ thống”, “sheet” hoặc “SKU được phép”.
+
+#### Q: Shop có bán thương hiệu hoặc mã này không?
+
+A: Chỉ xác nhận bán khi thương hiệu hoặc mã có trong dữ liệu Product. Nếu không có, trả lời: “Dạ bên shop không kinh doanh thương hiệu hoặc mã này ạ. Hiện shop đang có I&W Carnival, Cadisen, Lobinni và Poniger. Anh/chị có muốn tham khảo các mẫu của những thương hiệu này không ạ?”
+
+Nếu khách chỉ nói “Carnival”, không được tự hiểu đó là I&W Carnival. Trả lời: “Dạ bên shop chỉ kinh doanh thương hiệu I&W Carnival, không phải thương hiệu Carnival riêng ạ. Anh/chị gửi giúp em mã sản phẩm I&W Carnival đang quan tâm để em tư vấn chính xác nhé.”
+
+> Không nói với khách về sheet, dữ liệu nội bộ hoặc danh mục. Không đoán một thương hiệu ngoài dữ liệu Product là sản phẩm shop đang bán.
 
 #### Q: Có hộp, sổ, thẻ và hóa đơn kèm theo không?
 
@@ -301,7 +315,11 @@ A: Dạ anh/chị có thể gửi hoặc mang sản phẩm đến địa chỉ S
 
 #### Q: Đồng hồ bị hỏng hoặc bị trầy thì sao?
 
-A: Dạ anh/chị gửi giúp em ảnh hoặc video tình trạng sản phẩm để bên em kiểm tra ban đầu ạ. Đối với lỗi máy hoặc lỗi kỹ thuật, cửa hàng sẽ tiếp nhận theo chính sách bảo hành. Trường hợp trầy xước hoặc hư hỏng do va đập, bên em sẽ kiểm tra và báo phương án sửa chữa cụ thể trước khi thực hiện nhé.
+A: Trước tiên phải xác nhận thương hiệu trên ảnh là một thương hiệu shop đang bán. Nếu ảnh mờ, tăng độ nét và đọc lại logo; không được tự nhận là hàng shop khi chưa xác nhận được thương hiệu.
+
+Nếu đã xác nhận đúng thương hiệu shop đang bán, chỉ gửi một tin nhắn: “Dạ em đã xác nhận đây là đồng hồ `{THƯƠNG HIỆU}`, thuộc thương hiệu shop đang kinh doanh ạ. Để shop kiểm tra điều kiện bảo hành, anh/chị cho em xin giúp: mình còn giữ thẻ bảo hành không; đã mua qua Shopee, Facebook hay trực tiếp tại cửa hàng; và còn bill, mã đơn hoặc số điện thoại đặt hàng không ạ? Shop sẽ đối chiếu giao dịch rồi hướng dẫn tiếp nhận kiểm tra. Trong lúc chờ, anh/chị vui lòng không tự mở đáy hoặc sấy nóng đồng hồ nhé.”
+
+Nếu vẫn chưa xác nhận được thương hiệu sau khi tăng nét, chỉ gửi một tin nhắn xin ảnh cận logo, mặt đáy và thẻ bảo hành hoặc bill/mã đơn. Không gửi thêm câu chuyển nhân viên chung chung trong cùng lượt.
 
 #### Q: Thay pin hoặc thay dây ở đâu?
 
@@ -400,9 +418,11 @@ Câu chuyển khi khiếu nại:
 * Không đặt câu hỏi mở một cách máy móc nếu khách chỉ cần câu trả lời ngắn.
 * Khi khách gửi ảnh đồng hồ:
 
-  * Chỉ mô tả những đặc điểm có thể quan sát rõ.
-  * Không đoán thương hiệu, mã máy, chất liệu hoặc hàng thật giả chỉ dựa trên ảnh.
-  * Hỏi thêm mã sản phẩm, ảnh mặt sau, khóa dây hoặc hộp sổ khi cần xác minh.
+  * Phải thử đọc logo, tên thương hiệu, mã sản phẩm và đối chiếu ảnh với toàn bộ dữ liệu Product trước khi xin thêm thông tin.
+  * Kết quả Hash chỉ là ứng viên tham khảo. Không được gửi mã, ảnh, giá hoặc form sản phẩm trước khi Vision đọc thương hiệu và xác nhận ảnh khớp chính xác.
+  * Chỉ xác nhận đúng mã khi ảnh khách khớp ảnh gốc của sản phẩm; nếu mới đủ căn cứ nhận ra thương hiệu thì chỉ xác nhận thương hiệu.
+  * Không đoán thương hiệu, mã máy, chất liệu hoặc hàng thật giả khi ảnh không có đủ căn cứ đối chiếu.
+  * Nếu chưa chốt được mã, xin thêm ảnh rõ mặt số, logo, mặt sau, khóa dây, hộp sổ hoặc mã sản phẩm để tiếp tục nhận diện.
 * Cách nói giữa hai thương hiệu cần đồng nhất về chính sách nhưng phải dùng đúng tên cửa hàng đang tiếp nhận khách.
 
 ---
@@ -477,7 +497,13 @@ Nếu chưa thấy giá:
 
 ### 6.16 Khách phản ánh sản phẩm lỗi
 
-“Dạ em rất tiếc vì sản phẩm đang gặp vấn đề ạ. Anh/chị gửi giúp em ảnh hoặc video tình trạng đồng hồ, số điện thoại đặt hàng và thời điểm phát hiện lỗi để em chuyển bộ phận kỹ thuật kiểm tra nhé.”
+Khi khách báo đồng hồ mới mua bị lỗi, hấp hơi, vào nước, đứng máy hoặc có bất thường, ưu tiên xử lý hậu mãi ngay. Không yêu cầu khách tiếp tục chụp logo, mặt số, mặt đáy hoặc tự kiểm tra nguyên nhân.
+
+Câu trả lời chuẩn:
+
+“Dạ anh/chị gửi lại đồng hồ giúp em để shop tiến hành kiểm tra trực tiếp nhé. Khi nhận được sản phẩm, bên em sẽ kiểm tra tình trạng và phản hồi phương án xử lý cụ thể cho anh/chị. Trong lúc chờ, anh/chị vui lòng không tự mở đáy hoặc sấy nóng đồng hồ ạ.”
+
+Nếu khách gửi thêm ảnh ngay sau tin báo lỗi và bot đã gửi câu trả lời chuẩn trên, không gửi thêm một câu nhận diện thương hiệu hoặc mã sản phẩm nữa.
 
 ### 6.17 Khách gửi ảnh nhưng không có mã sản phẩm
 

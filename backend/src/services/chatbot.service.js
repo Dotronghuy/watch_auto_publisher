@@ -4,7 +4,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { getConversationById, getMessagesByConversation, updateBotPausedStatus, saveMessage } from '../utils/crm.db.js';
 import { findMatchingSku, computeHashFromUrl } from './image-hash.service.js';
-import { getProductInfoBySku } from './sheet.service.js';
+import { getProductInfoBySku, getShopeeLinkFromProductInfo } from './sheet.service.js';
 import { replyCRM, replyImageCRM } from './crm.service.js';
 import { getProductImagesFromDrive } from './drive.service.js';
 import { broadcastCRM } from '../routes/api.routes.js';
@@ -12,6 +12,7 @@ import dotenv from 'dotenv';
 import { PrismaClient } from '@prisma/client';
 import { searchKnowledge } from '../utils/vector_search.js';
 import { buildMemoryContext } from './chatbot-memory.service.js';
+import sharp from 'sharp';
 
 dotenv.config();
 const prisma = new PrismaClient();
@@ -24,7 +25,245 @@ const IMAGE_REPLY_TEMPLATE_PATH = path.join(__dirname, '../../config/bot_image_r
 const CATALOG_PATH = path.join(__dirname, '../../data/catalog.json');
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+const CHATBOT_TARGET_BRAND = String(process.env.CHATBOT_TARGET_BRAND || 'I&W Carnival').trim();
+const PRODUCT_FOLLOW_UP_MESSAGE = 'Anh/chị cần em tư vấn thêm về mẫu này hoặc hỗ trợ đặt hàng không ạ? 😊';
+const normalizeBrand = (value) => String(value || '').trim().toLocaleLowerCase('vi-VN');
+const normalizedTargetBrand = normalizeBrand(CHATBOT_TARGET_BRAND);
+const shopeeLinkCache = new Map();
+let catalogCache = { mtimeMs: 0, allProducts: [], products: [], excludedBrands: [], excludedSkus: new Set() };
 let catalogPromptCache = { mtimeMs: 0, value: '[]' };
+
+const normalizeShopeeLink = (value) => {
+  const link = String(value || '').trim();
+  if (!link) return '';
+
+  try {
+    const url = new URL(link);
+    const hostname = url.hostname.toLowerCase();
+    const isShopeeHost = hostname === 'shopee.vn'
+      || hostname.endsWith('.shopee.vn')
+      || hostname === 'vn.shp.ee';
+    return url.protocol === 'https:' && isShopeeHost ? link : '';
+  } catch {
+    return '';
+  }
+};
+
+const getProductShopeeLink = async (sku, productInfo) => {
+  const catalogLink = normalizeShopeeLink(getShopeeLinkFromProductInfo(productInfo));
+  if (catalogLink) return catalogLink;
+
+  const lookupSku = String(productInfo?.['Mã sản phẩm'] || sku || '').trim().toUpperCase();
+  if (!lookupSku) return '';
+
+  const cachedLink = shopeeLinkCache.get(lookupSku);
+  if (cachedLink) return cachedLink;
+
+  const sheetProductInfo = await getProductInfoBySku(lookupSku);
+  const sheetLink = normalizeShopeeLink(getShopeeLinkFromProductInfo(sheetProductInfo));
+  if (sheetLink) shopeeLinkCache.set(lookupSku, sheetLink);
+  return sheetLink;
+};
+
+const getCatalogProducts = () => {
+  try {
+    const stat = fs.statSync(CATALOG_PATH);
+    if (catalogCache.mtimeMs !== stat.mtimeMs) {
+      const allProducts = JSON.parse(fs.readFileSync(CATALOG_PATH, 'utf8'));
+      const targetProducts = allProducts.filter(
+        product => normalizeBrand(product['Thương hiệu']) === normalizedTargetBrand
+      );
+      const excludedProducts = allProducts.filter(
+        product => normalizeBrand(product['Thương hiệu']) !== normalizedTargetBrand
+      );
+      catalogCache = {
+        mtimeMs: stat.mtimeMs,
+        allProducts,
+        products: targetProducts,
+        excludedBrands: Array.from(new Set(
+          excludedProducts
+            .map(product => String(product['Thương hiệu'] || '').trim())
+            .filter(Boolean)
+        )),
+        excludedSkus: new Set(
+          excludedProducts.flatMap(product => {
+            const sku = String(product['Mã sản phẩm'] || '').trim().toUpperCase();
+            return sku ? [sku, sku.split('-')[0]] : [];
+          })
+        )
+      };
+    }
+    return catalogCache.products;
+  } catch (error) {
+    console.warn('Không thể đọc catalog cho chatbot:', error.message);
+    return [];
+  }
+};
+
+const getCatalogBrandNames = () => {
+  getCatalogProducts();
+  const brands = Array.from(new Set(
+    catalogCache.allProducts
+      .map(product => String(product['Thương hiệu'] || '').trim())
+      .filter(Boolean)
+  ));
+
+  return brands.sort((left, right) => {
+    if (normalizeBrand(left) === normalizedTargetBrand) return -1;
+    if (normalizeBrand(right) === normalizedTargetBrand) return 1;
+    return left.localeCompare(right, 'vi');
+  });
+};
+
+const formatVietnameseList = (items) => {
+  if (items.length <= 1) return items[0] || '';
+  if (items.length === 2) return `${items[0]} và ${items[1]}`;
+  return `${items.slice(0, -1).join(', ')} và ${items.at(-1)}`;
+};
+
+const getSoldBrandsText = () => formatVietnameseList(getCatalogBrandNames());
+
+const getUnsupportedProductReply = (subject = 'thương hiệu hoặc mã này') =>
+  `Dạ bên shop không kinh doanh ${subject} ạ. Hiện shop đang có ${getSoldBrandsText()}. Anh/chị có muốn tham khảo các mẫu của những thương hiệu này không ạ?`;
+
+const getCarnivalAmbiguityReply = () =>
+  `Dạ bên shop chỉ kinh doanh thương hiệu ${CHATBOT_TARGET_BRAND}, không phải thương hiệu Carnival riêng ạ. Anh/chị gửi giúp em mã sản phẩm ${CHATBOT_TARGET_BRAND} đang quan tâm để em tư vấn chính xác nhé.`;
+
+const getUnrecognizedImageReply = () =>
+  'Dạ em đã phân tích ảnh nhưng chưa chốt được đúng mã sản phẩm ạ. Anh/chị gửi thêm giúp em ảnh rõ mặt số, logo, mặt đáy hoặc mã sản phẩm để em tiếp tục nhận diện chính xác nhé.';
+
+const getRecognizedImageBrandReply = (brand) =>
+  `Dạ em nhận diện ảnh thuộc thương hiệu ${brand} ạ, nhưng chưa chốt được đúng mã sản phẩm. Anh/chị gửi thêm giúp em ảnh rõ mặt số, mặt đáy hoặc mã sản phẩm để em kiểm tra chính xác nhé.`;
+
+const getUnsupportedImageBrandReply = (brand) =>
+  `Dạ em nhận diện ảnh thuộc thương hiệu ${brand}. Bên shop không kinh doanh thương hiệu này ạ. Hiện shop đang có ${getSoldBrandsText()}; anh/chị có muốn tham khảo các thương hiệu shop đang bán không ạ?`;
+
+const getMentionedExcludedBrand = (messageText) => {
+  getCatalogProducts();
+  const normalizedMessage = normalizeBrand(messageText);
+  return catalogCache.excludedBrands.find(
+    brand => normalizedMessage.includes(normalizeBrand(brand))
+  ) || null;
+};
+
+const getMentionedCatalogBrand = (messageText) => {
+  getCatalogProducts();
+  const normalizedMessage = normalizeIntentText(messageText);
+  const brands = Array.from(new Set(
+    catalogCache.allProducts
+      .map(product => String(product['Thương hiệu'] || '').trim())
+      .filter(Boolean)
+  ));
+
+  return brands.find(brand => {
+    const normalizedBrandName = normalizeIntentText(brand);
+    if (normalizedBrandName && normalizedMessage.includes(normalizedBrandName)) return true;
+
+    if (normalizeBrand(brand) === normalizedTargetBrand) {
+      return ['i w', 'iw carnival'].some(alias => normalizedMessage.includes(alias));
+    }
+    return false;
+  }) || null;
+};
+
+const isStandaloneCarnivalMention = (messageText) => {
+  const text = normalizeIntentText(messageText);
+  return /\bcarnival\b/.test(text) && !/\b(?:i w|iw)\s+carnival\b/.test(text);
+};
+
+const isProductAvailabilityQuestion = (messageText) => {
+  const text = normalizeIntentText(messageText);
+  return /\b(?:co ban|co ma|co mau|co hang|co khong|kinh doanh|shop co|ben shop co|ben em co|tu van|muon mua|can mua|tim mua)\b/.test(text);
+};
+
+const getPotentialSkuMention = (messageText) => {
+  const text = normalizeIntentText(messageText).toUpperCase();
+  const tokens = text.match(/[A-Z0-9]+(?:-[A-Z0-9]+)*/g) || [];
+  const hasExplicitSkuLabel = /\b(?:MA|MAU|SKU)\b/.test(text);
+
+  return tokens
+    .filter(token => {
+      if (/^\d+(?:MM|CM|M|ATM)$/.test(token)) return false;
+      if (/^[A-Z]+\d+[A-Z0-9-]*$/.test(token) && token.length >= 4) return true;
+      if (/^\d+[A-Z][A-Z0-9-]*$/.test(token) && token.length >= 4) return true;
+      return hasExplicitSkuLabel && /^\d{5,}$/.test(token);
+    })
+    .sort((left, right) => right.length - left.length)[0] || null;
+};
+
+const getUnknownBrandInquirySubject = (messageText) => {
+  const text = normalizeIntentText(messageText);
+  const patterns = [
+    /\b(?:thuong hieu|hang)\s+([a-z][a-z0-9]*(?:\s+[a-z][a-z0-9]*){0,2})/,
+    /\b(?:shop|ben shop|ben em)\s+co(?: ban)?\s+([a-z][a-z0-9]*(?:\s+[a-z][a-z0-9]*){0,2})/,
+    /\b(?:co ban|kinh doanh|tu van|muon mua|can mua|tim mua)\s+([a-z][a-z0-9]*(?:\s+[a-z][a-z0-9]*){0,2})/,
+    /^([a-z][a-z0-9]*(?:\s+[a-z][a-z0-9]*)?)\s+(?:co\s+)?(?:chinh hang|hang that|auth|authentic|co khong)\b/
+  ];
+  const genericStarts = new Set([
+    'dong', 'ho', 'nam', 'nu', 'mau', 'ma', 'nay', 'do', 'san', 'pham',
+    'day', 'mat', 'size', 'gia', 'loai', 'kieu', 'phong', 'chong', 'bao',
+    'giao', 'ship', 'freeship', 'hop', 'so', 'the', 'pin', 'may', 'kinh',
+    'vo', 'co', 'con', 'hang', 'thuong', 'hieu', 'chinh', 'that', 'gia',
+    'fake', 'auth', 'authentic'
+  ]);
+
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (!match) continue;
+    const candidate = match[1]
+      .split(/\b(?:khong|ko|k|a|ha|nhi|nhe)\b/)[0]
+      .trim();
+    const words = candidate.split(' ').filter(Boolean);
+    if (words.length > 0 && !genericStarts.has(words[0])) {
+      return candidate;
+    }
+  }
+
+  return null;
+};
+
+const getCatalogScopeReply = (messageText) => {
+  const catalogSkuMention = getCatalogSkuMention(messageText);
+  if (!catalogSkuMention && isStandaloneCarnivalMention(messageText)) {
+    return getCarnivalAmbiguityReply();
+  }
+
+  if (!catalogSkuMention && (isProductAvailabilityQuestion(messageText) || isAuthenticityQuestion(messageText))) {
+    if (getPotentialSkuMention(messageText)) {
+      return getUnsupportedProductReply('mã này');
+    }
+
+    const mentionedCatalogBrand = getMentionedCatalogBrand(messageText);
+    if (!mentionedCatalogBrand && getUnknownBrandInquirySubject(messageText)) {
+      return getUnsupportedProductReply('thương hiệu này');
+    }
+  }
+
+  return null;
+};
+
+const getBrandRedirectReply = ({ brand = '', sku = '' } = {}) => {
+  const availabilityLine = sku && brand
+    ? `Dạ bên shop có mã ${sku} của thương hiệu ${brand} ạ.`
+    : brand
+      ? `Dạ bên shop có kinh doanh thương hiệu ${brand} ạ.`
+      : '';
+  const redirectLine = `Hiện shop đang tập trung tư vấn ${CHATBOT_TARGET_BRAND}; anh/chị có muốn tham khảo các mẫu ${CHATBOT_TARGET_BRAND} không ạ?`;
+  return availabilityLine ? `${availabilityLine} ${redirectLine}` : `Dạ ${redirectLine}`;
+};
+
+const getCatalogSkuMention = (messageText) => {
+  getCatalogProducts();
+  const tokens = String(messageText || '').toUpperCase().match(/[A-Z0-9]+(?:-[A-Z0-9]+)*/g) || [];
+
+  for (const token of tokens.sort((a, b) => b.length - a.length)) {
+    if (token.length < 4 || !/[A-Z]/.test(token) || !/\d/.test(token)) continue;
+    if (getProductInfoFromCatalog(token)) return { sku: token, isTargetBrand: true };
+    if (catalogCache.excludedSkus.has(token)) return { sku: token, isTargetBrand: false };
+  }
+
+  return null;
+};
 
 const getGeminiModels = () => {
   dotenv.config({ override: true }); // Hot-reload .env
@@ -45,7 +284,13 @@ const runWithModelFallback = async (content, requireJSON = false) => {
 
     while (retries >= 0) {
       try {
-        const config = requireJSON ? { generationConfig: { responseMimeType: 'application/json' } } : {};
+        const thinkingBudget = modelName.includes('pro') ? 128 : 0;
+        const config = {
+          generationConfig: {
+            ...(requireJSON ? { responseMimeType: 'application/json' } : {}),
+            thinkingConfig: { thinkingBudget }
+          }
+        };
         const model = genAI.getGenerativeModel({ model: modelName, ...config });
         const result = await model.generateContent(content);
         return result;
@@ -99,19 +344,32 @@ const getImageReplyTemplate = () => {
 };
 
 const getProductInfoFromCatalog = (skuCode) => {
-  try {
-    const catalogPath = path.join(__dirname, '../../data/catalog.json');
-    if (fs.existsSync(catalogPath)) {
-      const catalog = JSON.parse(fs.readFileSync(catalogPath, 'utf8'));
-      let found = catalog.find(p => p['Mã sản phẩm'] === skuCode);
-      if (!found) {
-        // Fallback: Tìm biến thể đầu tiên của mã gốc này (vd: 55883G -> 55883G-T1)
-        found = catalog.find(p => p['Mã sản phẩm'].startsWith(skuCode + '-'));
-      }
-      return found;
-    }
-  } catch (e) { }
-  return null;
+  const normalizedSku = String(skuCode || '').trim().toUpperCase();
+  if (!normalizedSku) return null;
+
+  const catalog = getCatalogProducts();
+  let found = catalog.find(p => String(p['Mã sản phẩm'] || '').toUpperCase() === normalizedSku);
+  if (!found) {
+    // Fallback: Tìm biến thể đầu tiên của mã gốc này (vd: 55883G -> 55883G-T1)
+    found = catalog.find(p => String(p['Mã sản phẩm'] || '').toUpperCase().startsWith(normalizedSku + '-'));
+  }
+  return found || null;
+};
+
+const getProductInfoFromAllCatalog = (skuCode) => {
+  const normalizedSku = String(skuCode || '').trim().toUpperCase();
+  if (!normalizedSku) return null;
+
+  getCatalogProducts();
+  let found = catalogCache.allProducts.find(
+    product => String(product['Mã sản phẩm'] || '').toUpperCase() === normalizedSku
+  );
+  if (!found) {
+    found = catalogCache.allProducts.find(
+      product => String(product['Mã sản phẩm'] || '').toUpperCase().startsWith(normalizedSku + '-')
+    );
+  }
+  return found || null;
 };
 
 const shouldIncludeCatalog = (messageText) => {
@@ -127,7 +385,7 @@ const getCatalogPromptText = () => {
       return catalogPromptCache.value;
     }
 
-    const allProducts = JSON.parse(fs.readFileSync(CATALOG_PATH, 'utf8'));
+    const allProducts = getCatalogProducts();
     const uniqueCatalog = [];
     const seenSku = new Set();
 
@@ -137,11 +395,11 @@ const getCatalogPromptText = () => {
 
       const baseSku = sku.split('-')[0];
       let description = [
-        product['Thương hiệu'],
         product['Mô tả ngắn'],
         product['Lấy cảm hứng từ'],
         product['Phong cách']
       ].filter(Boolean).join(' - ');
+      if (!description) description = CHATBOT_TARGET_BRAND;
 
       if ((baseSku === '55851G' || baseSku === '55851') && !description.toLowerCase().includes('hublot')) {
         description += ' - form Hublot';
@@ -169,17 +427,15 @@ const getChatLieuDay = (sku, productInfo) => {
   let chatLieuDay = productInfo["Chất liệu dây"];
   if (!chatLieuDay) {
     const baseSku = sku.split('-')[0];
-    const catalogPath = path.join(__dirname, '../../data/catalog.json');
     let hasS = false, hasT = false, hasD = false;
-    if (fs.existsSync(catalogPath)) {
-      const allProducts = JSON.parse(fs.readFileSync(catalogPath, 'utf8'));
-      const variants = allProducts.filter(p => p['Mã sản phẩm'] && p['Mã sản phẩm'].startsWith(baseSku + '-'));
-      variants.forEach(v => {
-        if (v['Mã sản phẩm'].includes('-S')) hasS = true;
-        if (v['Mã sản phẩm'].includes('-T')) hasT = true;
-        if (v['Mã sản phẩm'].includes('-D')) hasD = true;
-      });
-    }
+    const variants = getCatalogProducts().filter(
+      p => p['Mã sản phẩm'] && p['Mã sản phẩm'].startsWith(baseSku + '-')
+    );
+    variants.forEach(v => {
+      if (v['Mã sản phẩm'].includes('-S')) hasS = true;
+      if (v['Mã sản phẩm'].includes('-T')) hasT = true;
+      if (v['Mã sản phẩm'].includes('-D')) hasD = true;
+    });
 
     if (sku.includes("-T")) chatLieuDay = "Thép không gỉ 316L đúc đặc.";
     else if (sku.includes("-S")) chatLieuDay = "Dây cao su cao cấp.";
@@ -207,10 +463,10 @@ const getGiaBan = (sku, productInfo) => {
   if (sku.includes('-')) return defaultPrice;
 
   const baseSku = sku.split('-')[0];
-  const catalogPath = path.join(__dirname, '../../data/catalog.json');
-  if (fs.existsSync(catalogPath)) {
-    const allProducts = JSON.parse(fs.readFileSync(catalogPath, 'utf8'));
-    const variants = allProducts.filter(p => p['Mã sản phẩm'] && p['Mã sản phẩm'].startsWith(baseSku + '-'));
+  const variants = getCatalogProducts().filter(
+    p => p['Mã sản phẩm'] && p['Mã sản phẩm'].startsWith(baseSku + '-')
+  );
+  if (variants.length > 0) {
     
     let prices = new Set();
     let hasD = false, hasS = false, hasT = false;
@@ -249,75 +505,307 @@ const getGiaBan = (sku, productInfo) => {
 
 // --- CORE AI LOGIC ---
 
+const parsedVisionCatalogLimit = Number.parseInt(
+  process.env.CHATBOT_VISION_CATALOG_LIMIT || '350',
+  10
+);
+const VISION_CATALOG_LIMIT = Number.isFinite(parsedVisionCatalogLimit)
+  ? Math.max(100, parsedVisionCatalogLimit)
+  : 350;
+const MAX_VISION_SOURCE_BYTES = 15 * 1024 * 1024;
+const MAX_VISION_IMAGES = 4;
+
+const toVisionImagePart = (buffer, mimeType = 'image/jpeg') => ({
+  inlineData: {
+    data: buffer.toString('base64'),
+    mimeType
+  }
+});
+
+const fetchVisionImageSource = async (url) => {
+  const response = await fetch(url, { signal: AbortSignal.timeout(15000) });
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}`);
+  }
+
+  const declaredSize = Number(response.headers.get('content-length')) || 0;
+  if (declaredSize > MAX_VISION_SOURCE_BYTES) {
+    throw new Error(`Ảnh vượt giới hạn ${MAX_VISION_SOURCE_BYTES / 1024 / 1024} MB`);
+  }
+
+  const sourceBuffer = Buffer.from(await response.arrayBuffer());
+  if (sourceBuffer.length > MAX_VISION_SOURCE_BYTES) {
+    throw new Error(`Ảnh vượt giới hạn ${MAX_VISION_SOURCE_BYTES / 1024 / 1024} MB`);
+  }
+
+  const responseMimeType = response.headers.get('content-type') || 'image/jpeg';
+  return {
+    sourceBuffer,
+    mimeType: responseMimeType.startsWith('image/') ? responseMimeType : 'image/jpeg'
+  };
+};
+
+const buildVisionImagePart = async (sourceBuffer, mimeType, enhanced = false) => {
+  try {
+    let pipeline = sharp(sourceBuffer)
+      .rotate()
+      .resize({
+        width: enhanced ? 2560 : 2048,
+        height: enhanced ? 2560 : 2048,
+        fit: 'inside',
+        withoutEnlargement: !enhanced
+      })
+      .flatten({ background: '#ffffff' });
+
+    if (enhanced) {
+      pipeline = pipeline
+        .normalize()
+        .sharpen(1.4)
+        .modulate({ brightness: 1.05 });
+    }
+
+    const optimizedBuffer = await pipeline
+      .jpeg({ quality: enhanced ? 92 : 88, mozjpeg: true })
+      .toBuffer();
+    return toVisionImagePart(optimizedBuffer);
+  } catch (error) {
+    console.warn(`⚠️ Không tối ưu được ảnh Vision, dùng ảnh gốc: ${error.message}`);
+    return toVisionImagePart(sourceBuffer, mimeType);
+  }
+};
+
+const getVisionImagePartFromUrl = async (url) => {
+  const { sourceBuffer, mimeType } = await fetchVisionImageSource(url);
+  return buildVisionImagePart(sourceBuffer, mimeType);
+};
+
+const getCustomerVisionImagePartsFromUrl = async (url) => {
+  const { sourceBuffer, mimeType } = await fetchVisionImageSource(url);
+  const [original, enhanced] = await Promise.all([
+    buildVisionImagePart(sourceBuffer, mimeType),
+    buildVisionImagePart(sourceBuffer, mimeType, true)
+  ]);
+  return { original, enhanced };
+};
+
+const getVisionSkuTokens = (value) => {
+  const tokens = String(value || '').toUpperCase().match(/[A-Z0-9]+(?:-[A-Z0-9]+)*/g) || [];
+  return Array.from(new Set(tokens.filter(
+    token => token.length >= 4 && /[A-Z]/.test(token) && /\d/.test(token)
+  )));
+};
+
+const getVisionCatalogCandidates = (visionAnalysis, hashCandidateSku = null) => {
+  getCatalogProducts();
+  const allProducts = catalogCache.allProducts;
+  const normalizedHashCandidate = String(hashCandidateSku || '').trim().toUpperCase();
+  const analyzedBrand = Number(visionAnalysis?.brand_confidence) >= 0.8
+    && String(visionAnalysis?.brand_evidence || '').trim()
+    ? visionAnalysis?.brand
+    : '';
+  const ocrText = [
+    visionAnalysis?.text_in_image,
+    visionAnalysis?.model_code,
+    analyzedBrand
+  ].filter(Boolean).join(' ');
+  const description = String(visionAnalysis?.description || '');
+  const skuTokens = getVisionSkuTokens(ocrText);
+  const mentionedBrand = getMentionedCatalogBrand(ocrText);
+  const queryTokens = new Set(
+    normalizeIntentText(`${ocrText} ${description}`)
+      .split(' ')
+      .filter(token => token.length >= 3 && ![
+        'dong', 'ho', 'mau', 'mat', 'day', 'anh', 'san', 'pham', 'chiec',
+        'hinh', 'co', 'voi', 'mot', 'cua'
+      ].includes(token))
+  );
+
+  const ranked = allProducts.map((product, index) => {
+    const sku = String(product['Mã sản phẩm'] || '').trim().toUpperCase();
+    const brand = String(product['Thương hiệu'] || '').trim();
+    const searchable = normalizeIntentText([
+      product['Tên sản phẩm'],
+      product['Màu mặt số'],
+      product['Chất liệu dây'],
+      product['Chất liệu vỏ'],
+      product['Phong cách'],
+      product['Lấy cảm hứng từ'],
+      product['Mô tả ngắn']
+    ].filter(Boolean).join(' '));
+    let score = 0;
+
+    const hashBrandCompatible = !mentionedBrand
+      || normalizeBrand(brand) === normalizeBrand(mentionedBrand);
+    if (normalizedHashCandidate && hashBrandCompatible) {
+      if (sku === normalizedHashCandidate) score += 250;
+      else if (
+        sku.startsWith(normalizedHashCandidate + '-')
+        || normalizedHashCandidate.startsWith(sku + '-')
+      ) {
+        score += 120;
+      }
+    }
+
+    for (const token of skuTokens) {
+      const normalizedToken = token.replace(/[^A-Z0-9]/g, '');
+      const normalizedSku = sku.replace(/[^A-Z0-9]/g, '');
+      if (normalizedSku === normalizedToken) score += 200;
+      else if (normalizedSku.startsWith(normalizedToken) || normalizedToken.startsWith(normalizedSku)) score += 120;
+      else if (normalizedSku.includes(normalizedToken)) score += 80;
+    }
+
+    if (mentionedBrand && normalizeBrand(brand) === normalizeBrand(mentionedBrand)) {
+      score += 60;
+    }
+
+    for (const token of queryTokens) {
+      if (searchable.includes(token)) score += 2;
+    }
+
+    return { product, score, index };
+  }).sort((left, right) => right.score - left.score || left.index - right.index);
+
+  const hasUsefulSignal = ranked[0]?.score > 0;
+  const selected = hasUsefulSignal
+    ? ranked.slice(0, VISION_CATALOG_LIMIT)
+    : ranked;
+
+  return selected.map(({ product }) => ({
+    sku: product['Mã sản phẩm'],
+    brand: product['Thương hiệu'],
+    dial: product['Màu mặt số'],
+    strap: product['Chất liệu dây'],
+    case: product['Chất liệu vỏ'],
+    style: product['Phong cách'] || product['Lấy cảm hứng từ'] || '',
+    desc: String(product['Mô tả ngắn'] || '').slice(0, 180)
+  }));
+};
+
+const sanitizeDetectedBrand = (value) => String(value || '')
+  .replace(/[^\p{L}\p{N}&.' -]/gu, '')
+  .replace(/\s+/g, ' ')
+  .trim()
+  .slice(0, 40);
+
+const getVisionRecognitionFallback = (visionAnalysis) => {
+  const visibleText = String(visionAnalysis?.text_in_image || '');
+  const rawBrand = sanitizeDetectedBrand(visionAnalysis?.brand);
+  const brandEvidence = String(visionAnalysis?.brand_evidence || '').trim();
+  const brandConfidence = Number(visionAnalysis?.brand_confidence) || 0;
+  const catalogBrandFromText = getMentionedCatalogBrand(visibleText);
+  const catalogBrandFromAnalysis = getMentionedCatalogBrand(rawBrand);
+  const catalogBrand = catalogBrandFromText
+    || (brandConfidence >= 0.85 && brandEvidence ? catalogBrandFromAnalysis : null);
+  const standaloneCarnival = isStandaloneCarnivalMention(visibleText)
+    || (rawBrand && isStandaloneCarnivalMention(rawBrand));
+
+  if (catalogBrand) {
+    return {
+      sku: null,
+      brand: catalogBrand,
+      isCatalogBrand: true,
+      message: getRecognizedImageBrandReply(catalogBrand)
+    };
+  }
+
+  if (standaloneCarnival) {
+    return {
+      sku: null,
+      brand: 'Carnival',
+      isCatalogBrand: false,
+      preserveScopeReply: true,
+      message: getCarnivalAmbiguityReply()
+    };
+  }
+
+  if (rawBrand && brandConfidence >= 0.9 && brandEvidence) {
+    return {
+      sku: null,
+      brand: rawBrand,
+      isCatalogBrand: false,
+      preserveScopeReply: true,
+      message: getUnsupportedImageBrandReply(rawBrand)
+    };
+  }
+
+  return { sku: null, brand: null, isCatalogBrand: false, message: getUnrecognizedImageReply() };
+};
+
 /**
  * Xử lý Lớp 3: Gọi Gemini Vision
  */
-const runLayer3GeminiVision = async (imageUrls, messageText) => {
+export const runLayer3GeminiVision = async (
+  imageUrls,
+  messageText,
+  { hashCandidateSku = null } = {}
+) => {
   try {
     const customerImageParts = [];
-    for (const url of imageUrls) {
+    const enhancedCustomerImageParts = [];
+    for (const url of imageUrls.slice(0, MAX_VISION_IMAGES)) {
       try {
-        const response = await fetch(url);
-        if (response.ok) {
-          const buffer = await response.arrayBuffer();
-          let mime = response.headers.get("content-type") || "image/jpeg";
-          if (!mime.startsWith('image/')) mime = 'image/jpeg';
-          customerImageParts.push({ inlineData: { data: Buffer.from(buffer).toString("base64"), mimeType: mime } });
-        }
+        const imageParts = await getCustomerVisionImagePartsFromUrl(url);
+        customerImageParts.push(imageParts.original);
+        enhancedCustomerImageParts.push(imageParts.enhanced);
       } catch (e) {
         console.error(`[Lớp 3] Lỗi tải ảnh khách từ FB:`, e.message);
       }
     }
 
     if (customerImageParts.length === 0) {
-      return { sku: null, message: "Dạ mẫu này đẹp quá ạ! 😍 Anh/chị cho shop biết thêm thích mức giá khoảng bao nhiêu để shop tư vấn nha!" };
-    }
-
-    const modelName = getGeminiModels()[0];
-    const model = genAI.getGenerativeModel({ model: modelName, generationConfig: { responseMimeType: "application/json" } });
-
-    // Đọc catalog và TỐI ƯU DUNG LƯỢNG (Minify) để tránh lỗi quá tải 1 Triệu Token
-    const catalogPath = path.join(__dirname, '../../data/catalog.json');
-    let catalogData = '[]';
-    if (fs.existsSync(catalogPath)) {
-      try {
-        const allProducts = JSON.parse(fs.readFileSync(catalogPath, 'utf8'));
-        // Chỉ lấy vài trường cơ bản để LLM search cho nhanh, nhưng BẮT BUỘC phải có Mô tả ngắn để biết màu sắc, kiểu dáng
-        const minifiedCatalog = allProducts.map(p => ({
-          sku: p['Mã sản phẩm'],
-          brand: p['Thương hiệu'],
-          dial: p['Màu mặt số'],
-          strap: p['Chất liệu dây'],
-          case: p['Chất liệu vỏ'],
-          desc: p['Mô tả ngắn'] || ''
-        }));
-        catalogData = JSON.stringify(minifiedCatalog);
-      } catch (e) {
-        console.error("Lỗi parse catalog:", e);
-      }
+      return { sku: null, message: getUnrecognizedImageReply() };
     }
 
     // Chặng 1: Semantic Search & Text OCR
-    const prompt1A = `Khách hàng gửi ${customerImageParts.length} ảnh. Lời nhắn: "${messageText}".
+    const prompt1A = `Khách hàng gửi ${customerImageParts.length} ảnh. Sau ảnh gốc là ${enhancedCustomerImageParts.length} bản đã tăng độ phân giải, tương phản và độ nét tương ứng của chính các ảnh đó. Lời nhắn: "${messageText}".
 Nhiệm vụ: 
 1. Đọc MỌI chữ/số xuất hiện trong TẤT CẢ CÁC ẢNH (đặc biệt là mã sản phẩm, thương hiệu).
 2. LƯU Ý QUAN TRỌNG: Nếu ảnh là một bức ảnh ghép (collage) gồm nhiều ô nhỏ, chụp nhiều góc cạnh khác nhau của CÙNG 1 CHIẾC ĐỒNG HỒ, hãy coi đó là DUY NHẤT 1 MẪU ĐỒNG HỒ, không được nhầm lẫn thành nhiều mẫu.
 3. Mô tả ngoại hình đồng hồ (màu mặt số, màu vỏ, loại dây) của (các) mẫu xuất hiện.
-Trả về JSON: { "text_in_image": "các chữ đọc được", "description": "mô tả ngoại hình" }`;
+4. Chỉ xác định thương hiệu khi nhìn thấy logo/tên hãng đủ rõ. "Carnival" đứng riêng KHÔNG phải là "I&W Carnival"; chỉ ghi "I&W Carnival" khi ảnh thể hiện đủ tên hoặc logo I&W.
+5. Ảnh tăng nét chỉ là phiên bản xử lý của ảnh gốc, không phải một sản phẩm khác.
+Trả về JSON:
+{
+  "text_in_image": "các chữ đọc được",
+  "brand": "tên thương hiệu nhìn thấy hoặc null",
+  "brand_confidence": 0.0-1.0,
+  "brand_evidence": "chữ/logo làm căn cứ hoặc rỗng",
+  "model_code": "mã sản phẩm nhìn thấy hoặc null",
+  "description": "mô tả ngoại hình"
+}`;
 
     console.log(`🤖 Đang chạy Lớp 3 Chặng 1A (Vision OCR)...`);
-    const result1A = await runWithModelFallback([prompt1A, ...customerImageParts]);
+    const result1A = await runWithModelFallback([
+      prompt1A,
+      ...customerImageParts,
+      ...enhancedCustomerImageParts
+    ]);
     const visionOutput = result1A.response.text();
     console.log(`🤖 Kết quả Vision:`, visionOutput);
+    const visionAnalysis = cleanJSONResponse(visionOutput) || {
+      text_in_image: visionOutput,
+      description: visionOutput
+    };
+    const brandGateResult = getVisionRecognitionFallback(visionAnalysis);
+    if (brandGateResult.preserveScopeReply) {
+      console.log(
+        `🛑 Vision chặn ứng viên hash ${hashCandidateSku || '(không có)'} do nhận diện thương hiệu ${brandGateResult.brand || 'ngoài phạm vi'}.`
+      );
+      return brandGateResult;
+    }
 
-    const prompt1B = `Bạn là chuyên gia tư vấn. Dựa vào kết quả phân tích ảnh:
+    let catalogData = JSON.stringify(
+      getVisionCatalogCandidates(visionAnalysis, hashCandidateSku)
+    );
+
+    let prompt1B = `Bạn là chuyên gia tư vấn. Dựa vào kết quả phân tích ảnh:
 ${visionOutput}
 Và lời nhắn của khách: "${messageText}"
 
-Dưới đây là danh sách sản phẩm (JSON):
+Dưới đây là các sản phẩm từ toàn bộ dữ liệu Product của shop được dùng để nhận diện (JSON):
 ${catalogData}
 
-Nhiệm vụ: Tìm tối đa 5 mã SKU khớp nhất với phân tích trên. 
+Nhiệm vụ: Tìm tối đa 5 mã SKU khớp nhất với phân tích trên, không giới hạn ở ${CHATBOT_TARGET_BRAND}. Không được trả về SKU ngoài danh sách.
 LƯU Ý CỰC KỲ QUAN TRỌNG:
 1. Nếu "text_in_image" đọc được CHÍNH XÁC một mã sản phẩm (ví dụ "538L"), bạn BẮT BUỘC ưu tiên các SKU chứa đúng mã đó (như "538L-T2").
 2. Nếu không có chữ số nào, BẮT BUỘC phải đối chiếu CHÍNH XÁC "description" của ảnh (màu sắc, kiểu dáng mặt, đính đá, dây) với trường "desc" (Mô tả ngắn) trong JSON. Tuyệt đối không chọn bừa. 
@@ -329,30 +817,42 @@ Trả về JSON định dạng:
 
     console.log(`🤖 Đang chạy Lớp 3 Chặng 1B (Semantic Search)...`);
     const result1B = await runWithModelFallback(prompt1B, true);
+    catalogData = null;
+    prompt1B = null;
 
     let stage1Result = {};
     try {
       const text = result1B.response.text();
       const jsonMatch = text.match(/\{[\s\S]*\}/);
       stage1Result = JSON.parse(jsonMatch[0]);
+      stage1Result.candidates = Array.isArray(stage1Result.candidates)
+        ? stage1Result.candidates.map(sku => String(sku || '').trim().toUpperCase()).filter(Boolean)
+        : [];
     } catch (e) {
       console.error("[Lớp 3] Lỗi parse JSON Chặng 1B:", e.message);
       fs.appendFileSync('debug_log.txt', `[Lớp 3] JSON Error 1B: ${e.message}\n`);
     }
 
     if (!stage1Result.candidates || stage1Result.candidates.length === 0) {
-      return { sku: null, message: stage1Result.message || "Dạ mẫu này đẹp quá ạ! 😍 Anh/chị cho shop biết thêm thích mức giá khoảng bao nhiêu để shop tư vấn mẫu tương tự nha!" };
+      return getVisionRecognitionFallback(visionAnalysis);
     }
 
     console.log('🤖 Chặng 1 Lớp 3 đã lọc ứng viên:', stage1Result.candidates);
+    console.log(
+      `🤖 Chuẩn bị Chặng 2. Heap ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)} MB.`
+    );
 
     // Chặng 2: Visual Verification (So sánh ảnh chéo)
     const { getAllProductsWithImages } = await import('./sheet.service.js');
     const allProducts = await getAllProductsWithImages();
-    const candidateImages = allProducts.filter(p => stage1Result.candidates.includes(p.sku));
+    const candidateSkuSet = new Set(stage1Result.candidates);
+    const candidateImages = allProducts.filter(
+      p => candidateSkuSet.has(String(p.sku || '').trim().toUpperCase())
+        && getProductInfoFromAllCatalog(p.sku)
+    );
 
     if (candidateImages.length === 0) {
-      return { sku: null, message: "Dạ mẫu này shop đang kiểm tra lại, anh/chị đợi lát nha!" };
+      return getVisionRecognitionFallback(visionAnalysis);
     }
 
     // Tải ảnh gốc của các ứng viên
@@ -362,54 +862,82 @@ Trả về JSON định dạng:
 
     for (const c of candidateImages) {
       try {
-        const res = await fetch(c.imageUrl);
-        if (res.ok) {
-          const buf = await res.arrayBuffer();
-          let mime = res.headers.get("content-type") || "image/jpeg";
-          if (!mime.startsWith('image/')) mime = 'image/jpeg';
-          imageParts2.push({ inlineData: { data: Buffer.from(buf).toString("base64"), mimeType: mime } });
-          candidateIndexMap[index] = c.sku;
-          index++;
-        } else {
-          console.error(`[Lớp 3] Lỗi tải ảnh kho cho SKU ${c.sku}: HTTP ${res.status}`);
-        }
+        imageParts2.push(await getVisionImagePartFromUrl(c.imageUrl));
+        candidateIndexMap[index] = String(c.sku || '').trim().toUpperCase();
+        index++;
       } catch (e) {
         console.error(`[Lớp 3] Ngoại lệ khi tải ảnh kho SKU ${c.sku}:`, e.message);
       }
     }
 
     const n = customerImageParts.length;
-    const prompt2 = `Từ index 0 đến index ${n - 1} là ảnh khách gửi. Các ảnh tiếp theo (từ index ${n} trở đi) là ảnh gốc của các mẫu: ${Object.values(candidateIndexMap).join(', ')}.
+    const verifiedCandidateSkus = Object.values(candidateIndexMap);
+    if (verifiedCandidateSkus.length === 0) {
+      return getVisionRecognitionFallback(visionAnalysis);
+    }
+    const verifiedCandidateLabels = verifiedCandidateSkus.map(sku => {
+      const product = getProductInfoFromAllCatalog(sku);
+      return `${sku} (${String(product?.['Thương hiệu'] || 'không rõ hãng').trim()})`;
+    });
+    const prompt2 = `Từ index 0 đến index ${n - 1} là ảnh khách gửi. Các ảnh tiếp theo (từ index ${n} trở đi) là ảnh gốc của các mẫu: ${verifiedCandidateLabels.join(', ')}.
 Nhiệm vụ: So sánh tập ảnh khách gửi với các ảnh còn lại.
-Trích xuất mã SKU khớp NHẤT.
-LƯU Ý CỰC KỲ QUAN TRỌNG: 
-- ĐẶC BIỆT LƯU Ý ẢNH GHÉP (COLLAGE): Nếu ảnh khách gửi là một tấm ảnh ghép (có nhiều ô nhỏ chụp mặt trước, mặt bên, dây đeo, v.v.) của CÙNG 1 KIỂU DÁNG đồng hồ, thì đó CHỈ LÀ 1 SẢN PHẨM DUY NHẤT. BẠN TUYỆT ĐỐI KHÔNG ĐƯỢC CHỌN "MULTIPLE_MODELS". BẠN BẮT BUỘC PHẢI CHỌN ĐÚNG MÃ SKU ĐÓ.
-- CHỈ TRẢ VỀ "MULTIPLE_MODELS" NẾU VÀ CHỈ NẾU tập ảnh khách gửi chứa các chiếc đồng hồ CÓ KIỂU DÁNG/FORM THIẾT KẾ KHÁC BIỆT HOÀN TOÀN (ví dụ: 1 cái mặt vuông và 1 cái mặt tròn).
-- Nếu tập ảnh khách gửi chụp NHIỀU MÀU SẮC CỦA CÙNG 1 MẪU, bạn PHẢI TRẢ VỀ mã gốc (bỏ phần hậu tố -T1...). Ví dụ: trả về "55883G" thay vì "55883G-T1". 
-- NẾU ẢNH KHÁCH CHỈ CHỤP DUY NHẤT 1 CHIẾC ĐỒNG HỒ (hoặc ảnh ghép của 1 chiếc), bạn BẮT BUỘC phải trả về ĐÚNG mã chi tiết (ví dụ: "55883G-T1").
-Chỉ trả về JSON định dạng: { "sku": "Mã SKU khớp hoặc MULTIPLE_MODELS" }. Nếu hoàn toàn không có ảnh nào khớp, trả về { "sku": null }.`;
+Chỉ xác nhận SKU khi ảnh khách và ảnh sản phẩm khớp cùng một chiếc đồng hồ, không được chọn mẫu chỉ vì nhìn gần giống.
+LƯU Ý CỰC KỲ QUAN TRỌNG:
+- Nếu ảnh nhìn rõ logo/tên hãng thì thương hiệu trên ảnh khách phải khớp thương hiệu của SKU ứng viên. "Carnival" riêng không được coi là "I&W Carnival".
+- Phải kiểm tra riêng: hình dáng vỏ/niềng, bố cục cọc số và mặt số, màu mặt, màu/chất liệu dây, vị trí lịch và các chi tiết trang trí.
+- Chỉ cần một chi tiết lớn khác nhau (ví dụ mặt bạc thay vì xanh, dây đen thay vì xanh, bố cục cọc số khác) thì exact_match phải là false và sku phải là null.
+- Nếu ảnh khách là ảnh ghép của cùng một chiếc đồng hồ thì coi là một mẫu, nhưng vẫn phải trả về null nếu không có ảnh kho khớp chính xác.
+- Chỉ trả về "MULTIPLE_MODELS" nếu tập ảnh khách chứa nhiều chiếc đồng hồ có form thiết kế khác biệt hoàn toàn.
+- Không được trả về mã gốc hoặc tự đoán biến thể màu.
+Chỉ trả về JSON định dạng:
+{ "sku": "SKU chính xác, MULTIPLE_MODELS hoặc null", "exact_match": true/false, "confidence": 0.0-1.0, "mismatch_reason": "chi tiết khớp hoặc khác nhau" }.
+    Chỉ đặt exact_match=true khi mọi đặc điểm chính đều khớp và confidence từ 0.92 trở lên.`;
 
+    console.log(
+      `🤖 Đang chạy Lớp 3 Chặng 2 với ${verifiedCandidateSkus.length} ảnh đối chiếu.`
+    );
     const result2 = await runWithModelFallback([prompt2, ...imageParts2], true);
     const responseText2 = result2.response.text();
     let stage2Result = { sku: null };
     try {
-      stage2Result = JSON.parse(responseText2);
+      stage2Result = cleanJSONResponse(responseText2) || JSON.parse(responseText2);
     } catch (e) { }
 
-    const exactSku = stage2Result.sku;
+    const exactSku = String(stage2Result.sku || '').trim().toUpperCase();
+    const confidence = Number(stage2Result.confidence) || 0;
+    const isVerifiedExactMatch = stage2Result.exact_match === true
+      && confidence >= 0.92
+      && verifiedCandidateSkus.includes(exactSku);
 
-    if (exactSku) {
-      console.log(`🤖 Chặng 2 Lớp 3 chốt hạ SKU: ${exactSku}`);
+    if (exactSku === "MULTIPLE_MODELS") {
       return { sku: exactSku, message: "" };
+    }
+
+    const exactProduct = isVerifiedExactMatch ? getProductInfoFromAllCatalog(exactSku) : null;
+    const exactProductMatchesVisionBrand = !brandGateResult.isCatalogBrand
+      || normalizeBrand(exactProduct?.['Thương hiệu']) === normalizeBrand(brandGateResult.brand);
+    if (exactProduct && exactProductMatchesVisionBrand) {
+      console.log(`🤖 Chặng 2 Lớp 3 xác nhận SKU: ${exactSku} (confidence ${confidence})`);
+      return {
+        sku: exactSku,
+        brand: String(exactProduct['Thương hiệu'] || '').trim(),
+        isCatalogBrand: true,
+        message: ""
+      };
     } else {
+      if (exactProduct && !exactProductMatchesVisionBrand) {
+        console.warn(
+          `🛑 Từ chối SKU ${exactSku}: Vision đọc thương hiệu ${brandGateResult.brand}, nhưng SKU thuộc ${exactProduct['Thương hiệu']}.`
+        );
+      }
       fs.appendFileSync('debug_log.txt', `[Lớp 3] Chặng 2 Failed. Candidates: ${stage1Result.candidates.join(',')}. Result2: ${result2.response.text()}\n`);
-      return { sku: null, message: "Dạ mẫu này đẹp quá ạ! 😍 Anh/chị cho shop biết thêm thích mức giá khoảng bao nhiêu để shop tư vấn mẫu tương tự nha!" };
+      return getVisionRecognitionFallback(visionAnalysis);
     }
 
   } catch (error) {
     console.error("[Lớp 3] Lỗi gọi Gemini Vision:", error);
     fs.appendFileSync('debug_log.txt', `[Lớp 3] Error Catch: ${error.message}\n`);
-    return { sku: null, message: "Dạ mẫu này đẹp quá ạ! 😍 Anh/chị cho shop biết thêm thích mức giá khoảng bao nhiêu để shop tư vấn nha!" };
+    return { sku: null, message: getUnrecognizedImageReply() };
   }
 };
 
@@ -455,6 +983,87 @@ const normalizeIntentText = (value) => {
     .trim();
 };
 
+const isAuthenticityQuestion = (messageText) => {
+  const text = normalizeIntentText(messageText);
+  return /\b(?:chinh hang|hang that|hang auth|authentic|hang gia|hang fake|fake|real)\b/.test(text);
+};
+
+const isGeneralAuthenticityQuestion = (messageText) => {
+  const text = normalizeIntentText(messageText);
+  return /^(?:shop|ben shop|cua shop|san pham ben shop|hang ben shop|dong ho ben shop)\b/.test(text);
+};
+
+const UNKNOWN_AUTHENTICITY_REPLY =
+  'Dạ, shop chưa có đủ thông tin để xác nhận mẫu này có phải hàng chính hãng không ạ.';
+
+const GENERAL_AUTHENTICITY_REPLY =
+  'Dạ, các thương hiệu bên shop đang bán đều là hàng chính hãng ạ.';
+
+const getVerifiedAuthenticityReply = (sku, productInfo) => {
+  const brand = String(productInfo?.['Thương hiệu'] || CHATBOT_TARGET_BRAND).trim();
+  return sku
+    ? `Dạ, mẫu ${sku} của ${brand} bên shop là hàng chính hãng ạ.`
+    : `Dạ, các mẫu ${brand} bên shop là hàng chính hãng ạ.`;
+};
+
+const isWarrantySupportRequest = (messageText) => {
+  const text = normalizeIntentText(messageText);
+  return /\b(?:bao hanh|sua chua|sua dong ho|hong|bi loi|loi may|hap hoi|vao nuoc|nuoc vao|dong nuoc|mo kinh|chet may|dung may|khong chay|chay sai|roi kim|gay day|vo kinh|tray xuoc)\b/.test(text)
+    || /\b(?:moi mua|vua mua).{0,50}\b(?:bi|hong|loi|hap hoi|vao nuoc)\b/.test(text);
+};
+
+const WARRANTY_RETURN_SIGNATURE = 'gửi lại đồng hồ giúp em để shop tiến hành kiểm tra trực tiếp';
+const WARRANTY_CONTEXT_WINDOW_MS = 10 * 60 * 1000;
+
+const getWarrantyReturnReply = () =>
+  'Dạ anh/chị gửi lại đồng hồ giúp em để shop tiến hành kiểm tra trực tiếp nhé. Khi nhận được sản phẩm, bên em sẽ kiểm tra tình trạng và phản hồi phương án xử lý cụ thể cho anh/chị. Trong lúc chờ, anh/chị vui lòng không tự mở đáy hoặc sấy nóng đồng hồ ạ.';
+
+const getWarrantyIntakeReply = ({ brand, sku = '' }) => {
+  void brand;
+  void sku;
+  return getWarrantyReturnReply();
+};
+
+const getUnverifiedWarrantyReply = () =>
+  getWarrantyReturnReply();
+
+const getWarrantyBrandMismatchReply = (brand = '') => {
+  void brand;
+  return getWarrantyReturnReply();
+};
+
+const getRecentWarrantyContext = (messages) => {
+  const cutoff = Date.now() - WARRANTY_CONTEXT_WINDOW_MS;
+  const recentMessages = (messages || []).filter((message) => {
+    const createdAt = new Date(message.created_time).getTime();
+    return !Number.isFinite(createdAt) || createdAt >= cutoff;
+  });
+  const recentCustomerComplaint = [...recentMessages]
+    .reverse()
+    .find((message) => !message.is_from_page && isWarrantySupportRequest(message.message));
+  if (!recentCustomerComplaint) {
+    return { hasComplaint: false, alreadyReplied: false };
+  }
+
+  const complaintTime = new Date(recentCustomerComplaint.created_time).getTime();
+  const alreadyReplied = recentMessages.some((message) => {
+    if (!message.is_from_page) return false;
+    const replyTime = new Date(message.created_time).getTime();
+    if (
+      Number.isFinite(complaintTime)
+      && Number.isFinite(replyTime)
+      && replyTime < complaintTime
+    ) {
+      return false;
+    }
+    return normalizeIntentText(message.message).includes(
+      normalizeIntentText(WARRANTY_RETURN_SIGNATURE),
+    );
+  });
+
+  return { hasComplaint: true, alreadyReplied };
+};
+
 const getInstantTextReply = (messageText) => {
   const text = normalizeIntentText(messageText);
 
@@ -483,9 +1092,12 @@ const evaluateBotReply = async ({ customerMessage, draftReply, knowledgeText, me
     const prompt = `Ban la bo phan QA cho chatbot ban dong ho.
 Hay cham diem cau tra loi truoc khi gui cho khach.
 
-NGUYEN TAC:
-- Khong duoc bia gia, ton kho, bao hanh, phi ship, thanh toan neu khong co trong kien thuc.
-- Neu khong chac, phai chuyen sang: "shop se co nhan vien kiem tra lai".
+ NGUYEN TAC:
+ - Khong duoc bia gia, ton kho, bao hanh, phi ship, thanh toan neu khong co trong kien thuc.
+ - Chi duoc khang dinh chinh hang khi co SKU thuoc danh muc shop va san pham duoc mua truc tiep tu shop.
+ - Mau, thuong hieu hoac anh chua doi chieu duoc voi SKU trong danh muc thi phai noi khong the xac nhan chinh hang.
+ - Khong de lo cac tu noi bo nhu "danh muc", "he thong", "sheet" hoac "SKU duoc phep" trong cau tra loi cho khach.
+ - Neu khong chac, phai chuyen sang: "shop se co nhan vien kiem tra lai".
 - Cau tra loi phai ngan gon, lich su, dung tieng Viet, khong lap y.
 - Khong tu y hua chot don, giu hang, giam gia neu khong co thong tin.
 
@@ -541,7 +1153,9 @@ Muc tieu: dung su that, ngan gon, than thien, tieng Viet tu nhien. KHONG DICH SA
 TUYET DOI KHONG BIA DAT cac tinh nang nhu Bluetooth, AI, Smartwatch, ket noi mang. Đay la dong ho co/pin truyen thong.
 Neu ban gioi thieu san pham, BAT BUOC phai chi ra 1 MA SKU CU THE. KHONG THEM LINK ANH.
 
-Neu thieu thong tin ve gia/ton kho/bao hanh/ship/thanh toan, khong duoc doan. Hay noi shop se co nhan vien kiem tra lai.
+ Neu thieu thong tin ve gia/ton kho/bao hanh/ship/thanh toan, khong duoc doan. Hay noi shop se co nhan vien kiem tra lai.
+ Tuyet doi khong khang dinh chinh hang cho mau/thuong hieu ngoai danh muc hoac chua doi chieu duoc SKU. Voi san pham trong danh muc, chi cam ket cho hang mua truc tiep tu shop.
+ Khong dung cac tu noi bo nhu "danh muc", "he thong", "sheet" hoac "SKU duoc phep" khi viet cau tra loi cho khach.
 
 KIEN THUC:
 ${clipPromptText(knowledgeText)}
@@ -571,6 +1185,27 @@ Chi tra ve JSON: { "reply": "cau tra loi da sua" }`;
 
 export const runGeminiText = async (history, newMessage) => {
   try {
+    const catalogScopeReply = getCatalogScopeReply(newMessage);
+    if (catalogScopeReply) {
+      console.log('ℹ️ Phản hồi theo phạm vi thương hiệu/mã sản phẩm của shop.');
+      return catalogScopeReply;
+    }
+
+    const excludedBrand = getMentionedExcludedBrand(newMessage);
+    if (excludedBrand) {
+      console.log(`ℹ️ Chuyển hướng yêu cầu ${excludedBrand} sang ${CHATBOT_TARGET_BRAND}.`);
+      return getBrandRedirectReply({ brand: excludedBrand });
+    }
+    const skuMention = getCatalogSkuMention(newMessage);
+    if (skuMention && !skuMention.isTargetBrand) {
+      console.log(`ℹ️ Bỏ qua SKU ${skuMention.sku} vì không thuộc ${CHATBOT_TARGET_BRAND}.`);
+      const productInfo = getProductInfoFromAllCatalog(skuMention.sku);
+      return getBrandRedirectReply({
+        brand: String(productInfo?.['Thương hiệu'] || '').trim(),
+        sku: skuMention.sku
+      });
+    }
+
     // RAG: Tìm kiếm thông tin liên quan từ vector store
     const [relevantKnowledge, memoryContext] = await Promise.all([
       searchKnowledge(newMessage, 3).catch((error) => {
@@ -589,8 +1224,9 @@ export const runGeminiText = async (history, newMessage) => {
     }
 
     const catalogData = shouldIncludeCatalog(newMessage) ? getCatalogPromptText() : '[]';
+    const soldBrandsText = getSoldBrandsText();
 
-    const systemPrompt = `Bạn là trợ lý ảo tư vấn đồng hồ của shop.
+    const systemPrompt = `Bạn là trợ lý ảo chuyên tư vấn đồng hồ ${CHATBOT_TARGET_BRAND} của shop.
 Hãy trả lời lịch sự, thân thiện, dùng emoji hợp lý. Không bịa đặt thông tin.
 LƯU Ý QUAN TRỌNG:
 1. NGÔN NGỮ CHÍNH LÀ TIẾNG VIỆT. Bạn có thể dùng một số từ Tiếng Anh thông dụng trong thương mại (như: Shop, Sale, Size, Freeship, Fullbox, SKU). BẠN KHÔNG BIẾT VÀ KHÔNG ĐƯỢC PHÉP DÙNG BẤT KỲ NGÔN NGỮ NÀO KHÁC. KHÔNG DỊCH THUẬT.
@@ -600,10 +1236,11 @@ LƯU Ý QUAN TRỌNG:
 
 Hệ thống sẽ tự động bắt lấy cú pháp này và chèn Form mẫu thông số hoàn chỉnh vào. Bạn CHỈ ĐƯỢC PHÉP trả lời thêm ở NGAY BÊN DƯỚI cú pháp này (xuống dòng) NẾU khách có hỏi thêm câu hỏi phụ (như ship, bảo hành...). Tuyệt đối không tự sinh lời chào!
 4. NẾU KHÁCH TÌM KIẾM THEO FORM DÁNG (ví dụ: Hublot, Nautilus, RM, Tonneau, Tank), hãy tra cứu trong DANH SÁCH SẢN PHẨM bên dưới để đề xuất mã SKU phù hợp bằng cú pháp [PRODUCT: Mã_SKU_Sản_Phẩm].
-5. LƯU Ý ƯU TIÊN THƯƠNG HIỆU: Khi có nhiều mẫu cùng đáp ứng yêu cầu của khách, LUÔN LUÔN ƯU TIÊN đề xuất theo thứ tự sau: Top 1 là "I&W Carnival", Top 2 là "Lobinni", Top 3 là "Cadisen". Đặc biệt tập trung bán I&W Carnival.
-6. QUY TẮC MÃ SẢN PHẨM: Các đuôi số (như G1, G2, G3) thể hiện phiên bản niềng/vành bezel: Đuôi 1 (ví dụ G1) là niềng trơn, Đuôi 2 (ví dụ G2) là niềng đính đá, Đuôi 3 (ví dụ G3) là đính full đá. TUYỆT ĐỐI KHÔNG gọi chúng là "phiên bản màu sắc" khi giải thích cho khách. Màu sắc là phần đuôi phụ đằng sau (như -S1, -D1). NẾU khách hỏi mã chung chung (ví dụ 55851), HÃY HỎI RÕ khách muốn bản niềng nào (niềng trơn, niềng đá hay đính full đá).
+ 5. PHẠM VI THƯƠNG HIỆU: Các thương hiệu shop đang bán là ${soldBrandsText}. CHỈ được tư vấn chi tiết, báo giá và giới thiệu sản phẩm ${CHATBOT_TARGET_BRAND}. Nếu khách hỏi thương hiệu hoặc mã không thuộc các thương hiệu shop đang bán, phải nói rõ shop không kinh doanh, nêu các thương hiệu đang có và hỏi khách có muốn tham khảo không. Không nhắc tới sheet, dữ liệu nội bộ hoặc danh mục. Riêng khi khách chỉ nói "Carnival", KHÔNG được tự hiểu là ${CHATBOT_TARGET_BRAND}; phải nói shop chỉ bán ${CHATBOT_TARGET_BRAND}, không phải Carnival riêng, rồi xin mã sản phẩm để kiểm tra.
+ 6. QUY TẮC MÃ SẢN PHẨM: Các đuôi số (như G1, G2, G3) thể hiện phiên bản niềng/vành bezel: Đuôi 1 (ví dụ G1) là niềng trơn, Đuôi 2 (ví dụ G2) là niềng đính đá, Đuôi 3 (ví dụ G3) là đính full đá. TUYỆT ĐỐI KHÔNG gọi chúng là "phiên bản màu sắc" khi giải thích cho khách. Màu sắc là phần đuôi phụ đằng sau (như -S1, -D1). NẾU khách hỏi mã chung chung (ví dụ 55851), HÃY HỎI RÕ khách muốn bản niềng nào (niềng trơn, niềng đá hay đính full đá).
+ 7. XÁC NHẬN CHÍNH HÃNG: Nếu thương hiệu hoặc SKU có trong dữ liệu Product của shop thì trả lời ngắn gọn đó là hàng chính hãng. Nếu không tìm thấy thì không được xác nhận. Với câu hỏi này TUYỆT ĐỐI không gửi form sản phẩm, thông số, ảnh bổ sung, giá, link mua hàng hoặc hỏi khách có cần báo giá không. Không nhắc các từ nội bộ như "danh mục", "hệ thống", "sheet" hoặc "SKU được phép".
 
-DANH SÁCH SẢN PHẨM (Mã & Mô tả/Thương hiệu):
+DANH SÁCH SẢN PHẨM ${CHATBOT_TARGET_BRAND} ĐƯỢC PHÉP TƯ VẤN (Mã & mô tả):
 ${catalogData}
 
 Dưới đây là thông tin cửa hàng và chính sách liên quan:
@@ -654,7 +1291,8 @@ ${knowledgeText}
           systemInstruction: { parts: [{ text: systemPrompt }] },
           generationConfig: {
             maxOutputTokens: 320,
-            temperature: 0.4
+            temperature: 0.4,
+            thinkingConfig: { thinkingBudget: modelName.includes('pro') ? 128 : 0 }
           }
         });
         const chat = model.startChat({ history: chatHistory });
@@ -676,15 +1314,24 @@ ${knowledgeText}
       return "Dạ shop đã nhận được tin nhắn. Sẽ có nhân viên hỗ trợ anh/chị ngay ạ!";
     }
 
+    const excludedDraftBrand = getMentionedExcludedBrand(draftReply);
+    if (excludedDraftBrand) {
+      return getBrandRedirectReply({ brand: excludedDraftBrand });
+    }
+
     // --- ÉP FORM MẪU BẰNG CODE ---
     const productMatch = draftReply.match(/\[PRODUCT:\s*([a-zA-Z0-9-]+)\]/i);
     if (productMatch) {
        const sku = productMatch[1].toUpperCase();
+       const productInfo = getProductInfoFromCatalog(sku);
+
+       if (!productInfo) {
+         return getBrandRedirectReply();
+       }
        
        // Kiểm tra SKU có bị chung chung không (ví dụ: khách hỏi 55851G nhưng có G1, G2, G3)
-       const catalogPath = path.join(__dirname, '../../data/catalog.json');
-       if (fs.existsSync(catalogPath)) {
-         const catalog = JSON.parse(fs.readFileSync(catalogPath, 'utf8'));
+       const catalog = getCatalogProducts();
+       if (catalog.length > 0) {
          const variants = new Set(
            catalog.map(p => p['Mã sản phẩm'])
                   .filter(m => m && m.startsWith(sku) && m.length > sku.length && !m.startsWith(sku + '-'))
@@ -718,17 +1365,18 @@ ${knowledgeText}
          }
        }
 
-       const productInfo = getProductInfoFromCatalog(sku) || {};
        const isGenericSku = !sku.includes('-'); // "55883G" thay vì "55883G-T1"
-       
+
        let chatLieuDay = getChatLieuDay(sku, productInfo);
+       const shopeeLink = await getProductShopeeLink(sku, productInfo);
+       const shopeeLine = shopeeLink ? `\n\n🛒 Link Shopee: ${shopeeLink}` : '';
 
        let formText = "";
        const baseSku = sku.split('-')[0];
        const hasSentForm = history.some(msg => msg.is_from_page && (msg.message || "").includes(`Mã Sản Phẩm: ${baseSku}`));
 
-       if (hasSentForm) {
-          formText = `Dạ mẫu bản màu này (${sku}) thì giá ưu đãi hiện tại là: ${productInfo["Giá sale"] || productInfo["Giá bán"]} ạ. Các thông số về kích thước, bộ máy, chống nước... hoàn toàn giống mẫu ${baseSku} em vừa gửi ở trên nha anh/chị! 🥰`;
+        if (hasSentForm) {
+           formText = `Dạ mẫu bản màu này (${sku}) thì giá ưu đãi hiện tại là: ${productInfo["Giá sale"] || productInfo["Giá bán"]} ạ. Các thông số về kích thước, bộ máy, chống nước... hoàn toàn giống mẫu ${baseSku} em vừa gửi ở trên nha anh/chị! 🥰${shopeeLine}`;
        } else {
          formText = `Shop xin chào 🤗
 Cảm ơn chị đã quan tâm tới các sản phẩm của Shop. Dưới đây là thông tin chi tiết sản phẩm để chị tiện tham khảo ạ.
@@ -742,11 +1390,11 @@ Cảm ơn chị đã quan tâm tới các sản phẩm của Shop. Dưới đây
 ⛓️Chất liệu dây: ${chatLieuDay}
 🔎 Kính sapphire hạn chế trầy xước.
 
-✅ Giá bán : ${productInfo["Giá sale"] || productInfo["Giá bán"] || productInfo["Giá gốc"] || "Đang cập nhật"}`;
+✅ Giá bán : ${productInfo["Giá sale"] || productInfo["Giá bán"] || productInfo["Giá gốc"] || "Đang cập nhật"}${shopeeLine}`;
 
-         if (isGenericSku) {
-            formText += `|||Dạ mẫu này bên em đang có nhiều màu, anh/chị đang ưng màu nào ạ? 🥰`;
-         }
+         formText += isGenericSku
+           ? `|||Dạ mẫu này bên em đang có nhiều màu, anh/chị đang ưng màu nào ạ? 🥰`
+           : `|||${PRODUCT_FOLLOW_UP_MESSAGE}`;
        }
 
        draftReply = draftReply.replace(productMatch[0], formText).trim();
@@ -792,6 +1440,39 @@ Cảm ơn chị đã quan tâm tới các sản phẩm của Shop. Dưới đây
 // --- MAIN WORKFLOW ---
 
 const convQueues = {}; // Hàng đợi xử lý tin nhắn để tránh race condition (bot trả lời 2 lần)
+const pendingAttachmentMessages = new Map();
+const ATTACHMENT_PAIR_WINDOW_MS = 900;
+
+const stripAttachmentMarkers = (messageText) =>
+  String(messageText || '')
+    .replace(/\[(?:IMAGE|VIDEO|FILE|AUDIO):[^\]]*\]/gi, '')
+    .trim();
+
+const referencesIncomingAttachment = (messageText) => {
+  const text = normalizeIntentText(stripAttachmentMarkers(messageText));
+  return /\b(?:ma|mau|chiec|con|em|san pham|dong ho|cai|anh|hinh)\s+(?:nay|do|tren)\b/.test(text);
+};
+
+const schedulePendingMessageBatch = (
+  conversationId,
+  messageText,
+  imageUrls,
+  settings
+) => {
+  const existing = pendingAttachmentMessages.get(conversationId);
+  if (existing?.timer) clearTimeout(existing.timer);
+
+  const timer = setTimeout(() => {
+    pendingAttachmentMessages.delete(conversationId);
+    enqueueConversationProcessing(conversationId, messageText, imageUrls, settings);
+  }, ATTACHMENT_PAIR_WINDOW_MS);
+
+  pendingAttachmentMessages.set(conversationId, {
+    messageText,
+    imageUrls,
+    timer
+  });
+};
 
 const enqueueConversationProcessing = (conversationId, messageText, imageUrls, settings) => {
   if (!convQueues[conversationId]) {
@@ -807,8 +1488,59 @@ export const handleIncomingMessage = async (conversationId, messageText, imageUr
   const settings = getSettings();
   if (!settings.botEnabled) return; // Bot bị tắt toàn cục
 
-  const imageUrls = imageUrl ? [imageUrl] : [];
-  enqueueConversationProcessing(conversationId, messageText, imageUrls, settings);
+  const cleanMessageText = stripAttachmentMarkers(messageText);
+  const pending = pendingAttachmentMessages.get(conversationId);
+
+  if (imageUrl) {
+    const pendingImageUrls = pending?.imageUrls || [];
+    const combinedImageUrls = [...pendingImageUrls, imageUrl];
+    const combinedText = [pending?.messageText, cleanMessageText].filter(Boolean).join('\n');
+
+    if (combinedText) {
+      console.log(`⚡ Đang gom tin nhắn với ${combinedImageUrls.length} ảnh cho hội thoại ${conversationId}.`);
+      schedulePendingMessageBatch(
+        conversationId,
+        combinedText,
+        combinedImageUrls,
+        settings
+      );
+      return;
+    }
+
+    schedulePendingMessageBatch(conversationId, '', combinedImageUrls, settings);
+    return;
+  }
+
+  if (pending?.imageUrls?.length) {
+    const combinedText = [pending.messageText, cleanMessageText].filter(Boolean).join('\n');
+    console.log(`⚡ Đang gom ${pending.imageUrls.length} ảnh với tin nhắn cho hội thoại ${conversationId}.`);
+    schedulePendingMessageBatch(
+      conversationId,
+      combinedText,
+      pending.imageUrls,
+      settings
+    );
+    return;
+  }
+
+  if (referencesIncomingAttachment(cleanMessageText)) {
+    const combinedText = [pending?.messageText, cleanMessageText].filter(Boolean).join('\n');
+    schedulePendingMessageBatch(conversationId, combinedText, [], settings);
+    return;
+  }
+
+  if (pending) {
+    const combinedText = [pending.messageText, cleanMessageText].filter(Boolean).join('\n');
+    schedulePendingMessageBatch(
+      conversationId,
+      combinedText,
+      pending.imageUrls || [],
+      settings
+    );
+    return;
+  }
+
+  enqueueConversationProcessing(conversationId, cleanMessageText, [], settings);
 };
 
 const processConversation = async (conversationId, messageText, imageUrls, settings) => {
@@ -843,6 +1575,21 @@ const processConversation = async (conversationId, messageText, imageUrls, setti
 
     let replyMessage = "";
     let skuConfirmed = null; // SKU đã xác nhận từ Vision/Hash
+    let authenticityProductConfirmed = null;
+    let authenticityBrandConfirmed = null;
+    let preserveCatalogScopeReply = false;
+    const asksAuthenticity = isAuthenticityQuestion(messageText);
+    let asksWarrantySupport = isWarrantySupportRequest(messageText);
+
+    if (!asksWarrantySupport && imageUrls?.length) {
+      const recentMessages = await getMessagesByConversation(conversationId);
+      const warrantyContext = getRecentWarrantyContext(recentMessages);
+      if (warrantyContext.alreadyReplied) {
+        console.log(`ℹ️ [Bảo hành] Đã hướng dẫn khách gửi lại sản phẩm; bỏ qua phản hồi nhận diện ảnh lặp.`);
+        return;
+      }
+      asksWarrantySupport = warrantyContext.hasComplaint;
+    }
 
     // 1.5: Kiểm tra khách có yêu cầu xem ảnh sản phẩm không
     const lowerMsg = (messageText || '').toLowerCase();
@@ -854,8 +1601,51 @@ const processConversation = async (conversationId, messageText, imageUrls, setti
     if (instantReply) {
       replyMessage = instantReply;
     }
+
+    if (!replyMessage && asksWarrantySupport) {
+      replyMessage = getWarrantyReturnReply();
+      console.log(`✅ [Bảo hành] Hướng dẫn khách gửi lại sản phẩm để shop kiểm tra trực tiếp.`);
+    }
+
+    const catalogSkuMention = getCatalogSkuMention(messageText);
+    const catalogScopeReply = asksWarrantySupport && imageUrls?.length
+      ? null
+      : getCatalogScopeReply(messageText);
+    if (!replyMessage && catalogScopeReply) {
+      replyMessage = catalogScopeReply;
+      preserveCatalogScopeReply = true;
+    } else if (
+      !replyMessage
+      && catalogSkuMention
+      && !(asksWarrantySupport && imageUrls?.length)
+    ) {
+      const productInfo = getProductInfoFromAllCatalog(catalogSkuMention.sku);
+      if (asksWarrantySupport && productInfo) {
+        replyMessage = getWarrantyIntakeReply({
+          brand: String(productInfo['Thương hiệu'] || '').trim(),
+          sku: String(productInfo['Mã sản phẩm'] || catalogSkuMention.sku).trim()
+        });
+      } else if (catalogSkuMention.isTargetBrand) {
+        skuConfirmed = catalogSkuMention.sku;
+        console.log(`⚡ Nhận diện trực tiếp SKU ${skuConfirmed} thuộc ${CHATBOT_TARGET_BRAND}.`);
+      } else if (asksAuthenticity) {
+        authenticityProductConfirmed = productInfo;
+      } else {
+        replyMessage = getBrandRedirectReply({
+          brand: String(productInfo?.['Thương hiệu'] || '').trim(),
+          sku: catalogSkuMention.sku
+        });
+      }
+    }
+
+    if (!replyMessage && asksWarrantySupport && (!imageUrls || imageUrls.length === 0)) {
+      const mentionedBrand = getMentionedCatalogBrand(messageText);
+      replyMessage = mentionedBrand
+        ? getWarrantyIntakeReply({ brand: mentionedBrand })
+        : getUnverifiedWarrantyReply();
+    }
     
-    if (isAskingPhotos && (!imageUrls || imageUrls.length === 0)) {
+    if (!replyMessage && isAskingPhotos && (!imageUrls || imageUrls.length === 0)) {
       // Tìm SKU từ tin nhắn của khách trước (nếu khách nói rõ mã)
       let lastSku = null;
       const userSkuMatch = (messageText || '').match(/(?:mã|sku|mẫu)\s+([a-zA-Z0-9-]+)/i);
@@ -876,7 +1666,13 @@ const processConversation = async (conversationId, messageText, imageUrls, setti
         }
       }
 
-      if (lastSku) {
+      if (lastSku && !getProductInfoFromCatalog(lastSku)) {
+        const productInfo = getProductInfoFromAllCatalog(lastSku);
+        replyMessage = getBrandRedirectReply({
+          brand: String(productInfo?.['Thương hiệu'] || '').trim(),
+          sku: productInfo ? lastSku : ''
+        });
+      } else if (lastSku) {
         console.log(`📸 Khách yêu cầu xem ảnh sản phẩm ${lastSku}. Đang lấy từ Google Drive...`);
         try {
           const { urls: driveUrls, source } = await getProductImagesFromDrive(lastSku, 5);
@@ -888,14 +1684,15 @@ const processConversation = async (conversationId, messageText, imageUrls, setti
               try {
                 const imageResult = await replyImageCRM(conversation.sender_id, imgUrl, conversation.type, conversationId);
                 sentCount++;
-                
-                const imgMsgId = imageResult?.message_id || ('msg_bot_img_' + Date.now() + Math.floor(Math.random() * 1000));
+
+                const imgMsgId = imageResult.message_id;
                 const imgTime = new Date().toISOString();
-                await saveMessage(imgMsgId, conversationId, `📸 [Ảnh ${lastSku} - ${sentCount}/${driveUrls.length}]`, true, imgTime);
+                const imageMessage = `📸 Ảnh ${lastSku} - ${sentCount}/${driveUrls.length}\n[IMAGE: ${imgUrl}]`;
+                await saveMessage(imgMsgId, conversationId, imageMessage, true, imgTime);
                 try {
                   broadcastCRM('new_message', {
                     conversationId,
-                    message: { id: imgMsgId, conversation_id: conversationId, message: `📸 [Ảnh ${lastSku} - ${sentCount}/${driveUrls.length}]`, is_from_page: 1, created_time: imgTime }
+                    message: { id: imgMsgId, conversation_id: conversationId, message: imageMessage, is_from_page: 1, created_time: imgTime }
                   });
                 } catch (e) { /* ignore */ }
                 
@@ -942,55 +1739,105 @@ const processConversation = async (conversationId, messageText, imageUrls, setti
 
     // 2. Chấm điểm Hash và AI
     let systemImageContext = "";
-    if (imageUrls && imageUrls.length > 0) {
+    if (!replyMessage && imageUrls && imageUrls.length > 0) {
       console.log(`🤖 Bot đang xử lý ${imageUrls.length} ảnh từ khách...`);
-      let skuFound = null;
-      let usedLayer = 0;
+      let hashCandidateSku = null;
 
-      // Chỉ dùng Hash cho ảnh đầu tiên nếu gửi 1 ảnh để tối ưu
+      // Hash chỉ tạo ứng viên. Vision phải xác nhận thương hiệu và ảnh khớp trước khi gửi SKU.
       if (imageUrls.length === 1) {
         const targetHash = await computeHashFromUrl(imageUrls[0]);
         if (targetHash) {
-          skuFound = await findMatchingSku(targetHash, 5);
-          if (skuFound) usedLayer = 1;
+          const hashResult = await findMatchingSku(targetHash, 2, imageUrls[0]);
+          if (hashResult && getProductInfoFromAllCatalog(hashResult)) {
+            hashCandidateSku = hashResult;
+            console.log(`ℹ️ Hash đề xuất SKU ${hashCandidateSku}; chờ Vision xác nhận.`);
+          } else if (hashResult) {
+            console.log(`ℹ️ Hash trả về SKU ${hashResult} nhưng mã không có trong Product.`);
+          }
         }
       }
 
-      // getProductInfoFromCatalog moved to top scope
+      // Lớp 3: Gemini Vision (OCR thương hiệu + đối chiếu ảnh bắt buộc)
+      if (settings.enableLayer3 !== false && isAiAllowed) {
+        console.log(`🤖 Chuyển qua Lớp 3: Gemini Vision`);
+        const layer3Result = await runLayer3GeminiVision(imageUrls, messageText, {
+          hashCandidateSku
+        });
 
-      if (skuFound) {
-        // Tra cứu giá từ file JSON cục bộ thay vì Google Sheets API để tránh lỗi sheet
-        const productInfo = getProductInfoFromCatalog(skuFound);
-        if (productInfo) {
-          skuConfirmed = skuFound;
-          console.log(`✅ [Lớp ${usedLayer}] Xác nhận SKU: ${skuFound} → Sinh Form trực tiếp`);
-        } else {
-          systemImageContext = `[HỆ THỐNG PHÂN TÍCH ẢNH: Ảnh khách gửi có mã ${skuFound} nhưng chưa có thông tin giá. Hãy báo khách đợi nhân viên kiểm tra.]\n\n`;
-        }
-      } else {
-        // Lớp 3: Gemini Vision (2-Stage Verification)
-        if (settings.enableLayer3 !== false && isAiAllowed) {
-          console.log(`🤖 Chuyển qua Lớp 3: Gemini Vision`);
-          const layer3Result = await runLayer3GeminiVision(imageUrls, messageText);
-
-          if (layer3Result.sku === "MULTIPLE_MODELS") {
-             systemImageContext = `[HỆ THỐNG PHÂN TÍCH ẢNH: Khách gửi nhiều mẫu đồng hồ khác nhau. Hãy báo khách là "Dạ shop đã nhận được các mẫu anh/chị quan tâm. Để tiện tư vấn, anh/chị đang ưng ý form dáng của mẫu nào nhất ạ?"]\n\n`;
-          } else if (layer3Result.sku) {
-            // Lớp 3 đã tìm thấy SKU chính xác
-            const productInfo = getProductInfoFromCatalog(layer3Result.sku);
-            if (productInfo) {
-              skuConfirmed = layer3Result.sku;
-              console.log(`✅ [Lớp 3] Xác nhận SKU: ${layer3Result.sku} → Sinh Form trực tiếp`);
-            } else {
-              systemImageContext = `[HỆ THỐNG PHÂN TÍCH ẢNH: Nhận diện ảnh: ${layer3Result.message}]\n\n`;
-            }
+        if (layer3Result.sku === "MULTIPLE_MODELS") {
+          replyMessage = asksWarrantySupport
+            ? 'Dạ em thấy ảnh có nhiều mẫu khác nhau nên chưa thể xác nhận đúng chiếc cần bảo hành ạ. Anh/chị gửi riêng ảnh cận logo và mặt đáy của chiếc đang gặp lỗi, kèm thẻ bảo hành hoặc bill/mã đơn để shop kiểm tra chính xác nhé.'
+            : "Dạ shop đã nhận được nhiều mẫu đồng hồ khác nhau ạ. Để tránh báo nhầm, anh/chị cho shop biết mình muốn kiểm tra chiếc nào trước nhé!";
+        } else if (layer3Result.sku) {
+          // Chỉ Vision mới được xác nhận SKU; hash không bao giờ tự sinh form.
+          const productInfo = getProductInfoFromAllCatalog(layer3Result.sku);
+          if (productInfo && asksWarrantySupport) {
+            replyMessage = getWarrantyIntakeReply({
+              brand: String(productInfo['Thương hiệu'] || '').trim(),
+              sku: String(productInfo['Mã sản phẩm'] || layer3Result.sku).trim()
+            });
+            console.log(`✅ [Bảo hành] Vision xác nhận ${layer3Result.sku}; chuyển sang thu thập chứng từ mua hàng.`);
+          } else if (productInfo && normalizeBrand(productInfo['Thương hiệu']) === normalizedTargetBrand) {
+            skuConfirmed = layer3Result.sku;
+            console.log(`✅ [Lớp 3] Xác nhận SKU: ${layer3Result.sku} → Sinh Form trực tiếp`);
+          } else if (productInfo && asksAuthenticity) {
+            authenticityProductConfirmed = productInfo;
+            console.log(`✅ [Lớp 3] Xác nhận SKU ${layer3Result.sku} cho câu hỏi chính hãng.`);
+          } else if (productInfo) {
+            replyMessage = getBrandRedirectReply({
+              brand: String(productInfo['Thương hiệu'] || '').trim(),
+              sku: layer3Result.sku
+            });
+            console.log(`✅ [Lớp 3] Nhận diện SKU ${layer3Result.sku} thuộc thương hiệu có trong Product.`);
           } else {
-            // Lớp 3 không chốt được mã
-            systemImageContext = `[HỆ THỐNG PHÂN TÍCH ẢNH: Nhận diện ảnh: ${layer3Result.message}]\n\n`;
+            replyMessage = getUnrecognizedImageReply();
           }
         } else {
-          systemImageContext = `[HỆ THỐNG PHÂN TÍCH ẢNH: Không nhận diện được ảnh. Hãy báo khách đợi nhân viên kiểm tra.]\n\n`;
+          if (asksWarrantySupport && layer3Result.isCatalogBrand && layer3Result.brand) {
+            replyMessage = getWarrantyIntakeReply({ brand: layer3Result.brand });
+            console.log(`✅ [Bảo hành] Vision xác nhận thương hiệu ${layer3Result.brand}; chuyển sang thu thập chứng từ mua hàng.`);
+          } else if (asksWarrantySupport && layer3Result.preserveScopeReply) {
+            replyMessage = getWarrantyBrandMismatchReply(layer3Result.brand);
+            preserveCatalogScopeReply = true;
+          } else if (asksWarrantySupport) {
+            replyMessage = getUnverifiedWarrantyReply();
+          } else if (asksAuthenticity && layer3Result.isCatalogBrand && layer3Result.brand) {
+            authenticityBrandConfirmed = layer3Result.brand;
+            replyMessage = "";
+          } else {
+            replyMessage = layer3Result.message || getUnrecognizedImageReply();
+            if (layer3Result.preserveScopeReply) {
+              preserveCatalogScopeReply = true;
+            }
+          }
         }
+      } else {
+        replyMessage = asksWarrantySupport
+          ? getUnverifiedWarrantyReply()
+          : getUnrecognizedImageReply();
+      }
+    }
+
+    if (asksAuthenticity && !preserveCatalogScopeReply) {
+      const verifiedProduct = authenticityProductConfirmed
+        || (skuConfirmed ? getProductInfoFromAllCatalog(skuConfirmed) : null);
+      const mentionedBrand = authenticityBrandConfirmed || getMentionedCatalogBrand(messageText);
+      const isSpecificUnverifiedProduct = (imageUrls?.length || 0) > 0
+        || referencesIncomingAttachment(messageText)
+        || Boolean(getMentionedExcludedBrand(messageText))
+        || !isGeneralAuthenticityQuestion(messageText);
+
+      if (verifiedProduct) {
+        replyMessage = getVerifiedAuthenticityReply(
+          String(verifiedProduct['Mã sản phẩm'] || skuConfirmed || '').toUpperCase(),
+          verifiedProduct
+        );
+      } else if (mentionedBrand) {
+        replyMessage = getVerifiedAuthenticityReply('', { 'Thương hiệu': mentionedBrand });
+      } else {
+        replyMessage = isSpecificUnverifiedProduct
+          ? UNKNOWN_AUTHENTICITY_REPLY
+          : GENERAL_AUTHENTICITY_REPLY;
       }
     }
 
@@ -1006,9 +1853,11 @@ const processConversation = async (conversationId, messageText, imageUrls, setti
       const hasSentForm = historyRows.some(msg => msg.is_from_page && (msg.message || "").includes(`Mã Sản Phẩm: ${baseSku}`));
 
       let chatLieuDay = getChatLieuDay(sku, productInfo);
+      const shopeeLink = await getProductShopeeLink(sku, productInfo);
+      const shopeeLine = shopeeLink ? `\n\n🛒 Link Shopee: ${shopeeLink}` : '';
 
       if (hasSentForm) {
-        replyMessage = `Dạ mẫu bản màu này (${sku}) thì giá ưu đãi hiện tại là: ${productInfo["Giá sale"] || productInfo["Giá bán"]} ạ. Các thông số về kích thước, bộ máy, chống nước... hoàn toàn giống mẫu ${baseSku} em vừa gửi ở trên nha anh/chị! 🥰`;
+        replyMessage = `Dạ mẫu bản màu này (${sku}) thì giá ưu đãi hiện tại là: ${productInfo["Giá sale"] || productInfo["Giá bán"]} ạ. Các thông số về kích thước, bộ máy, chống nước... hoàn toàn giống mẫu ${baseSku} em vừa gửi ở trên nha anh/chị! 🥰${shopeeLine}`;
       } else {
         replyMessage = `Shop xin chào 🤗
 Cảm ơn chị đã quan tâm tới các sản phẩm của Shop. Dưới đây là thông tin chi tiết sản phẩm để chị tiện tham khảo ạ.
@@ -1022,11 +1871,11 @@ Cảm ơn chị đã quan tâm tới các sản phẩm của Shop. Dưới đây
 ⛓️Chất liệu dây: ${chatLieuDay}
 🔎 Kính sapphire hạn chế trầy xước.
 
-✅ Giá bán : ${productInfo["Giá sale"] || productInfo["Giá bán"] || productInfo["Giá gốc"] || "Đang cập nhật"}`;
+✅ Giá bán : ${productInfo["Giá sale"] || productInfo["Giá bán"] || productInfo["Giá gốc"] || "Đang cập nhật"}${shopeeLine}`;
 
-        if (isGenericSku) {
-          replyMessage += `|||Dạ mẫu này bên em đang có nhiều màu, anh/chị đang ưng màu nào ạ? 🥰`;
-        }
+        replyMessage += isGenericSku
+          ? `|||Dạ mẫu này bên em đang có nhiều màu, anh/chị đang ưng màu nào ạ? 🥰`
+          : `|||${PRODUCT_FOLLOW_UP_MESSAGE}`;
       }
       console.log(`✅ [Form trực tiếp] Đã sinh Form cho SKU ${sku}, bỏ qua AI text.`);
 
@@ -1047,13 +1896,14 @@ Cảm ơn chị đã quan tâm tới các sản phẩm của Shop. Dưới đây
 
           for (const url of urlsToSend) {
             const imageResult = await replyImageCRM(conversation.sender_id, url, conversation.type, conversationId);
-            const imgMsgId = imageResult?.message_id || ('msg_bot_img_' + Date.now() + Math.floor(Math.random() * 1000));
+            const imgMsgId = imageResult.message_id;
             const imgTime = new Date().toISOString();
-            await saveMessage(imgMsgId, conversationId, `📸 [Ảnh sản phẩm ${sku}]`, true, imgTime);
+            const imageMessage = `📸 Ảnh sản phẩm ${sku}\n[IMAGE: ${url}]`;
+            await saveMessage(imgMsgId, conversationId, imageMessage, true, imgTime);
             try {
               broadcastCRM('new_message', {
                 conversationId,
-                message: { id: imgMsgId, conversation_id: conversationId, message: `📸 [Ảnh sản phẩm ${sku}]`, is_from_page: 1, created_time: imgTime }
+                message: { id: imgMsgId, conversation_id: conversationId, message: imageMessage, is_from_page: 1, created_time: imgTime }
               });
             } catch (e) { /* ignore broadcast error */ }
           }
@@ -1082,19 +1932,22 @@ Cảm ơn chị đã quan tâm tới các sản phẩm của Shop. Dưới đây
       const historyRows = await getMessagesByConversation(conversationId);
       const recentHistory = historyRows.slice(-10); // Không gửi quá dài để đỡ token
 
-      const activeSkuMatch = historyRows.map(msg => msg.message).join(' ').match(/Mã Sản Phẩm: ([A-Za-z0-9]+)/i);
-      if (activeSkuMatch) {
-         const activeSku = activeSkuMatch[1];
-         const catalogPath = path.join(__dirname, '../../data/catalog.json');
-         if (fs.existsSync(catalogPath)) {
-            const allProducts = JSON.parse(fs.readFileSync(catalogPath, 'utf8'));
-            const variants = allProducts.filter(p => p['Mã sản phẩm'] && p['Mã sản phẩm'].startsWith(activeSku + '-'));
-            if (variants.length > 0) {
-               const colorMap = variants.map(v => `- ${v['Mã sản phẩm']}: Màu ${v['Màu mặt số']}`).join('\n');
-               systemImageContext += `\n[THÔNG TIN CHỌN MÀU: Khách đang quan tâm mã ${activeSku}. Các biến thể màu hiện có:\n${colorMap}\nNếu khách chọn màu, hãy dùng cú pháp [AVATAR: Mã_SKU] để gửi ảnh Avatar các bản màu đó cho khách so sánh, ví dụ: [AVATAR: ${variants[0]['Mã sản phẩm']}]. TUYỆT ĐỐI KHÔNG dùng cú pháp PRODUCT trong trường hợp này!]\n\n`;
-            }
-         }
-      }
+       const activeProductMessage = [...recentHistory].reverse().find(msg => {
+         if (!msg.is_from_page || !/Mã Sản Phẩm:\s*[A-Za-z0-9-]+/i.test(msg.message || '')) return false;
+         const createdAt = new Date(msg.created_time).getTime();
+         return Number.isFinite(createdAt) && Date.now() - createdAt <= 30 * 60 * 1000;
+       });
+       const activeSkuMatch = activeProductMessage?.message?.match(/Mã Sản Phẩm:\s*([A-Za-z0-9-]+)/i);
+       if (activeSkuMatch) {
+          const activeSku = activeSkuMatch[1];
+          const variants = getCatalogProducts().filter(
+            p => p['Mã sản phẩm'] && p['Mã sản phẩm'].startsWith(activeSku + '-')
+          );
+          if (variants.length > 0) {
+            const colorMap = variants.map(v => `- ${v['Mã sản phẩm']}: Màu ${v['Màu mặt số']}`).join('\n');
+            systemImageContext += `\n[THÔNG TIN CHỌN MÀU: Khách đang quan tâm mã ${activeSku}. Các biến thể màu hiện có:\n${colorMap}\nNếu khách chọn màu, hãy dùng cú pháp [AVATAR: Mã_SKU] để gửi ảnh Avatar các bản màu đó cho khách so sánh, ví dụ: [AVATAR: ${variants[0]['Mã sản phẩm']}]. TUYỆT ĐỐI KHÔNG dùng cú pháp PRODUCT trong trường hợp này!]\n\n`;
+          }
+       }
 
       const finalPrompt = systemImageContext + (messageText || '');
       const geminiResult = await runGeminiText(recentHistory, finalPrompt);
@@ -1116,11 +1969,12 @@ Cảm ơn chị đã quan tâm tới các sản phẩm của Shop. Dưới đây
               try {
                  console.log(`📸 Đang gửi ảnh AVT màu sắc ${avtSku} cho khách...`);
                  const imageResult = await replyImageCRM(conversation.sender_id, avtUrl, conversation.type, conversationId);
-                 const imgMsgId = imageResult?.message_id || ('msg_bot_img_' + Date.now() + Math.floor(Math.random() * 1000));
+                 const imgMsgId = imageResult.message_id;
                  const imgTime = new Date().toISOString();
-                 await saveMessage(imgMsgId, conversationId, `📸 [Ảnh AVT ${avtSku}]`, true, imgTime);
+                 const imageMessage = `📸 Ảnh AVT ${avtSku}\n[IMAGE: ${avtUrl}]`;
+                 await saveMessage(imgMsgId, conversationId, imageMessage, true, imgTime);
                  try {
-                    broadcastCRM('new_message', { conversationId, message: { id: imgMsgId, conversation_id: conversationId, message: `📸 [Ảnh AVT ${avtSku}]`, is_from_page: 1, created_time: imgTime } });
+                    broadcastCRM('new_message', { conversationId, message: { id: imgMsgId, conversation_id: conversationId, message: imageMessage, is_from_page: 1, created_time: imgTime } });
                  } catch (e) { /* ignore */ }
               } catch(e) {
                  console.error(`⚠️ Lỗi khi gửi ảnh AVT ${avtSku}:`, e.message);
@@ -1146,13 +2000,14 @@ Cảm ơn chị đã quan tâm tới các sản phẩm của Shop. Dưới đây
 
             for (const url of urlsToSend) {
               const imageResult = await replyImageCRM(conversation.sender_id, url, conversation.type, conversationId);
-              const imgMsgId = imageResult?.message_id || ('msg_bot_img_' + Date.now() + Math.floor(Math.random() * 1000));
+              const imgMsgId = imageResult.message_id;
               const imgTime = new Date().toISOString();
-              await saveMessage(imgMsgId, conversationId, `📸 [Ảnh sản phẩm ${geminiResult.sku}]`, true, imgTime);
+              const imageMessage = `📸 Ảnh sản phẩm ${geminiResult.sku}\n[IMAGE: ${url}]`;
+              await saveMessage(imgMsgId, conversationId, imageMessage, true, imgTime);
               try {
                 broadcastCRM('new_message', {
                   conversationId,
-                  message: { id: imgMsgId, conversation_id: conversationId, message: `📸 [Ảnh sản phẩm ${geminiResult.sku}]`, is_from_page: 1, created_time: imgTime }
+                  message: { id: imgMsgId, conversation_id: conversationId, message: imageMessage, is_from_page: 1, created_time: imgTime }
                 });
               } catch (e) { /* ignore */ }
             }
@@ -1163,11 +2018,12 @@ Cảm ơn chị đã quan tâm tới các sản phẩm của Shop. Dưới đây
           // Trường hợp chỉ hỏi lại biến thể (sku = null), gửi 1 ảnh catalog
           try {
             const imageResult = await replyImageCRM(conversation.sender_id, geminiResult.productImageUrl, conversation.type, conversationId);
-            const imgMsgId = imageResult?.message_id || ('msg_bot_img_' + Date.now() + Math.floor(Math.random() * 1000));
+            const imgMsgId = imageResult.message_id;
             const imgTime = new Date().toISOString();
-            await saveMessage(imgMsgId, conversationId, `📸 [Ảnh sản phẩm]`, true, imgTime);
+            const imageMessage = `📸 Ảnh sản phẩm\n[IMAGE: ${geminiResult.productImageUrl}]`;
+            await saveMessage(imgMsgId, conversationId, imageMessage, true, imgTime);
             try {
-              broadcastCRM('new_message', { conversationId, message: { id: imgMsgId, conversation_id: conversationId, message: `📸 [Ảnh sản phẩm]`, is_from_page: 1, created_time: imgTime } });
+              broadcastCRM('new_message', { conversationId, message: { id: imgMsgId, conversation_id: conversationId, message: imageMessage, is_from_page: 1, created_time: imgTime } });
             } catch (e) { /* ignore */ }
           } catch (imgErr) {
             console.error(`⚠️ Lỗi khi gửi ảnh preview:`, imgErr.message);
