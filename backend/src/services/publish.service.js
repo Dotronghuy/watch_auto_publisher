@@ -2057,6 +2057,20 @@ export const autoPublishRoutine = async (retryContext = null) => {
                   console.warn(`⚠️ FB Reels đã đăng nhưng không lưu được metric: ${metricError.message}`);
                 }
                 liveLog(`✅ [${account.name}] Đăng FB Reels thành công! (ID: ${postId})`, 'success', 'Facebook');
+
+                // --- ANDROID WORKER: TỰ ĐỘNG GẮN LINK SHOPEE CHO VIDEO/REELS ---
+                if (postId) {
+                  try {
+                    await dispatchShopeeLinkForProduct({
+                      postId,
+                      pageToken,
+                      sku: selectedSku.name,
+                      productInfo,
+                    });
+                  } catch (linkError) {
+                    console.error('Lỗi khi xếp hàng tác vụ Android Worker cho video/Reels:', linkError);
+                  }
+                }
               } catch (e) { liveLog(`❌ [${account.name}] Lỗi FB Reels: ${e.message}`, 'error', 'Facebook'); }
             }
 

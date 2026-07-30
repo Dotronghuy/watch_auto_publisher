@@ -9,6 +9,12 @@
 4. Nhập URL Shopee và tên liên kết.
 5. Bấm **Lưu** và trả kết quả về backend.
 
+Với bài video/Reels, ứng dụng tự đi qua nhánh giao diện riêng:
+
+1. **Quản lý sản phẩm**.
+2. **Thêm sản phẩm liên kết tiếp thị**.
+3. Nhập URL Shopee, tên liên kết và bấm **Lưu**.
+
 Điện thoại không cần USB hoặc kết nối chung Wi-Fi với máy tính.
 
 ## Kết nối HTTPS ổn định bằng Tailscale Funnel

@@ -72,8 +72,12 @@ class ShopeeAccessibilityService : AccessibilityService() {
             listOf(
                 "Quản lý liên kết đến sản phẩm",
                 "Thêm liên kết sản phẩm",
+                "Quản lý sản phẩm",
+                "Thêm sản phẩm liên kết tiếp thị",
                 "Manage product links",
                 "Add product link",
+                "Manage products",
+                "Add affiliate product",
             ),
         )
         if (linkManagerAlreadyVisible != null) {
@@ -164,16 +168,42 @@ class ShopeeAccessibilityService : AccessibilityService() {
             listOf(
                 "Quản lý liên kết đến sản phẩm",
                 "Thêm liên kết sản phẩm",
+                "Quản lý sản phẩm",
+                "Thêm sản phẩm liên kết tiếp thị",
                 "Manage product links",
                 "Add product link",
+                "Manage products",
+                "Add affiliate product",
             ),
         )
-        if (button != null && click(button)) {
+        if (button != null) {
+            val gestureDispatched = tapNodeByGesture(button)
+            val clicked = if (!gestureDispatched) click(button) else false
+            if (gestureDispatched || clicked) {
+                scheduleNext(1_200)
+                return
+            }
+        }
+
+        val addProductPageVisible = findBestNode(
+            root,
+            listOf(
+                "Thêm sản phẩm",
+                "Add product",
+            ),
+            exactFirst = true,
+        ) != null
+        if (addProductPageVisible) {
+            // The video/Reels flow has an extra page before the affiliate-link form.
             scheduleNext(1_200)
             return
         }
 
-        failStepAfter(active, 20_000, "Không tìm thấy mục Quản lý liên kết đến sản phẩm")
+        failStepAfter(
+            active,
+            30_000,
+            "Không tìm thấy mục Quản lý liên kết sản phẩm hoặc Thêm sản phẩm liên kết tiếp thị",
+        )
     }
 
     private fun fillUrl(root: AccessibilityNodeInfo, active: ActiveJob) {
