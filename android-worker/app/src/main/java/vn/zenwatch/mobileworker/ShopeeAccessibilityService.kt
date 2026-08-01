@@ -114,7 +114,7 @@ class ShopeeAccessibilityService : AccessibilityService() {
 
         val semanticTapAttempts = menuSemanticTapAttempts[fallbackKey] ?: 0
         val fallbackTapAttempts = menuFallbackTapAttempts[fallbackKey] ?: 0
-        val fullscreenReel = looksLikeFullscreenReel(root)
+        val fullscreenReel = isVideoJob(active) || looksLikeFullscreenReel(root)
         val button = findFullscreenReelMenuButton(root) ?: if (!fullscreenReel) {
             findBestNode(root, POST_MENU_BUTTON_KEYWORDS)
         } else {
@@ -135,12 +135,21 @@ class ShopeeAccessibilityService : AccessibilityService() {
         }
 
         val anchorYFraction = findPostHeaderAnchorYFraction(root)
-        val tapTargets = postMenuTapTargets(anchorYFraction, fullscreenReel)
+        val reelCaptionYFraction = if (fullscreenReel) {
+            findReelCaptionYFraction(root)
+        } else {
+            null
+        }
+        val tapTargets = postMenuTapTargets(
+            anchorYFraction,
+            fullscreenReel,
+            reelCaptionYFraction,
+        )
         if (
             elapsedInStep(active) >= 1_500
             && fallbackTapAttempts < tapTargets.size
         ) {
-            val geometryButton = if (fallbackTapAttempts == 0) {
+            val geometryButton = if (fallbackTapAttempts == 0 && !fullscreenReel) {
                 findPostMenuByGeometry(root, anchorYFraction, fullscreenReel)
             } else {
                 null
@@ -474,12 +483,62 @@ class ShopeeAccessibilityService : AccessibilityService() {
             .minOrNull()
     }
 
+    private fun findReelCaptionYFraction(root: AccessibilityNodeInfo): Float? {
+        val nodes = mutableListOf<AccessibilityNodeInfo>()
+        collectNodes(root, nodes)
+
+        val height = resources.displayMetrics.heightPixels
+        if (height <= 0) return null
+
+        return nodes
+            .asSequence()
+            .filter { it.isVisibleToUser }
+            .mapNotNull { node ->
+                val label = nodeLabel(node).trim()
+                if (
+                    !label.contains("xem thêm", ignoreCase = true)
+                    && !label.contains("see more", ignoreCase = true)
+                ) {
+                    return@mapNotNull null
+                }
+
+                val bounds = Rect()
+                node.getBoundsInScreen(bounds)
+                if (
+                    bounds.isEmpty
+                    || bounds.centerY() < height * 0.58f
+                    || bounds.centerY() > height * 0.92f
+                ) {
+                    null
+                } else {
+                    Triple(label.length, bounds.centerY(), bounds.centerY().toFloat() / height)
+                }
+            }
+            .sortedWith(
+                compareBy<Triple<Int, Int, Float>> { it.first }
+                    .thenByDescending { it.second },
+            )
+            .firstOrNull()
+            ?.third
+    }
+
+    private fun isVideoJob(active: ActiveJob): Boolean {
+        val url = active.job.postUrl.lowercase()
+        return VIDEO_URL_HINTS.any { url.contains(it) }
+    }
+
     private fun postMenuTapTargets(
         anchorYFraction: Float?,
         fullscreenReel: Boolean,
+        reelCaptionYFraction: Float?,
     ): List<Float> {
         val targets = mutableListOf<Float>()
         if (fullscreenReel) {
+            if (reelCaptionYFraction != null) {
+                listOf(0f, -0.012f, 0.012f).forEach { offset ->
+                    targets += (reelCaptionYFraction + offset).coerceIn(0.68f, 0.91f)
+                }
+            }
             targets += REEL_MENU_TAP_Y_FRACTIONS.toList()
         }
         if (anchorYFraction != null) {
@@ -828,6 +887,17 @@ class ShopeeAccessibilityService : AccessibilityService() {
             "save reel",
             "remix thước phim",
             "remix this reel",
+        )
+        private val VIDEO_URL_HINTS = listOf(
+            "/reel/",
+            "/reels/",
+            "/videos/",
+            "/watch/",
+            "watch?v=",
+            "video.php",
+            "fb.watch/",
+            "/share/r/",
+            "/share/v/",
         )
         private val REEL_OPTIONS_LABEL_HINTS = listOf(
             "Lưu thước phim",
