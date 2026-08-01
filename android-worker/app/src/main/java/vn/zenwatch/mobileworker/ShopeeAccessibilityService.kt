@@ -2,19 +2,27 @@ package vn.zenwatch.mobileworker
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
+import android.graphics.Bitmap
 import android.graphics.Path
+import android.graphics.PointF
 import android.graphics.Rect
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.view.Display
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import kotlin.math.abs
+import kotlin.math.max
 
 class ShopeeAccessibilityService : AccessibilityService() {
     private val handler = Handler(Looper.getMainLooper())
     private val processRunnable = Runnable { processCurrentStep() }
     private val menuSemanticTapAttempts = mutableMapOf<String, Int>()
     private val menuFallbackTapAttempts = mutableMapOf<String, Int>()
+    private val reelScreenshotAttempts = mutableMapOf<String, Int>()
+    private val reelScreenshotInFlight = mutableSetOf<String>()
     private val reelOptionsScrollAttempts = mutableMapOf<String, Int>()
     private val affiliateProductTapAttempts = mutableMapOf<String, Int>()
     private val saveFallbackAttempts = mutableSetOf<String>()
@@ -115,30 +123,27 @@ class ShopeeAccessibilityService : AccessibilityService() {
         val semanticTapAttempts = menuSemanticTapAttempts[fallbackKey] ?: 0
         val fallbackTapAttempts = menuFallbackTapAttempts[fallbackKey] ?: 0
         val fullscreenReel = isVideoJob(active) || looksLikeFullscreenReel(root)
-        val reelCaptionYFraction = if (fullscreenReel) {
-            findReelCaptionYFraction(root)
-        } else {
-            null
-        }
         val anchorYFraction = findPostHeaderAnchorYFraction(root)
-        val tapTargets = postMenuTapTargets(
-            anchorYFraction,
-            fullscreenReel,
-            reelCaptionYFraction,
-        )
+        val tapTargets = postMenuTapTargets(anchorYFraction)
 
-        // On full-screen Reels Facebook sometimes exposes one huge accessibility
-        // node for the player and calls it "more options". Tapping its centre pauses
-        // the video. The post-specific dots are consistently on the same row as the
-        // lower "xem them / see more" caption, so use that measured coordinate first.
+        // Facebook does not reliably expose the lower Reel ellipsis as an
+        // accessibility node. Coordinate guesses can hit the bookmark/save button
+        // above it, so locate the three bright dots from a temporary screenshot and
+        // tap the detected centre instead. Never sweep guessed Reel coordinates.
         if (
             fullscreenReel
             && elapsedInStep(active) >= 900
-            && fallbackTapAttempts < tapTargets.size
         ) {
-            menuFallbackTapAttempts[fallbackKey] = fallbackTapAttempts + 1
-            if (tapPostMenuByGesture(tapTargets[fallbackTapAttempts])) {
-                scheduleNext(1_200)
+            val screenshotAttempts = reelScreenshotAttempts[fallbackKey] ?: 0
+            if (
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
+                && screenshotAttempts < REEL_SCREENSHOT_TAP_LIMIT
+            ) {
+                if (reelScreenshotInFlight.add(fallbackKey)) {
+                    reelScreenshotAttempts[fallbackKey] = screenshotAttempts + 1
+                    captureAndTapReelMenu(fallbackKey)
+                }
+                scheduleNext(REEL_SCREENSHOT_SETTLE_MS)
                 return
             }
         }
@@ -501,64 +506,13 @@ class ShopeeAccessibilityService : AccessibilityService() {
             .minOrNull()
     }
 
-    private fun findReelCaptionYFraction(root: AccessibilityNodeInfo): Float? {
-        val nodes = mutableListOf<AccessibilityNodeInfo>()
-        collectNodes(root, nodes)
-
-        val height = resources.displayMetrics.heightPixels
-        if (height <= 0) return null
-
-        return nodes
-            .asSequence()
-            .filter { it.isVisibleToUser }
-            .mapNotNull { node ->
-                val label = nodeLabel(node).trim()
-                if (
-                    !label.contains("xem thêm", ignoreCase = true)
-                    && !label.contains("see more", ignoreCase = true)
-                ) {
-                    return@mapNotNull null
-                }
-
-                val bounds = Rect()
-                node.getBoundsInScreen(bounds)
-                if (
-                    bounds.isEmpty
-                    || bounds.centerY() < height * 0.58f
-                    || bounds.centerY() > height * 0.92f
-                ) {
-                    null
-                } else {
-                    Triple(label.length, bounds.centerY(), bounds.centerY().toFloat() / height)
-                }
-            }
-            .sortedWith(
-                compareBy<Triple<Int, Int, Float>> { it.first }
-                    .thenByDescending { it.second },
-            )
-            .firstOrNull()
-            ?.third
-    }
-
     private fun isVideoJob(active: ActiveJob): Boolean {
         val url = active.job.postUrl.lowercase()
         return VIDEO_URL_HINTS.any { url.contains(it) }
     }
 
-    private fun postMenuTapTargets(
-        anchorYFraction: Float?,
-        fullscreenReel: Boolean,
-        reelCaptionYFraction: Float?,
-    ): List<Float> {
+    private fun postMenuTapTargets(anchorYFraction: Float?): List<Float> {
         val targets = mutableListOf<Float>()
-        if (fullscreenReel) {
-            if (reelCaptionYFraction != null) {
-                listOf(0f, -0.012f, 0.012f).forEach { offset ->
-                    targets += (reelCaptionYFraction + offset).coerceIn(0.68f, 0.91f)
-                }
-            }
-            targets += REEL_MENU_TAP_Y_FRACTIONS.toList()
-        }
         if (anchorYFraction != null) {
             listOf(-0.035f, 0f, 0.035f, 0.07f).forEach { offset ->
                 targets += (anchorYFraction + offset).coerceIn(0.12f, 0.48f)
@@ -745,13 +699,210 @@ class ShopeeAccessibilityService : AccessibilityService() {
     private fun tapPostMenuByGesture(yFraction: Float): Boolean {
         val width = resources.displayMetrics.widthPixels.toFloat()
         val height = resources.displayMetrics.heightPixels.toFloat()
-        val path = Path().apply {
-            moveTo(width * REEL_MENU_X_FRACTION, height * yFraction)
-        }
+        return tapScreenPoint(width * POST_MENU_X_FRACTION, height * yFraction)
+    }
+
+    private fun tapScreenPoint(x: Float, y: Float): Boolean {
+        val path = Path().apply { moveTo(x, y) }
         val gesture = GestureDescription.Builder()
             .addStroke(GestureDescription.StrokeDescription(path, 0, 120))
             .build()
         return dispatchGesture(gesture, null, null)
+    }
+
+    private fun captureAndTapReelMenu(fallbackKey: String) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            reelScreenshotInFlight.remove(fallbackKey)
+            return
+        }
+
+        takeScreenshot(
+            Display.DEFAULT_DISPLAY,
+            mainExecutor,
+            object : TakeScreenshotCallback {
+                override fun onSuccess(screenshot: ScreenshotResult) {
+                    reelScreenshotInFlight.remove(fallbackKey)
+                    val hardwareBuffer = screenshot.hardwareBuffer
+                    val bitmap = try {
+                        Bitmap.wrapHardwareBuffer(hardwareBuffer, screenshot.colorSpace)
+                            ?.copy(Bitmap.Config.ARGB_8888, false)
+                    } finally {
+                        hardwareBuffer.close()
+                    }
+
+                    if (bitmap == null) {
+                        scheduleNext(REEL_SCREENSHOT_RETRY_MS)
+                        return
+                    }
+
+                    val target = try {
+                        findReelEllipsisCenter(bitmap)
+                    } finally {
+                        bitmap.recycle()
+                    }
+
+                    if (target != null && tapScreenPoint(target.x, target.y)) {
+                        scheduleNext(1_200)
+                    } else {
+                        scheduleNext(REEL_SCREENSHOT_RETRY_MS)
+                    }
+                }
+
+                override fun onFailure(errorCode: Int) {
+                    reelScreenshotInFlight.remove(fallbackKey)
+                    scheduleNext(REEL_SCREENSHOT_RETRY_MS)
+                }
+            },
+        )
+    }
+
+    private data class BrightBlob(
+        val centerX: Float,
+        val centerY: Float,
+        val width: Int,
+        val height: Int,
+        val area: Int,
+    )
+
+    /**
+     * Finds the three separate bright circles used by Facebook's lower Reel menu.
+     * The crop excludes the top page menu and the vertical reaction controls. A
+     * bookmark outline is one large component, so it cannot satisfy the triple-dot
+     * shape and will never be selected as the target.
+     */
+    private fun findReelEllipsisCenter(bitmap: Bitmap): PointF? {
+        val screenWidth = bitmap.width
+        val screenHeight = bitmap.height
+        if (screenWidth <= 0 || screenHeight <= 0) return null
+
+        val cropLeft = (screenWidth * REEL_ELLIPSIS_CROP_LEFT).toInt()
+        val cropTop = (screenHeight * REEL_ELLIPSIS_CROP_TOP).toInt()
+        val cropRight = (screenWidth * REEL_ELLIPSIS_CROP_RIGHT).toInt()
+        val cropBottom = (screenHeight * REEL_ELLIPSIS_CROP_BOTTOM).toInt()
+        val cropWidth = cropRight - cropLeft
+        val cropHeight = cropBottom - cropTop
+        if (cropWidth <= 0 || cropHeight <= 0) return null
+
+        val pixels = IntArray(cropWidth * cropHeight)
+        bitmap.getPixels(pixels, 0, cropWidth, cropLeft, cropTop, cropWidth, cropHeight)
+        val visited = BooleanArray(pixels.size)
+        val queue = IntArray(pixels.size)
+        val blobs = mutableListOf<BrightBlob>()
+        val minDotArea = max(4, screenWidth / 180)
+        val maxDotArea = max(180, screenWidth * screenHeight / 2_500)
+        val maxDotDiameter = max(16, screenWidth / 28)
+
+        fun isBright(index: Int): Boolean {
+            val color = pixels[index]
+            val alpha = color ushr 24 and 0xff
+            val red = color ushr 16 and 0xff
+            val green = color ushr 8 and 0xff
+            val blue = color and 0xff
+            return alpha >= 200 && red >= 205 && green >= 205 && blue >= 205
+        }
+
+        pixels.indices.forEach { start ->
+            if (visited[start] || !isBright(start)) return@forEach
+            visited[start] = true
+            var queueHead = 0
+            var queueTail = 0
+            queue[queueTail++] = start
+            var area = 0
+            var minX = cropWidth
+            var maxX = 0
+            var minY = cropHeight
+            var maxY = 0
+            var sumX = 0L
+            var sumY = 0L
+
+            while (queueHead < queueTail) {
+                val current = queue[queueHead++]
+                val x = current % cropWidth
+                val y = current / cropWidth
+                area += 1
+                sumX += x
+                sumY += y
+                minX = minOf(minX, x)
+                maxX = maxOf(maxX, x)
+                minY = minOf(minY, y)
+                maxY = maxOf(maxY, y)
+
+                for (dy in -1..1) {
+                    for (dx in -1..1) {
+                        if (dx == 0 && dy == 0) continue
+                        val nextX = x + dx
+                        val nextY = y + dy
+                        if (nextX !in 0 until cropWidth || nextY !in 0 until cropHeight) continue
+                        val next = nextY * cropWidth + nextX
+                        if (!visited[next] && isBright(next)) {
+                            visited[next] = true
+                            queue[queueTail++] = next
+                        }
+                    }
+                }
+            }
+
+            val blobWidth = maxX - minX + 1
+            val blobHeight = maxY - minY + 1
+            if (
+                area in minDotArea..maxDotArea
+                && blobWidth <= maxDotDiameter
+                && blobHeight <= maxDotDiameter
+            ) {
+                blobs += BrightBlob(
+                    centerX = cropLeft + sumX.toFloat() / area,
+                    centerY = cropTop + sumY.toFloat() / area,
+                    width = blobWidth,
+                    height = blobHeight,
+                    area = area,
+                )
+            }
+        }
+
+        val candidates = blobs
+            .filter {
+                it.centerX >= screenWidth * REEL_ELLIPSIS_MIN_X
+                    && it.centerY >= screenHeight * REEL_ELLIPSIS_MIN_Y
+                    && it.centerY <= screenHeight * REEL_ELLIPSIS_MAX_Y
+            }
+            .sortedBy { it.centerX }
+        val yTolerance = max(7f, screenHeight * 0.008f)
+        val minGap = max(4f, screenWidth * 0.006f)
+        val maxGap = max(28f, screenWidth * 0.045f)
+        val gapTolerance = max(6f, screenWidth * 0.012f)
+        var bestTarget: PointF? = null
+        var bestScore = Float.MAX_VALUE
+
+        for (firstIndex in 0 until candidates.size - 2) {
+            for (secondIndex in firstIndex + 1 until candidates.size - 1) {
+                for (thirdIndex in secondIndex + 1 until candidates.size) {
+                    val first = candidates[firstIndex]
+                    val second = candidates[secondIndex]
+                    val third = candidates[thirdIndex]
+                    val minY = minOf(first.centerY, second.centerY, third.centerY)
+                    val maxY = maxOf(first.centerY, second.centerY, third.centerY)
+                    if (maxY - minY > yTolerance) continue
+
+                    val firstGap = second.centerX - first.centerX
+                    val secondGap = third.centerX - second.centerX
+                    if (firstGap !in minGap..maxGap || secondGap !in minGap..maxGap) continue
+                    if (abs(firstGap - secondGap) > gapTolerance) continue
+
+                    val centerX = (first.centerX + second.centerX + third.centerX) / 3f
+                    val centerY = (first.centerY + second.centerY + third.centerY) / 3f
+                    val sizeDifference = abs(first.area - second.area) + abs(second.area - third.area)
+                    val score = abs(centerY - screenHeight * REEL_ELLIPSIS_EXPECTED_Y)
+                        + abs(centerX - screenWidth * REEL_ELLIPSIS_EXPECTED_X) * 0.4f
+                        + abs(firstGap - secondGap) * 2f
+                        + sizeDifference * 0.15f
+                    if (score < bestScore) {
+                        bestScore = score
+                        bestTarget = PointF(centerX, centerY)
+                    }
+                }
+            }
+        }
+        return bestTarget
     }
 
     private fun tapSaveByGesture(): Boolean {
@@ -867,16 +1018,26 @@ class ShopeeAccessibilityService : AccessibilityService() {
 
     companion object {
         private const val POST_MENU_SEMANTIC_TAP_LIMIT = 3
+        private const val REEL_SCREENSHOT_TAP_LIMIT = 4
         private const val REEL_OPTIONS_SCROLL_LIMIT = 5
         private const val AFFILIATE_PRODUCT_TAP_LIMIT = 3
         private const val VERIFY_FORM_CLOSED_SUCCESS_MS = 5_000L
         private const val FACEBOOK_PACKAGE = "com.facebook.katana"
         private const val EVENT_SETTLE_MS = 600L
         private const val ROOT_RETRY_MS = 500L
-        private const val REEL_MENU_X_FRACTION = 0.936f
+        private const val REEL_SCREENSHOT_SETTLE_MS = 1_800L
+        private const val REEL_SCREENSHOT_RETRY_MS = 450L
+        private const val POST_MENU_X_FRACTION = 0.936f
         private const val REEL_MENU_PRIMARY_Y_FRACTION = 0.80f
-        private val REEL_MENU_TAP_Y_FRACTIONS =
-            floatArrayOf(0.80f, 0.84f, 0.82f, 0.86f, 0.78f)
+        private const val REEL_ELLIPSIS_CROP_LEFT = 0.84f
+        private const val REEL_ELLIPSIS_CROP_RIGHT = 0.995f
+        private const val REEL_ELLIPSIS_CROP_TOP = 0.65f
+        private const val REEL_ELLIPSIS_CROP_BOTTOM = 0.91f
+        private const val REEL_ELLIPSIS_MIN_X = 0.86f
+        private const val REEL_ELLIPSIS_MIN_Y = 0.69f
+        private const val REEL_ELLIPSIS_MAX_Y = 0.89f
+        private const val REEL_ELLIPSIS_EXPECTED_X = 0.936f
+        private const val REEL_ELLIPSIS_EXPECTED_Y = 0.80f
         private val MENU_TAP_Y_FRACTIONS =
             floatArrayOf(0.16f, 0.20f, 0.24f, 0.28f, 0.32f, 0.36f, 0.40f)
         private val POST_MENU_BUTTON_KEYWORDS = listOf(
