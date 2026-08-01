@@ -115,6 +115,34 @@ class ShopeeAccessibilityService : AccessibilityService() {
         val semanticTapAttempts = menuSemanticTapAttempts[fallbackKey] ?: 0
         val fallbackTapAttempts = menuFallbackTapAttempts[fallbackKey] ?: 0
         val fullscreenReel = isVideoJob(active) || looksLikeFullscreenReel(root)
+        val reelCaptionYFraction = if (fullscreenReel) {
+            findReelCaptionYFraction(root)
+        } else {
+            null
+        }
+        val anchorYFraction = findPostHeaderAnchorYFraction(root)
+        val tapTargets = postMenuTapTargets(
+            anchorYFraction,
+            fullscreenReel,
+            reelCaptionYFraction,
+        )
+
+        // On full-screen Reels Facebook sometimes exposes one huge accessibility
+        // node for the player and calls it "more options". Tapping its centre pauses
+        // the video. The post-specific dots are consistently on the same row as the
+        // lower "xem them / see more" caption, so use that measured coordinate first.
+        if (
+            fullscreenReel
+            && elapsedInStep(active) >= 900
+            && fallbackTapAttempts < tapTargets.size
+        ) {
+            menuFallbackTapAttempts[fallbackKey] = fallbackTapAttempts + 1
+            if (tapPostMenuByGesture(tapTargets[fallbackTapAttempts])) {
+                scheduleNext(1_200)
+                return
+            }
+        }
+
         val button = findFullscreenReelMenuButton(root) ?: if (!fullscreenReel) {
             findBestNode(root, POST_MENU_BUTTON_KEYWORDS)
         } else {
@@ -134,19 +162,9 @@ class ShopeeAccessibilityService : AccessibilityService() {
             return
         }
 
-        val anchorYFraction = findPostHeaderAnchorYFraction(root)
-        val reelCaptionYFraction = if (fullscreenReel) {
-            findReelCaptionYFraction(root)
-        } else {
-            null
-        }
-        val tapTargets = postMenuTapTargets(
-            anchorYFraction,
-            fullscreenReel,
-            reelCaptionYFraction,
-        )
         if (
-            elapsedInStep(active) >= 1_500
+            !fullscreenReel
+            && elapsedInStep(active) >= 1_500
             && fallbackTapAttempts < tapTargets.size
         ) {
             val geometryButton = if (fallbackTapAttempts == 0 && !fullscreenReel) {
@@ -635,9 +653,11 @@ class ShopeeAccessibilityService : AccessibilityService() {
                 val semanticMatch = REEL_MENU_LABEL_HINTS.any { label.contains(it) }
                 if (
                     bounds.isEmpty
-                    || bounds.centerX() < width * 0.72f
+                    || bounds.centerX() < width * 0.86f
                     || bounds.centerY() < height * 0.62f
                     || bounds.centerY() > height * 0.92f
+                    || bounds.width() > width * 0.20f
+                    || bounds.height() > height * 0.10f
                     || !semanticMatch
                 ) {
                     null
@@ -726,7 +746,7 @@ class ShopeeAccessibilityService : AccessibilityService() {
         val width = resources.displayMetrics.widthPixels.toFloat()
         val height = resources.displayMetrics.heightPixels.toFloat()
         val path = Path().apply {
-            moveTo(width * 0.93f, height * yFraction)
+            moveTo(width * REEL_MENU_X_FRACTION, height * yFraction)
         }
         val gesture = GestureDescription.Builder()
             .addStroke(GestureDescription.StrokeDescription(path, 0, 120))
@@ -762,8 +782,10 @@ class ShopeeAccessibilityService : AccessibilityService() {
         val width = resources.displayMetrics.widthPixels.toFloat()
         val height = resources.displayMetrics.heightPixels.toFloat()
         val path = Path().apply {
-            moveTo(width * 0.50f, height * 0.80f)
-            lineTo(width * 0.50f, height * 0.36f)
+            // A controlled upward finger swipe moves the bottom-sheet contents just
+            // enough to reveal "Quản lý sản phẩm" without skipping past the row.
+            moveTo(width * 0.50f, height * 0.82f)
+            lineTo(width * 0.50f, height * 0.50f)
         }
         val gesture = GestureDescription.Builder()
             .addStroke(GestureDescription.StrokeDescription(path, 0, 480))
@@ -851,8 +873,10 @@ class ShopeeAccessibilityService : AccessibilityService() {
         private const val FACEBOOK_PACKAGE = "com.facebook.katana"
         private const val EVENT_SETTLE_MS = 600L
         private const val ROOT_RETRY_MS = 500L
-        private const val REEL_MENU_PRIMARY_Y_FRACTION = 0.84f
-        private val REEL_MENU_TAP_Y_FRACTIONS = floatArrayOf(0.84f, 0.81f, 0.87f)
+        private const val REEL_MENU_X_FRACTION = 0.936f
+        private const val REEL_MENU_PRIMARY_Y_FRACTION = 0.80f
+        private val REEL_MENU_TAP_Y_FRACTIONS =
+            floatArrayOf(0.80f, 0.84f, 0.82f, 0.86f, 0.78f)
         private val MENU_TAP_Y_FRACTIONS =
             floatArrayOf(0.16f, 0.20f, 0.24f, 0.28f, 0.32f, 0.36f, 0.40f)
         private val POST_MENU_BUTTON_KEYWORDS = listOf(
