@@ -15,6 +15,7 @@ class ShopeeAccessibilityService : AccessibilityService() {
     private val processRunnable = Runnable { processCurrentStep() }
     private val menuSemanticTapAttempts = mutableMapOf<String, Int>()
     private val menuFallbackTapAttempts = mutableMapOf<String, Int>()
+    private val reelOptionsScrollAttempts = mutableMapOf<String, Int>()
     private val affiliateProductTapAttempts = mutableMapOf<String, Int>()
     private val saveFallbackAttempts = mutableSetOf<String>()
 
@@ -80,6 +81,7 @@ class ShopeeAccessibilityService : AccessibilityService() {
                 "Manage products",
                 "Add affiliate product",
             ),
+            visibleOnly = true,
         )
         if (linkManagerAlreadyVisible != null) {
             JobStore.setStep(this, AutomationStep.OPEN_LINK_MANAGER)
@@ -88,25 +90,39 @@ class ShopeeAccessibilityService : AccessibilityService() {
         }
 
         val fallbackKey = "${active.job.id}:${active.job.attempt}"
+
+        // Full-screen Reels opens a tall bottom sheet. The product-management row
+        // is below the first viewport, so scroll the already-open sheet instead of
+        // tapping another three-dot button behind it.
+        val priorReelScrollAttempts = reelOptionsScrollAttempts[fallbackKey] ?: 0
+        if (isReelOptionsMenuVisible(root) || priorReelScrollAttempts > 0) {
+            val scrollAttempts = priorReelScrollAttempts
+            if (scrollAttempts < REEL_OPTIONS_SCROLL_LIMIT) {
+                reelOptionsScrollAttempts[fallbackKey] = scrollAttempts + 1
+                if (swipeReelOptionsUp()) {
+                    scheduleNext(1_200)
+                    return
+                }
+            }
+            failStepAfter(
+                active,
+                45_000,
+                "Đã mở tùy chọn Reels nhưng không tìm thấy mục Quản lý sản phẩm sau khi cuộn",
+            )
+            return
+        }
+
         val semanticTapAttempts = menuSemanticTapAttempts[fallbackKey] ?: 0
         val fallbackTapAttempts = menuFallbackTapAttempts[fallbackKey] ?: 0
-        val button = findBestNode(
-            root,
-            listOf(
-                "Lựa chọn khác cho bài viết",
-                "Lựa chọn khác",
-                "Tùy chọn khác",
-                "Tùy chọn bài viết",
-                "Hành động đối với bài viết",
-                "More options",
-                "Actions for this post",
-                "Post options",
-                "feed_story_header_more",
-                "story_header_more",
-                "post_header_more",
-                "more_button",
-            ),
-        )
+        val fullscreenReel = looksLikeFullscreenReel(root)
+        val button = findFullscreenReelMenuButton(root) ?: if (!fullscreenReel) {
+            findBestNode(root, POST_MENU_BUTTON_KEYWORDS)
+        } else {
+            // In Reels there is also a page-level three-dot button at the top.
+            // If the lower post button is absent from the accessibility tree, use
+            // the measured lower-right coordinate rather than clicking the top one.
+            null
+        }
         if (button != null && semanticTapAttempts < POST_MENU_SEMANTIC_TAP_LIMIT) {
             // Facebook can report ACTION_CLICK as accepted without actually opening
             // the menu. Dispatch a real accessibility gesture at the detected node
@@ -119,13 +135,13 @@ class ShopeeAccessibilityService : AccessibilityService() {
         }
 
         val anchorYFraction = findPostHeaderAnchorYFraction(root)
-        val tapTargets = postMenuTapTargets(anchorYFraction)
+        val tapTargets = postMenuTapTargets(anchorYFraction, fullscreenReel)
         if (
             elapsedInStep(active) >= 1_500
             && fallbackTapAttempts < tapTargets.size
         ) {
             val geometryButton = if (fallbackTapAttempts == 0) {
-                findPostMenuByGeometry(root, anchorYFraction)
+                findPostMenuByGeometry(root, anchorYFraction, fullscreenReel)
             } else {
                 null
             }
@@ -174,6 +190,7 @@ class ShopeeAccessibilityService : AccessibilityService() {
                 "Add affiliate product",
             ),
             exactFirst = true,
+            visibleOnly = true,
         )
         if (affiliateProductButton != null) {
             val gestureDispatched = tapNodeByGesture(affiliateProductButton)
@@ -191,6 +208,7 @@ class ShopeeAccessibilityService : AccessibilityService() {
                 "Add product",
             ),
             exactFirst = true,
+            visibleOnly = true,
         ) != null
         if (addProductPageVisible) {
             // Some Facebook versions draw the affiliate row but omit it from the
@@ -219,6 +237,7 @@ class ShopeeAccessibilityService : AccessibilityService() {
                 "Manage products",
             ),
             exactFirst = true,
+            visibleOnly = true,
         )
         if (linkManagerButton != null) {
             val gestureDispatched = tapNodeByGesture(linkManagerButton)
@@ -379,20 +398,23 @@ class ShopeeAccessibilityService : AccessibilityService() {
         root: AccessibilityNodeInfo,
         keywords: List<String>,
         exactFirst: Boolean = false,
+        visibleOnly: Boolean = false,
     ): AccessibilityNodeInfo? {
         val nodes = mutableListOf<AccessibilityNodeInfo>()
         collectNodes(root, nodes)
 
         if (exactFirst) {
             nodes.firstOrNull { node ->
-                keywords.any { keyword -> nodeLabel(node).trim().equals(keyword, true) }
+                (!visibleOnly || node.isVisibleToUser)
+                    && keywords.any { keyword -> nodeLabel(node).trim().equals(keyword, true) }
             }?.let { return it }
         }
 
         return nodes
             .filter { node ->
                 val label = nodeLabel(node)
-                keywords.any { keyword -> label.contains(keyword, ignoreCase = true) }
+                (!visibleOnly || node.isVisibleToUser)
+                    && keywords.any { keyword -> label.contains(keyword, ignoreCase = true) }
             }
             .sortedBy { node ->
                 val bounds = Rect()
@@ -452,8 +474,14 @@ class ShopeeAccessibilityService : AccessibilityService() {
             .minOrNull()
     }
 
-    private fun postMenuTapTargets(anchorYFraction: Float?): List<Float> {
+    private fun postMenuTapTargets(
+        anchorYFraction: Float?,
+        fullscreenReel: Boolean,
+    ): List<Float> {
         val targets = mutableListOf<Float>()
+        if (fullscreenReel) {
+            targets += REEL_MENU_TAP_Y_FRACTIONS.toList()
+        }
         if (anchorYFraction != null) {
             listOf(-0.035f, 0f, 0.035f, 0.07f).forEach { offset ->
                 targets += (anchorYFraction + offset).coerceIn(0.12f, 0.48f)
@@ -466,6 +494,7 @@ class ShopeeAccessibilityService : AccessibilityService() {
     private fun findPostMenuByGeometry(
         root: AccessibilityNodeInfo,
         anchorYFraction: Float?,
+        fullscreenReel: Boolean,
     ): AccessibilityNodeInfo? {
         val nodes = mutableListOf<AccessibilityNodeInfo>()
         collectNodes(root, nodes)
@@ -473,7 +502,10 @@ class ShopeeAccessibilityService : AccessibilityService() {
         val width = resources.displayMetrics.widthPixels
         val height = resources.displayMetrics.heightPixels
         val targetX = width * 0.93f
-        val targetY = height * (anchorYFraction ?: 0.22f)
+        val targetY = height * when {
+            fullscreenReel -> REEL_MENU_PRIMARY_Y_FRACTION
+            else -> anchorYFraction ?: 0.22f
+        }
 
         return nodes
             .asSequence()
@@ -485,7 +517,9 @@ class ShopeeAccessibilityService : AccessibilityService() {
                     bounds.isEmpty
                     || bounds.centerX() < width * 0.75f
                     || bounds.top < height * 0.08f
-                    || bounds.bottom > height * 0.52f
+                    || (!fullscreenReel && bounds.bottom > height * 0.52f)
+                    || (fullscreenReel && bounds.centerY() < height * 0.62f)
+                    || bounds.bottom > height * 0.92f
                     || bounds.width() > width * 0.26f
                     || bounds.height() > height * 0.14f
                 ) {
@@ -520,6 +554,76 @@ class ShopeeAccessibilityService : AccessibilityService() {
             }
             .minByOrNull { it.second }
             ?.first
+    }
+
+    private fun findFullscreenReelMenuButton(
+        root: AccessibilityNodeInfo,
+    ): AccessibilityNodeInfo? {
+        val nodes = mutableListOf<AccessibilityNodeInfo>()
+        collectNodes(root, nodes)
+
+        val width = resources.displayMetrics.widthPixels
+        val height = resources.displayMetrics.heightPixels
+        if (width <= 0 || height <= 0) return null
+
+        return nodes
+            .asSequence()
+            .filter { it.isVisibleToUser }
+            .mapNotNull { node ->
+                val bounds = Rect()
+                node.getBoundsInScreen(bounds)
+                val label = nodeLabel(node).lowercase()
+                val semanticMatch = REEL_MENU_LABEL_HINTS.any { label.contains(it) }
+                if (
+                    bounds.isEmpty
+                    || bounds.centerX() < width * 0.72f
+                    || bounds.centerY() < height * 0.62f
+                    || bounds.centerY() > height * 0.92f
+                    || !semanticMatch
+                ) {
+                    null
+                } else {
+                    node
+                }
+            }
+            .maxByOrNull { node ->
+                val bounds = Rect()
+                node.getBoundsInScreen(bounds)
+                bounds.centerY()
+            }
+    }
+
+    private fun looksLikeFullscreenReel(root: AccessibilityNodeInfo): Boolean {
+        val nodes = mutableListOf<AccessibilityNodeInfo>()
+        collectNodes(root, nodes)
+
+        val height = resources.displayMetrics.heightPixels
+        if (height <= 0) return false
+
+        return nodes.any { node ->
+            if (!node.isVisibleToUser) return@any false
+            val label = nodeLabel(node).lowercase()
+            if (REEL_SCREEN_LABEL_HINTS.any { label.contains(it) }) {
+                return@any true
+            }
+
+            val bounds = Rect()
+            node.getBoundsInScreen(bounds)
+            bounds.centerY() > height * 0.62f && (
+                label.contains("xem thêm")
+                    || label.contains("see more")
+            )
+        }
+    }
+
+    private fun isReelOptionsMenuVisible(root: AccessibilityNodeInfo): Boolean {
+        val nodes = mutableListOf<AccessibilityNodeInfo>()
+        collectNodes(root, nodes)
+        return nodes.any { node ->
+            node.isVisibleToUser && REEL_OPTIONS_LABEL_HINTS.any { keyword ->
+                nodeLabel(node).contains(keyword, ignoreCase = true)
+            }
+        }
     }
 
     private fun postMenuDiagnostics(root: AccessibilityNodeInfo): String {
@@ -591,6 +695,19 @@ class ShopeeAccessibilityService : AccessibilityService() {
         }
         val gesture = GestureDescription.Builder()
             .addStroke(GestureDescription.StrokeDescription(path, 0, 120))
+            .build()
+        return dispatchGesture(gesture, null, null)
+    }
+
+    private fun swipeReelOptionsUp(): Boolean {
+        val width = resources.displayMetrics.widthPixels.toFloat()
+        val height = resources.displayMetrics.heightPixels.toFloat()
+        val path = Path().apply {
+            moveTo(width * 0.50f, height * 0.80f)
+            lineTo(width * 0.50f, height * 0.36f)
+        }
+        val gesture = GestureDescription.Builder()
+            .addStroke(GestureDescription.StrokeDescription(path, 0, 480))
             .build()
         return dispatchGesture(gesture, null, null)
     }
@@ -669,13 +786,59 @@ class ShopeeAccessibilityService : AccessibilityService() {
 
     companion object {
         private const val POST_MENU_SEMANTIC_TAP_LIMIT = 3
+        private const val REEL_OPTIONS_SCROLL_LIMIT = 5
         private const val AFFILIATE_PRODUCT_TAP_LIMIT = 3
         private const val VERIFY_FORM_CLOSED_SUCCESS_MS = 5_000L
         private const val FACEBOOK_PACKAGE = "com.facebook.katana"
         private const val EVENT_SETTLE_MS = 600L
         private const val ROOT_RETRY_MS = 500L
+        private const val REEL_MENU_PRIMARY_Y_FRACTION = 0.84f
+        private val REEL_MENU_TAP_Y_FRACTIONS = floatArrayOf(0.84f, 0.81f, 0.87f)
         private val MENU_TAP_Y_FRACTIONS =
             floatArrayOf(0.16f, 0.20f, 0.24f, 0.28f, 0.32f, 0.36f, 0.40f)
+        private val POST_MENU_BUTTON_KEYWORDS = listOf(
+            "Lựa chọn khác cho bài viết",
+            "Lựa chọn khác",
+            "Tùy chọn khác",
+            "Tùy chọn bài viết",
+            "Hành động đối với bài viết",
+            "More options",
+            "Actions for this post",
+            "Post options",
+            "feed_story_header_more",
+            "story_header_more",
+            "post_header_more",
+            "more_button",
+        )
+        private val REEL_MENU_LABEL_HINTS = listOf(
+            "lựa chọn khác",
+            "tùy chọn",
+            "more options",
+            "actions for this post",
+            "post options",
+            "feed_story_header_more",
+            "story_header_more",
+            "post_header_more",
+            "more_button",
+        )
+        private val REEL_SCREEN_LABEL_HINTS = listOf(
+            "tiếp theo:",
+            "up next:",
+            "lưu thước phim",
+            "save reel",
+            "remix thước phim",
+            "remix this reel",
+        )
+        private val REEL_OPTIONS_LABEL_HINTS = listOf(
+            "Lưu thước phim",
+            "Save reel",
+            "Remix thước phim này",
+            "Remix this reel",
+            "Tại sao tôi nhìn thấy video này?",
+            "Why am I seeing this video?",
+            "Xếp hạng trải nghiệm phát lại video",
+            "Rate video playback experience",
+        )
         private val POST_AGE_PATTERN = Regex(
             """(?i)(^|\s)(vừa xong|\d+\s*(giây|phút|giờ|ngày|tuần|tháng|năm|sec|secs|min|mins|hr|hrs|day|days|week|weeks|month|months|year|years|s|m|h|d|w|y))(\s|[·•]|$)""",
         )
