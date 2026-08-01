@@ -25,6 +25,7 @@ export const enqueueMobileLinkJob = async ({
   postUrl,
   shopeeUrl,
   linkName = 'Mua ở đây',
+  force = false,
 }) => {
   const normalizedPostId = normalizeText(postId);
   const normalizedPostUrl = normalizeText(postUrl);
@@ -41,7 +42,7 @@ export const enqueueMobileLinkJob = async ({
     where: { postId: normalizedPostId },
   });
 
-  if (existing && ['PENDING', 'PROCESSING', 'SUCCEEDED'].includes(existing.status)) {
+  if (!force && existing && ['PENDING', 'PROCESSING', 'SUCCEEDED'].includes(existing.status)) {
     return existing;
   }
 

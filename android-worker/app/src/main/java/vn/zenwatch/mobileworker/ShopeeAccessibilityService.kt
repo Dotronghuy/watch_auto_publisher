@@ -15,6 +15,7 @@ class ShopeeAccessibilityService : AccessibilityService() {
     private val processRunnable = Runnable { processCurrentStep() }
     private val menuSemanticTapAttempts = mutableMapOf<String, Int>()
     private val menuFallbackTapAttempts = mutableMapOf<String, Int>()
+    private val affiliateProductTapAttempts = mutableMapOf<String, Int>()
     private val saveFallbackAttempts = mutableSetOf<String>()
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -163,22 +164,20 @@ class ShopeeAccessibilityService : AccessibilityService() {
             return
         }
 
-        val button = findBestNode(
+        // Video/Reels has a second screen. Prefer its affiliate-product row before
+        // looking for the first-level menu item, otherwise Facebook can expose the
+        // page title as a misleading click candidate and the worker loops here.
+        val affiliateProductButton = findBestNode(
             root,
             listOf(
-                "Quản lý liên kết đến sản phẩm",
-                "Thêm liên kết sản phẩm",
-                "Quản lý sản phẩm",
                 "Thêm sản phẩm liên kết tiếp thị",
-                "Manage product links",
-                "Add product link",
-                "Manage products",
                 "Add affiliate product",
             ),
+            exactFirst = true,
         )
-        if (button != null) {
-            val gestureDispatched = tapNodeByGesture(button)
-            val clicked = if (!gestureDispatched) click(button) else false
+        if (affiliateProductButton != null) {
+            val gestureDispatched = tapNodeByGesture(affiliateProductButton)
+            val clicked = if (!gestureDispatched) click(affiliateProductButton) else false
             if (gestureDispatched || clicked) {
                 scheduleNext(1_200)
                 return
@@ -194,14 +193,45 @@ class ShopeeAccessibilityService : AccessibilityService() {
             exactFirst = true,
         ) != null
         if (addProductPageVisible) {
-            // The video/Reels flow has an extra page before the affiliate-link form.
+            // Some Facebook versions draw the affiliate row but omit it from the
+            // accessibility tree. Tap the stable row position as a bounded fallback.
+            val fallbackKey = "${active.job.id}:${active.job.attempt}:affiliate-product"
+            val attempts = affiliateProductTapAttempts[fallbackKey] ?: 0
+            if (elapsedInStep(active) >= 1_500 && attempts < AFFILIATE_PRODUCT_TAP_LIMIT) {
+                affiliateProductTapAttempts[fallbackKey] = attempts + 1
+                if (tapAffiliateProductRowByGesture()) {
+                    scheduleNext(1_500)
+                    return
+                }
+            }
             scheduleNext(1_200)
             return
         }
 
+        val linkManagerButton = findBestNode(
+            root,
+            listOf(
+                "Quản lý liên kết đến sản phẩm",
+                "Thêm liên kết sản phẩm",
+                "Quản lý sản phẩm",
+                "Manage product links",
+                "Add product link",
+                "Manage products",
+            ),
+            exactFirst = true,
+        )
+        if (linkManagerButton != null) {
+            val gestureDispatched = tapNodeByGesture(linkManagerButton)
+            val clicked = if (!gestureDispatched) click(linkManagerButton) else false
+            if (gestureDispatched || clicked) {
+                scheduleNext(1_200)
+                return
+            }
+        }
+
         failStepAfter(
             active,
-            30_000,
+            40_000,
             "Không tìm thấy mục Quản lý liên kết sản phẩm hoặc Thêm sản phẩm liên kết tiếp thị",
         )
     }
@@ -288,14 +318,15 @@ class ShopeeAccessibilityService : AccessibilityService() {
                 || label.contains("Link name", ignoreCase = true)
                 || node.text?.toString() == active.job.shopeeUrl
         }
-        val savedLinkVisible = !formStillVisible && findBestNode(
+        val returnedToProductPage = !formStillVisible && findBestNode(
             root,
             listOf(
-                active.job.linkName,
-                "Shopee",
-                "Đủ điều kiện nhận tiền hoa hồng",
-                "Eligible for commissions",
+                "Thêm sản phẩm",
+                "Quản lý sản phẩm",
+                "Add product",
+                "Manage products",
             ),
+            exactFirst = true,
         ) != null
 
         val verifyFallbackKey = "${active.job.id}:${active.job.attempt}:verify-save"
@@ -313,11 +344,18 @@ class ShopeeAccessibilityService : AccessibilityService() {
             }
         }
 
-        if (savedLinkVisible && elapsedInStep(active) >= 2_000) {
+        if (
+            !formStillVisible
+            && elapsedInStep(active) >= VERIFY_FORM_CLOSED_SUCCESS_MS
+        ) {
             JobStore.markForReport(
                 this,
                 success = true,
-                message = "Đã gắn link Shopee và lưu trên Facebook",
+                message = if (returnedToProductPage) {
+                    "Đã gắn link Shopee và lưu cho bài video trên Facebook"
+                } else {
+                    "Đã gắn link Shopee và lưu trên Facebook"
+                },
             )
             return
         }
@@ -545,6 +583,18 @@ class ShopeeAccessibilityService : AccessibilityService() {
         return dispatchGesture(gesture, null, null)
     }
 
+    private fun tapAffiliateProductRowByGesture(): Boolean {
+        val width = resources.displayMetrics.widthPixels.toFloat()
+        val height = resources.displayMetrics.heightPixels.toFloat()
+        val path = Path().apply {
+            moveTo(width * 0.50f, height * 0.245f)
+        }
+        val gesture = GestureDescription.Builder()
+            .addStroke(GestureDescription.StrokeDescription(path, 0, 120))
+            .build()
+        return dispatchGesture(gesture, null, null)
+    }
+
     private fun tapNodeByGesture(node: AccessibilityNodeInfo): Boolean {
         val bounds = Rect()
         node.getBoundsInScreen(bounds)
@@ -619,6 +669,8 @@ class ShopeeAccessibilityService : AccessibilityService() {
 
     companion object {
         private const val POST_MENU_SEMANTIC_TAP_LIMIT = 3
+        private const val AFFILIATE_PRODUCT_TAP_LIMIT = 3
+        private const val VERIFY_FORM_CLOSED_SUCCESS_MS = 5_000L
         private const val FACEBOOK_PACKAGE = "com.facebook.katana"
         private const val EVENT_SETTLE_MS = 600L
         private const val ROOT_RETRY_MS = 500L

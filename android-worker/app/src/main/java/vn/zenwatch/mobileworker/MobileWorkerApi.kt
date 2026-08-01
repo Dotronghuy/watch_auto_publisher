@@ -68,7 +68,7 @@ class MobileWorkerApi(private val settings: WorkerSettings) {
             connection.readTimeout = 20_000
             connection.setRequestProperty("Authorization", "Bearer ${settings.token}")
             connection.setRequestProperty("Accept", "application/json")
-            connection.setRequestProperty("User-Agent", "ZenWatch-Mobile-Worker/${BuildConfig.VERSION_NAME}")
+            connection.setRequestProperty("User-Agent", "ZenWatch-Mobile-Worker/$WORKER_VERSION")
             if (body != null) {
                 connection.doOutput = true
                 connection.setRequestProperty("Content-Type", "application/json; charset=utf-8")
@@ -98,4 +98,8 @@ class MobileWorkerApi(private val settings: WorkerSettings) {
 
     private fun encodePath(value: String): String =
         URLEncoder.encode(value, StandardCharsets.UTF_8.name()).replace("+", "%20")
+
+    companion object {
+        private const val WORKER_VERSION = "0.2.1"
+    }
 }
