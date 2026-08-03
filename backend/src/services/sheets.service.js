@@ -2,6 +2,7 @@ import { google } from 'googleapis';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { readJsonFileSync } from '../utils/json-file.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -86,7 +87,7 @@ const getSheetId = () => {
   try {
     const settingsPath = path.join(__dirname, '../../config/settings.json');
     if (fs.existsSync(settingsPath)) {
-      const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+      const settings = readJsonFileSync(settingsPath);
       if (settings.skuStatusSheetId) return settings.skuStatusSheetId;
       if (settings.googleSheetId) return settings.googleSheetId; // Tương thích cấu hình cũ
     }

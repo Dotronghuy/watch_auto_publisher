@@ -4,6 +4,7 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { liveLog } from '../utils/liveLog.js';
+import { readJsonFileSync, writeJsonFileSync } from '../utils/json-file.js';
 import sharp from 'sharp';
 import { PrismaClient } from '@prisma/client';
 import {
@@ -308,7 +309,7 @@ const CHATGPT_IMAGE_PROJECT_URL = 'https://chatgpt.com/g/g-p-6a701915014081919f9
 const getSettingValue = (key) => {
     try {
         if (fs.existsSync(settingsPath)) {
-            const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+            const settings = readJsonFileSync(settingsPath);
             return settings[key] || null;
         }
     } catch(e) {}
@@ -317,7 +318,7 @@ const getSettingValue = (key) => {
 const getAiTaskUrl = (type) => {
     try {
         if (fs.existsSync(settingsPath)) {
-            const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+            const settings = readJsonFileSync(settingsPath);
             return settings.aiTasks?.[type] || null;
         }
     } catch(e) {}
@@ -327,7 +328,7 @@ const updateAiTaskUrl = (type, url) => {
     try {
         let settings = { aiTasks: {} };
         if (fs.existsSync(settingsPath)) {
-            settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+            settings = readJsonFileSync(settingsPath);
         }
         if (!settings.aiTasks) settings.aiTasks = {};
         
@@ -336,7 +337,7 @@ const updateAiTaskUrl = (type, url) => {
             chatId = url.split('/c/')[1];
         }
         settings.aiTasks[type] = chatId;
-        fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+        writeJsonFileSync(settingsPath, settings);
     } catch (e) {
         console.error('Error saving URL', e);
     }

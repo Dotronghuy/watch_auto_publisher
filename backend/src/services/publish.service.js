@@ -27,6 +27,7 @@ import { publishToInstagram, publishCarouselToInstagram, publishFBReels, publish
 import { addMusicToVideo, hasAudioStream } from './video.service.js';
 import { addActivity } from '../utils/activity.js';
 import { liveLog } from '../utils/liveLog.js';
+import { readJsonFileSync } from '../utils/json-file.js';
 import { shouldTryNextSkuAfterAiFailure } from './auto-publish-policy.js';
 import { computeHashFromBuffer } from './image-hash.service.js';
 import { saveImageHash } from '../utils/crm.db.js';
@@ -46,7 +47,7 @@ const generateImageWithEngine = async (imagePath, promptsArray, abortSignal, sam
     let engine = 'chatgpt';
     try {
         if (fs.existsSync(settingsPath)) {
-            const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+            const settings = readJsonFileSync(settingsPath);
             engine = settings.imageGenerationEngine || 'chatgpt';
         }
     } catch(e) {}
@@ -370,7 +371,7 @@ const getSmartFilteredSkus = async (skuFolders, allProductsInfo) => {
   let prioritySkus = [];
   try {
     if (fs.existsSync(settingsPath)) {
-      const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+      const settings = readJsonFileSync(settingsPath);
       if (settings.prioritySkus) {
         prioritySkus = settings.prioritySkus.split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
       }
@@ -2000,7 +2001,7 @@ export const autoPublishRoutine = async (retryContext = null) => {
          const getIgDelayMs = () => {
            try {
              if (fs.existsSync(settingsPath)) {
-               const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+               const settings = readJsonFileSync(settingsPath);
                if (settings.mode === 'test') return 0;
                const min = parseInt(settings.igDelayMin) || 0;
                const max = parseInt(settings.igDelayMax) || min;

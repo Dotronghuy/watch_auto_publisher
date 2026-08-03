@@ -6,6 +6,7 @@ import { fileURLToPath } from 'url';
 import { EventEmitter } from 'events';
 import { generateBackgroundOnChatGPT } from './playwright.service.js';
 import { generateBackgroundOnSD } from './sd.service.js';
+import { readJsonFileSync } from '../utils/json-file.js';
 
 dotenv.config();
 
@@ -20,7 +21,7 @@ const generateImageWithEngine = async (imagePath, promptsArray, abortSignal, sam
     let engine = 'chatgpt';
     try {
         if (fs.existsSync(settingsPath)) {
-            const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+            const settings = readJsonFileSync(settingsPath);
             engine = settings.imageGenerationEngine || 'chatgpt';
         }
     } catch(e) {}

@@ -19,6 +19,7 @@ import {
 } from '../services/publish-run-state.service.js';
 import { recentActivities, addActivity } from '../utils/activity.js';
 import { getAllPostedHistory, getTodayEngagement } from '../utils/history.js';
+import { readJsonFileSync, writeJsonFileSync } from '../utils/json-file.js';
 import { trackPostMetrics } from '../services/tracking.service.js';
 import logEmitter from '../utils/liveLog.js';
 import { getFoldersInFolder, getImagesInFolder, getFolderIdByName, downloadFileFromDrive } from '../services/drive.service.js';
@@ -237,7 +238,7 @@ router.get('/dashboard', async (req, res) => {
     // E. Đọc cài đặt kết nối mạng xã hội
     let connectedSocials = { facebook: true, instagram: true, threads: false, tiktok: false };
     if (fs.existsSync(settingsPath)) {
-      const settingsData = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+      const settingsData = readJsonFileSync(settingsPath);
       if (settingsData.connectedSocials) {
         connectedSocials = settingsData.connectedSocials;
       }
@@ -792,8 +793,7 @@ router.post('/ai/reset-profile', async (req, res) => {
 router.get('/settings', (req, res) => {
   try {
     if (fs.existsSync(settingsPath)) {
-      const data = fs.readFileSync(settingsPath, 'utf8');
-      const settings = JSON.parse(data);
+      const settings = readJsonFileSync(settingsPath);
       // Ensure connectedSocials exists
       if (!settings.connectedSocials) {
         settings.connectedSocials = { facebook: true, instagram: true, threads: false, tiktok: false };
@@ -818,11 +818,11 @@ router.post('/settings', async (req, res) => {
     const newSettings = req.body;
     let currentSettings = {};
     if (fs.existsSync(settingsPath)) {
-      currentSettings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+      currentSettings = readJsonFileSync(settingsPath);
     }
 
     const mergedSettings = { ...currentSettings, ...newSettings };
-    fs.writeFileSync(settingsPath, JSON.stringify(mergedSettings, null, 2));
+    writeJsonFileSync(settingsPath, mergedSettings);
     
     // Khởi động lại Scheduler để áp dụng Khung giờ vàng mới (nếu có update)
     await startScheduler(true);

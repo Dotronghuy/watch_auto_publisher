@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { liveLog } from '../utils/liveLog.js';
+import { readJsonFileSync } from '../utils/json-file.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -11,7 +12,7 @@ const workflowPath = path.join(__dirname, '../../config/comfyui_workflow.json');
 const getSettings = () => {
     try {
         if (fs.existsSync(settingsPath)) {
-            return JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+            return readJsonFileSync(settingsPath);
         }
     } catch (e) {}
     return {};

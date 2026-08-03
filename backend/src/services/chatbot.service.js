@@ -13,6 +13,7 @@ import { PrismaClient } from '@prisma/client';
 import { searchKnowledge } from '../utils/vector_search.js';
 import { buildMemoryContext } from './chatbot-memory.service.js';
 import sharp from 'sharp';
+import { readJsonFileSync } from '../utils/json-file.js';
 
 dotenv.config();
 const prisma = new PrismaClient();
@@ -319,7 +320,7 @@ const runWithModelFallback = async (content, requireJSON = false) => {
 const getSettings = () => {
   try {
     if (fs.existsSync(SETTINGS_PATH)) {
-      return JSON.parse(fs.readFileSync(SETTINGS_PATH, 'utf8'));
+      return readJsonFileSync(SETTINGS_PATH);
     }
   } catch (e) { }
   return { botEnabled: false, botPauseHours: 2, botDelayMin: 0, botDelayMax: 0, enableLayer2: true, enableLayer3: true };

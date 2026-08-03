@@ -6,6 +6,7 @@ import cron from 'node-cron';
 import { spawn } from 'child_process';
 import { syncHashesFromSheets } from './services/image-hash.service.js';
 import { runNightlySelfLearning } from './services/self-learning.service.js';
+import { readJsonFileSync } from './utils/json-file.js';
 import { readLastSuccessfulRun } from './services/publish-run-state.service.js';
 import {
   AUTO_PUBLISH_POLICY_REDIS_KEY,
@@ -50,7 +51,7 @@ const startHeartbeat = () => {
 const readSchedulerSettings = () => {
   try {
     if (fs.existsSync(settingsPath)) {
-      return JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+      return readJsonFileSync(settingsPath);
     }
   } catch (error) {
     console.error('Không thể đọc settings.json.', error);
