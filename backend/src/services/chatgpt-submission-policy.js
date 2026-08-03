@@ -3,6 +3,11 @@ export const CHATGPT_USER_MESSAGE_SELECTOR = [
   '[data-turn="user"]',
 ].join(', ');
 
+export const CHATGPT_ASSISTANT_MESSAGE_SELECTOR = [
+  '[data-message-author-role="assistant"]',
+  '[data-turn="assistant"]',
+].join(', ');
+
 export const hasRequiredAttachmentPreviews = ({
   baselineCount,
   observedCount,
@@ -15,6 +20,11 @@ export const hasRequiredAttachmentPreviews = ({
 );
 
 export const hasNewUserMessage = ({
+  baselineCount,
+  observedCount,
+}) => Number(observedCount) > Number(baselineCount);
+
+export const hasNewAssistantMessage = ({
   baselineCount,
   observedCount,
 }) => Number(observedCount) > Number(baselineCount);

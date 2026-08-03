@@ -7,6 +7,7 @@ import { liveLog } from '../utils/liveLog.js';
 import sharp from 'sharp';
 import { PrismaClient } from '@prisma/client';
 import {
+    CHATGPT_ASSISTANT_MESSAGE_SELECTOR,
     CHATGPT_USER_MESSAGE_SELECTOR,
     hasNewUserMessage,
     hasRequiredAttachmentPreviews,
@@ -19,6 +20,22 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 chromium.use(stealth());
+
+const resolveBrowserExecutable = () => {
+    const configuredPath = process.env.ZENWATCH_BROWSER_EXECUTABLE?.trim();
+    const candidates = [
+        configuredPath,
+        process.env.PROGRAMFILES && path.join(process.env.PROGRAMFILES, 'Google', 'Chrome', 'Application', 'chrome.exe'),
+        process.env['PROGRAMFILES(X86)'] && path.join(process.env['PROGRAMFILES(X86)'], 'Google', 'Chrome', 'Application', 'chrome.exe'),
+        process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, 'Google', 'Chrome', 'Application', 'chrome.exe'),
+        process.env.PROGRAMFILES && path.join(process.env.PROGRAMFILES, 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
+        process.env['PROGRAMFILES(X86)'] && path.join(process.env['PROGRAMFILES(X86)'], 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
+    ].filter(Boolean);
+
+    return candidates.find((candidate) => fs.existsSync(candidate));
+};
+
+const browserExecutablePath = resolveBrowserExecutable();
 
 // ─── ANTI-BOT: Hành vi giả lập người thật ───
 const humanBehavior = {
@@ -97,6 +114,7 @@ const humanLaunchOptions = (extraArgs = []) => {
     const viewportH = 768 + Math.floor(Math.random() * 10) - 5;
     return {
         headless: false,
+        ...(browserExecutablePath ? { executablePath: browserExecutablePath } : {}),
         args: [
             `--window-position=${80 + Math.floor(Math.random() * 40)},${60 + Math.floor(Math.random() * 30)}`,
             `--window-size=${viewportW},${viewportH}`,
@@ -235,7 +253,8 @@ export class Mutex {
     }
 }
 export const aiMutex = new Mutex();
-export const isAiIdle = () => !aiMutex.isLocked();
+const geminiTextMutex = new Mutex();
+export const isAiIdle = () => !aiMutex.isLocked() && !geminiTextMutex.isLocked();
 // ─── GEMINI API FALLBACK (Dùng khi toggle BẬT, thay thế Playwright) ───
 async function callGeminiAPIDirectly(prompt, images = []) {
   const geminiSetting = await prisma.setting.findUnique({ where: { key: 'gemini_api_key' } });
@@ -1471,6 +1490,231 @@ const findChatGPTPrompt = async (page, timeout = 15000) => {
     return null;
 };
 
+const CHATGPT_SEND_BUTTON_SELECTOR = [
+    'button[data-testid="send-button"]',
+    'button[aria-label="Send prompt"]',
+    'button[aria-label*="Send"]',
+    'button[aria-label*="Gửi"]',
+    'form button[type="submit"]',
+].join(', ');
+
+const getEditableText = async (locator) => locator
+    .evaluate((element) => ('value' in element ? element.value : element.innerText) || '')
+    .catch(() => null);
+
+const CHATGPT_UPLOAD_LIMIT_PATTERN = /đã đạt đến giới hạn tải lên|đạt giới hạn tải (tệp|file)|reached (the|your) upload limit|upload limit reached|delete all files to continue|xóa tất cả tệp để tiếp tục/i;
+export const isChatGPTUploadLimitText = (text) => (
+    CHATGPT_UPLOAD_LIMIT_PATTERN.test(String(text || ''))
+);
+
+const createChatGPTUploadLimitError = () => {
+    const error = new Error(
+        'ChatGPT đã đạt giới hạn tải ảnh. Tool sẽ ngừng worker ChatGPT và chuyển SKU sang Gemini.'
+    );
+    error.code = 'CHATGPT_UPLOAD_LIMIT';
+    return error;
+};
+
+const isChatGPTUploadLimitVisible = async (page) => {
+    const statusText = await page.locator(
+        '[role="alert"], [role="status"], [data-sonner-toast], [data-testid*="toast"], [class*="toast"]'
+    ).evaluateAll((elements) => elements
+        .filter((element) => {
+            const style = window.getComputedStyle(element);
+            return style.display !== 'none'
+                && style.visibility !== 'hidden'
+                && element.getClientRects().length > 0;
+        })
+        .map((element) => element.innerText || '')
+        .join('\n'))
+        .catch(() => '');
+
+    if (isChatGPTUploadLimitText(statusText)) return true;
+    const bodyText = await page.locator('body').innerText().catch(() => '');
+    return isChatGPTUploadLimitText(bodyText);
+};
+
+const findEnabledChatGPTSendButton = async (page, timeout = 15000) => {
+    const deadline = Date.now() + timeout;
+    while (Date.now() < deadline) {
+        if (await isChatGPTUploadLimitVisible(page)) throw createChatGPTUploadLimitError();
+        if (await isChatGPTHistoryRateLimitVisible(page)) throw createChatGPTHistoryRateLimitError();
+        const buttons = page.locator(CHATGPT_SEND_BUTTON_SELECTOR);
+        const count = await buttons.count().catch(() => 0);
+        // ChatGPT đôi khi giữ một nút ẩn trong DOM. Duyệt từ cuối để lấy nút của composer đang mở.
+        for (let index = count - 1; index >= 0; index--) {
+            const button = buttons.nth(index);
+            const visible = await button.isVisible().catch(() => false);
+            const enabled = await button.isEnabled().catch(() => false);
+            const ariaDisabled = await button.getAttribute('aria-disabled').catch(() => null);
+            if (visible && enabled && ariaDisabled !== 'true') return button;
+        }
+        await page.waitForTimeout(250);
+    }
+    return null;
+};
+
+const waitForChatGPTSubmission = async ({ page, promptLocator, baselineUserMessages, checkStop }) => {
+    const deadline = Date.now() + 12000;
+    while (Date.now() < deadline) {
+        if (checkStop?.()) throw new Error('STOP_REQUESTED');
+        if (await isChatGPTUploadLimitVisible(page)) throw createChatGPTUploadLimitError();
+        if (await isChatGPTHistoryRateLimitVisible(page)) throw createChatGPTHistoryRateLimitError();
+
+        const userMessageCount = await page.locator(CHATGPT_USER_MESSAGE_SELECTOR)
+            .count().catch(() => 0);
+        if (userMessageCount > baselineUserMessages) return true;
+
+        const stopVisible = await page.locator('button[data-testid="stop-button"]')
+            .last().isVisible().catch(() => false);
+        if (stopVisible) return true;
+
+        const composerText = await getEditableText(promptLocator);
+        if (composerText !== null && !composerText.trim()) return true;
+        await page.waitForTimeout(300);
+    }
+    return false;
+};
+
+const submitChatGPTPrompt = async ({ page, promptLocator, log, checkStop }) => {
+    const baselineUserMessages = await page.locator(CHATGPT_USER_MESSAGE_SELECTOR)
+        .count().catch(() => 0);
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+        if (checkStop?.()) throw new Error('STOP_REQUESTED');
+        const sendButton = await findEnabledChatGPTSendButton(page, attempt === 0 ? 15000 : 4000);
+
+        try {
+            if (attempt === 1) {
+                log('[Playwright] Nút gửi chưa được xác nhận; thử Enter trực tiếp trong ô ChatGPT...');
+                await promptLocator.focus();
+                await promptLocator.press('Enter');
+            } else if (sendButton) {
+                if (attempt === 0) {
+                    log('[Playwright] Đã thấy nút Gửi ChatGPT, đang bấm gửi...');
+                    await sendButton.click({ timeout: 8000 });
+                } else {
+                    log('[Playwright] Thử kích hoạt trực tiếp nút Gửi ChatGPT lần cuối...');
+                    await sendButton.evaluate((element) => element.click());
+                }
+            } else {
+                log('[Playwright] Chưa thấy nút Gửi; thử Enter trực tiếp trong ô ChatGPT...');
+                await promptLocator.focus();
+                await promptLocator.press('Enter');
+            }
+        } catch (error) {
+            log(`[Playwright] ⚠️ Thao tác gửi ChatGPT lần ${attempt + 1} chưa thành công: ${error.message}`);
+        }
+
+        const submitted = await waitForChatGPTSubmission({
+            page,
+            promptLocator,
+            baselineUserMessages,
+            checkStop,
+        });
+        if (submitted) {
+            log('[Playwright] ✅ Đã xác nhận ChatGPT nhận yêu cầu.');
+            return;
+        }
+    }
+
+    const error = new Error('Không gửi được prompt vào ChatGPT: nội dung vẫn còn trong ô nhập sau 3 lần thử.');
+    error.code = 'CHATGPT_SEND_FAILED';
+    throw error;
+};
+
+const stopChatGPTGenerationIfVisible = async (page) => {
+    const stopButton = page.locator('button[data-testid="stop-button"]').first();
+    if (await stopButton.isVisible().catch(() => false)) {
+        await stopButton.click().catch(() => {});
+    }
+};
+
+const getChatGPTAssistantMessageCount = async (page) => page
+    .locator(CHATGPT_ASSISTANT_MESSAGE_SELECTOR)
+    .count()
+    .catch(() => 0);
+
+const CHATGPT_UNPROCESSED_ASSISTANT_MESSAGE_SELECTOR = CHATGPT_ASSISTANT_MESSAGE_SELECTOR
+    .split(',')
+    .map((selector) => `${selector.trim()}:not([data-autofill-processed="true"])`)
+    .join(', ');
+
+const getLatestChatGPTAssistantTextAfterBaseline = async ({
+    page,
+    baselineAssistantMessageCount,
+}) => page.evaluate(({
+    assistantSelector,
+    baselineAssistantMessageCount: baselineCount,
+}) => {
+    const userSelector = [
+        '[data-message-author-role="user"]',
+        '[data-turn="user"]',
+    ].join(', ');
+    const turnSelector = [
+        'article[data-testid^="conversation-turn-"]',
+        '[data-testid^="conversation-turn-"]',
+    ].join(', ');
+
+    const canonicalTurn = (element) => element.closest(turnSelector) || element;
+    const isVisible = (element) => {
+        const style = window.getComputedStyle(element);
+        const rect = element.getBoundingClientRect();
+        return style.display !== 'none'
+            && style.visibility !== 'hidden'
+            && rect.width > 0
+            && rect.height > 0;
+    };
+    const uniqueTurns = (selector) => {
+        const seen = new Set();
+        return Array.from(document.querySelectorAll(selector))
+            .map(canonicalTurn)
+            .filter((element) => {
+                if (seen.has(element) || !isVisible(element)) return false;
+                seen.add(element);
+                return true;
+            });
+    };
+    const extractCleanText = (element) => {
+        const contentRoot = element.querySelector('.markdown') || element;
+        const cleanRoot = contentRoot.cloneNode(true);
+        cleanRoot.querySelectorAll([
+            'button',
+            '[role="button"]',
+            '[data-testid*="source" i]',
+            '[data-testid*="citation" i]',
+            '[data-testid*="file" i]',
+            '[aria-label*="source" i]',
+            '[aria-label*="nguồn" i]',
+            'script',
+            'style',
+        ].join(',')).forEach((node) => node.remove());
+        return (cleanRoot.innerText || cleanRoot.textContent || '').trim();
+    };
+
+    const assistantMessages = uniqueTurns(assistantSelector);
+    const userMessages = uniqueTurns(userSelector);
+    const latestUserMessage = userMessages.at(-1) || null;
+    const isAfterLatestUser = (element) => latestUserMessage
+        ? Boolean(latestUserMessage.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING)
+        : false;
+
+    const baselineIndex = Math.max(0, Number(baselineCount) || 0);
+    const afterBaseline = assistantMessages.slice(baselineIndex);
+    const afterLatestUser = assistantMessages.filter(isAfterLatestUser);
+    const candidates = afterBaseline.length > 0 ? afterBaseline : afterLatestUser;
+
+    for (const candidate of candidates.slice().reverse()) {
+        const text = extractCleanText(candidate);
+        if (text) return text;
+    }
+
+    return '';
+}, {
+    assistantSelector: CHATGPT_ASSISTANT_MESSAGE_SELECTOR,
+    baselineAssistantMessageCount,
+}).catch(() => '');
+
 const CHATGPT_HISTORY_RATE_LIMIT_SELECTOR = [
     '[data-testid="modal-conversation-history-rate-limit"]',
     '#modal-conversation-history-rate-limit',
@@ -1483,7 +1727,7 @@ const CHATGPT_REQUESTS_PER_CONVERSATION = 6;
 
 const createChatGPTHistoryRateLimitError = () => {
     const error = new Error(
-        'ChatGPT vẫn đang tạm giới hạn do gửi yêu cầu quá nhanh sau thời gian chờ tự động. Vui lòng chờ thêm rồi chạy lại.'
+        'ChatGPT đang tạm giới hạn do gửi yêu cầu quá nhanh.'
     );
     error.code = 'CHATGPT_HISTORY_RATE_LIMIT';
     return error;
@@ -1595,6 +1839,7 @@ export const createChatGPTTextSession = async ({
     log = console.log,
     projectUrl = null,
     checkStop = null,
+    rateLimitStrategy = 'wait',
 } = {}) => {
     let waitingWasLogged = false;
     while (aiMutex.isLocked()) {
@@ -1674,22 +1919,28 @@ export const createChatGPTTextSession = async ({
             }
 
             if (await isChatGPTHistoryRateLimitVisible(page)) {
+                if (rateLimitStrategy === 'throw') throw createChatGPTHistoryRateLimitError();
                 await recoverFromChatGPTHistoryRateLimit({ page, targetUrl: activeTargetUrl, log, checkStop });
                 requestsInCurrentConversation = 0;
+            }
+            if (await isChatGPTUploadLimitVisible(page)) {
+                throw createChatGPTUploadLimitError();
             }
 
             const sendOnce = async () => {
                 const promptLocator = await findChatGPTPrompt(page);
                 if (!promptLocator) {
-                    throw new Error('Không tìm thấy ô nhập ChatGPT. Hãy đăng nhập lại ChatGPT trong phần Cài đặt AI.');
+                    const error = new Error('Không tìm thấy ô nhập ChatGPT. Hãy đăng nhập lại ChatGPT trong phần Cài đặt AI.');
+                    error.code = 'CHATGPT_SESSION_UNAVAILABLE';
+                    throw error;
                 }
 
                 // Đánh dấu trước khi gửi để không lấy nhầm câu trả lời của lần trước.
-                await page.evaluate(() => {
-                    document.querySelectorAll('div[data-message-author-role="assistant"]').forEach((element) => {
+                await page.evaluate((assistantSelector) => {
+                    document.querySelectorAll(assistantSelector).forEach((element) => {
                         element.setAttribute('data-autofill-processed', 'true');
                     });
-                });
+                }, CHATGPT_ASSISTANT_MESSAGE_SELECTOR);
 
                 if (image?.buffer) {
                     log('[Playwright] Đang đính kèm ảnh sản phẩm vào ChatGPT...');
@@ -1706,6 +1957,11 @@ export const createChatGPTTextSession = async ({
                     }
                 }
 
+                if (await isChatGPTUploadLimitVisible(page)) {
+                    log('[ChatGPT] ⚠️ Đã phát hiện giới hạn tải ảnh; chuyển việc còn lại sang Gemini ngay.');
+                    throw createChatGPTUploadLimitError();
+                }
+
                 // Timeout ngắn để nhận diện modal giới hạn và phục hồi sớm,
                 // thay vì để Playwright đứng chờ click mặc định 30 giây.
                 await promptLocator.click({ timeout: 8000 });
@@ -1714,16 +1970,17 @@ export const createChatGPTTextSession = async ({
                 await page.keyboard.press('Space');
                 await page.keyboard.press('Backspace');
 
-                const sendButton = page.locator('button[data-testid="send-button"]:not([disabled])').first();
-                if (await sendButton.isVisible().catch(() => false)) await sendButton.click();
-                else await page.keyboard.press('Enter');
-
-                log('[Playwright] Đã gửi yêu cầu, đang chờ ChatGPT trả JSON...');
+                await submitChatGPTPrompt({ page, promptLocator, log, checkStop });
+                log('[Playwright] Đang chờ ChatGPT trả JSON...');
+                let lastAssistantText = '';
+                let stableAssistantTextPolls = 0;
                 for (let attempt = 0; attempt < 150; attempt++) {
                     if (checkStop?.()) {
-                        const stopButton = page.locator('button[data-testid="stop-button"]').first();
-                        if (await stopButton.isVisible().catch(() => false)) await stopButton.click().catch(() => {});
+                        await stopChatGPTGenerationIfVisible(page);
                         throw new Error('STOP_REQUESTED');
+                    }
+                    if (await isChatGPTUploadLimitVisible(page)) {
+                        throw createChatGPTUploadLimitError();
                     }
                     if (await isChatGPTHistoryRateLimitVisible(page)) {
                         throw createChatGPTHistoryRateLimitError();
@@ -1732,20 +1989,34 @@ export const createChatGPTTextSession = async ({
                     await page.waitForTimeout(2000);
                     const isGenerating = await page.locator('button[data-testid="stop-button"]').first()
                         .isVisible().catch(() => false);
-                    if (isGenerating) continue;
 
-                    const messages = page.locator(
-                        'div[data-message-author-role="assistant"]:not([data-autofill-processed="true"])'
-                    );
+                    const messages = page.locator(CHATGPT_UNPROCESSED_ASSISTANT_MESSAGE_SELECTOR);
                     const count = await messages.count();
-                    if (count === 0) continue;
+                    if (count === 0) {
+                        if (isGenerating) continue;
+                        continue;
+                    }
 
                     const message = messages.nth(count - 1);
                     const text = await message.evaluate((element) => {
                         const markdown = element.querySelector('.markdown');
                         return (markdown || element).innerText;
                     });
-                    if (text?.trim()) return text.trim();
+                    const cleanText = text?.trim() || '';
+                    if (!cleanText) {
+                        if (isGenerating) continue;
+                        continue;
+                    }
+                    if (cleanText === lastAssistantText) {
+                        stableAssistantTextPolls++;
+                    } else {
+                        lastAssistantText = cleanText;
+                        stableAssistantTextPolls = 0;
+                    }
+                    if (!isGenerating || stableAssistantTextPolls >= 3) {
+                        if (isGenerating) await stopChatGPTGenerationIfVisible(page);
+                        return cleanText;
+                    }
                 }
 
                 throw new Error('ChatGPT phản hồi quá thời gian 5 phút.');
@@ -1761,6 +2032,7 @@ export const createChatGPTTextSession = async ({
                     const hitHistoryLimit = isChatGPTHistoryRateLimitError(error)
                         || await isChatGPTHistoryRateLimitVisible(page);
                     if (!hitHistoryLimit) throw error;
+                    if (rateLimitStrategy === 'throw') throw createChatGPTHistoryRateLimitError();
                     if (sendAttempt > 0) throw createChatGPTHistoryRateLimitError();
 
                     await recoverFromChatGPTHistoryRateLimit({ page, targetUrl: activeTargetUrl, log, checkStop });
@@ -1774,7 +2046,841 @@ export const createChatGPTTextSession = async ({
         };
 
         log('[Playwright] ✅ Phiên ChatGPT đã sẵn sàng.');
-        return { generate, close };
+        return { provider: 'chatgpt', generate, close };
+    } catch (error) {
+        await close();
+        throw error;
+    }
+};
+
+const GEMINI_INPUT_SELECTORS = [
+    'div.ql-editor[contenteditable="true"]',
+    'rich-textarea div[contenteditable="true"]',
+    '.text-input-field div[contenteditable="true"]',
+    'div[contenteditable="true"][aria-label]',
+];
+
+const GEMINI_RESPONSE_SELECTORS = [
+    'model-response',
+    'message-content',
+    '.response-container',
+    '.model-response-text',
+].join(', ');
+
+const GEMINI_SEND_BUTTON_SELECTOR = [
+    'button.send-button',
+    'button[aria-label*="Send"]',
+    'button[aria-label*="Gửi"]',
+    'button[aria-label*="Submit"]',
+    'button[data-at="send"]',
+    'button[data-test-id*="send"]',
+].join(', ');
+
+const createGeminiRateLimitError = () => {
+    const error = new Error('Gemini đang tạm giới hạn yêu cầu. Tool sẽ giữ dữ liệu kỹ thuật và tiếp tục bằng engine còn hoạt động.');
+    error.code = 'GEMINI_RATE_LIMIT';
+    return error;
+};
+
+const isGeminiRateLimitText = (text) => (
+    /too many requests|rate limit|reached your limit|try again later|quá nhiều yêu cầu|đã đạt.*giới hạn|thử lại sau/i
+        .test(String(text || ''))
+);
+
+const findGeminiPrompt = async (page, timeout = 15000) => {
+    const deadline = Date.now() + timeout;
+    while (Date.now() < deadline) {
+        for (const selector of GEMINI_INPUT_SELECTORS) {
+            const locator = page.locator(selector).first();
+            if (await locator.isVisible().catch(() => false)) return locator;
+        }
+        await page.waitForTimeout(500);
+    }
+    return null;
+};
+
+const GEMINI_UPLOAD_MENU_TEXT_PATTERN = /(upload files?|upload from computer|tai (tep|file)( len)?|tai len( tu may tinh)?|chon tep)/i;
+
+const normalizeGeminiUiText = (value) => String(value || '')
+    .normalize('NFD')
+    .replace(/\p{Diacritic}/gu, '')
+    .replace(/đ/gi, 'd')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+const getGeminiFilePayload = (image) => ({
+    name: image.name || `watch-${Date.now()}.jpg`,
+    mimeType: image.mimeType || 'image/jpeg',
+    buffer: image.buffer,
+});
+
+const findGeminiUploadMenuItem = async (page) => {
+    // Giao diện Gemini mới đặt chữ "Upload files" trong một span/div con,
+    // còn phần tử cha có thể không mang role hoặc class ổn định. Tìm trực tiếp
+    // text người dùng đang nhìn thấy trước, rồi mới fallback sang role cũ.
+    const directTextCandidates = [
+        page.getByText(/^\s*Upload files?\s*$/i),
+        page.getByText(/^\s*Upload from computer\s*$/i),
+        page.getByText(/^\s*Tải (tệp|file)( lên)?\s*$/i),
+        page.getByText(/^\s*Tải lên( từ máy tính)?\s*$/i),
+        page.getByText(/^\s*Chọn tệp\s*$/i),
+    ];
+
+    for (const directCandidates of directTextCandidates) {
+        const count = await directCandidates.count().catch(() => 0);
+        for (let index = count - 1; index >= 0; index--) {
+            const candidate = directCandidates.nth(index);
+            if (await candidate.isVisible().catch(() => false)) return candidate;
+        }
+    }
+
+    const candidates = page.locator([
+        'button',
+        '[role="button"]',
+        '[role="menuitem"]',
+        '[role="option"]',
+        '[data-test-id*="upload" i]',
+        '[data-testid*="upload" i]',
+        '[class*="menu-item" i]',
+        '.mat-mdc-menu-item',
+    ].join(', '));
+    const count = await candidates.count().catch(() => 0);
+    const matches = [];
+
+    for (let index = count - 1; index >= 0; index--) {
+        const candidate = candidates.nth(index);
+        if (!await candidate.isVisible().catch(() => false)) continue;
+
+        const text = normalizeGeminiUiText(
+            await candidate.innerText().catch(() => '')
+            || await candidate.getAttribute('aria-label').catch(() => '')
+            || ''
+        );
+        if (!GEMINI_UPLOAD_MENU_TEXT_PATTERN.test(text)) continue;
+
+        const box = await candidate.boundingBox().catch(() => null);
+        matches.push({
+            candidate,
+            textLength: text.length,
+            area: box ? box.width * box.height : Number.MAX_SAFE_INTEGER,
+        });
+    }
+
+    matches.sort((left, right) => (
+        left.textLength - right.textLength || left.area - right.area
+    ));
+    return matches[0]?.candidate || null;
+};
+
+const pickClosestGeminiComposerButton = async ({
+    candidates,
+    promptBox,
+    geometryFallback = false,
+}) => {
+    const count = await candidates.count().catch(() => 0);
+    const ranked = [];
+
+    for (let index = 0; index < count; index++) {
+        const candidate = candidates.nth(index);
+        const visible = await candidate.isVisible().catch(() => false);
+        const enabled = await candidate.isEnabled().catch(() => false);
+        if (!visible || !enabled) continue;
+
+        const box = await candidate.boundingBox().catch(() => null);
+        if (!box) continue;
+        if (!promptBox) return candidate;
+
+        const centerX = box.x + (box.width / 2);
+        const centerY = box.y + (box.height / 2);
+        const promptCenterY = promptBox.y + (promptBox.height / 2);
+
+        if (centerY < promptBox.y - 70 || centerY > promptBox.y + promptBox.height + 70) {
+            continue;
+        }
+        if (
+            geometryFallback
+            && (
+                centerX < promptBox.x - 180
+                || centerX > promptBox.x + Math.min(180, Math.max(90, promptBox.width * 0.3))
+            )
+        ) {
+            continue;
+        }
+
+        ranked.push({
+            candidate,
+            score: Math.abs(centerX - promptBox.x) + (Math.abs(centerY - promptCenterY) * 2),
+        });
+    }
+
+    ranked.sort((left, right) => left.score - right.score);
+    return ranked[0]?.candidate || null;
+};
+
+const findGeminiComposerAddButton = async (page, promptLocator) => {
+    const promptBox = await promptLocator.boundingBox().catch(() => null);
+    const semanticCandidates = page.locator([
+        'button[aria-label*="add" i]',
+        'button[aria-label*="upload" i]',
+        'button[aria-label*="attach" i]',
+        'button[aria-label*="thêm" i]',
+        'button[aria-label*="tải" i]',
+        'button[data-test-id*="upload" i]',
+        'button[data-testid*="upload" i]',
+    ].join(', '));
+
+    const semanticButton = await pickClosestGeminiComposerButton({
+        candidates: semanticCandidates,
+        promptBox,
+    });
+    if (semanticButton) return semanticButton;
+
+    // Gemini thường không gắn aria-label cho dấu "+" ở giao diện mới.
+    // Khi đó chỉ xét các nút nằm sát mép trái của chính ô soạn để tránh
+    // bấm nhầm New chat, micro hoặc nút Gửi.
+    return pickClosestGeminiComposerButton({
+        candidates: page.locator('button'),
+        promptBox,
+        geometryFallback: true,
+    });
+};
+
+const setGeminiFileFromMenu = async ({
+    page,
+    uploadMenuItem,
+    filePayload,
+}) => {
+    const triggerStrategies = [
+        async () => uploadMenuItem.click({ timeout: 6000 }),
+        async () => {
+            const box = await uploadMenuItem.boundingBox();
+            if (!box) throw new Error('mục Upload files không còn hiển thị');
+            await page.mouse.click(
+                box.x + (box.width / 2),
+                box.y + (box.height / 2)
+            );
+        },
+        async () => uploadMenuItem.evaluate((element) => {
+            const clickable = element.closest(
+                'button, [role="button"], [role="menuitem"], [role="option"], [tabindex]'
+            ) || element;
+            if (typeof clickable.click !== 'function') {
+                throw new Error('phần tử Upload files không thể click');
+            }
+            clickable.click();
+        }),
+    ];
+    const errors = [];
+
+    for (const trigger of triggerStrategies) {
+        const fileChooserPromise = page
+            .waitForEvent('filechooser', { timeout: 5000 })
+            .catch(() => null);
+
+        try {
+            await trigger();
+        } catch (error) {
+            errors.push(error.message);
+            continue;
+        }
+
+        const fileChooser = await fileChooserPromise;
+        if (fileChooser) {
+            await fileChooser.setFiles(filePayload);
+            const chooserElement = await fileChooser.element();
+            const selectedFileCount = await chooserElement
+                .evaluate((input) => input.files?.length || 0)
+                .catch(() => 0);
+            if (selectedFileCount > 0) return true;
+            errors.push('file chooser đã mở nhưng chưa nhận file');
+        }
+
+        // Có phiên Gemini tạo input file động nhưng không phát native filechooser.
+        const dynamicInputs = page.locator('input[type="file"]');
+        const dynamicInputCount = await dynamicInputs.count().catch(() => 0);
+        if (dynamicInputCount > 0) {
+            const dynamicInput = dynamicInputs.nth(dynamicInputCount - 1);
+            try {
+                await dynamicInput.setInputFiles(filePayload, { timeout: 5000 });
+                const selectedFileCount = await dynamicInput.evaluate(
+                    (input) => input.files?.length || 0
+                ).catch(() => 0);
+                if (selectedFileCount > 0) return true;
+                errors.push('input file động chưa nhận file');
+            } catch (error) {
+                errors.push(error.message);
+            }
+        }
+    }
+
+    throw new Error(
+        `đã thấy Upload files nhưng không mở được bộ chọn file${errors.length ? `: ${errors.join(' | ')}` : ''}`
+    );
+};
+
+const getGeminiAttachmentEvidence = async ({
+    promptLocator,
+    fileName,
+}) => promptLocator.evaluate((promptElement, expectedFileName) => {
+    const isVisible = (element) => {
+        if (!(element instanceof HTMLElement)) return false;
+        const style = window.getComputedStyle(element);
+        return style.display !== 'none'
+            && style.visibility !== 'hidden'
+            && element.getClientRects().length > 0;
+    };
+
+    const promptRect = promptElement.getBoundingClientRect();
+    let current = promptElement.parentElement;
+    let closestContainerWithButton = null;
+    let composerContainer = null;
+
+    // Gemini thay đổi class thường xuyên, nên xác định composer theo cấu trúc:
+    // ô nhập và các nút + / micro / gửi phải nằm trong cùng một khối gần nhau.
+    for (let depth = 0; current && depth < 9; depth++, current = current.parentElement) {
+        const rect = current.getBoundingClientRect();
+        if (
+            rect.width >= Math.max(220, promptRect.width * 0.8)
+            && rect.height <= Math.max(560, promptRect.height + 460)
+            && current.querySelector('button')
+        ) {
+            if (!closestContainerWithButton) closestContainerWithButton = current;
+            if (current.querySelectorAll('button').length >= 2) {
+                composerContainer = current;
+                break;
+            }
+        }
+    }
+
+    const container = composerContainer
+        || closestContainerWithButton
+        || promptElement.parentElement;
+    if (!container) {
+        return {
+            previewImageCount: 0,
+            previewMarkerCount: 0,
+            fileNameVisible: false,
+        };
+    }
+
+    const previewMarkerSelector = [
+        '[data-test-id*="attachment-preview" i]',
+        '[data-testid*="attachment-preview" i]',
+        '[class*="attachment-preview" i]',
+        '[class*="attachment-chip" i]',
+        '[class*="file-preview" i]',
+        '[class*="file-chip" i]',
+        '[class*="image-preview" i]',
+        '[class*="upload-preview" i]',
+        'button[aria-label*="remove attachment" i]',
+        'button[aria-label*="remove file" i]',
+        'button[aria-label*="xóa tệp" i]',
+        'button[aria-label*="xóa ảnh" i]',
+    ].join(', ');
+
+    const previewImageCount = [...container.querySelectorAll('img')]
+        .filter(isVisible)
+        .length;
+    const previewMarkerCount = [...container.querySelectorAll(previewMarkerSelector)]
+        .filter(isVisible)
+        .length;
+    const normalizedFileName = String(expectedFileName || '').trim().toLowerCase();
+    const fileNameVisible = normalizedFileName
+        ? [...container.querySelectorAll('*')].some((element) => (
+            element.children.length === 0
+            && isVisible(element)
+            && String(element.textContent || '').trim().toLowerCase().includes(normalizedFileName)
+        ))
+        : false;
+
+    return {
+        previewImageCount,
+        previewMarkerCount,
+        fileNameVisible,
+    };
+}, fileName).catch(() => ({
+    previewImageCount: 0,
+    previewMarkerCount: 0,
+    fileNameVisible: false,
+}));
+
+const hasNewGeminiAttachment = (currentEvidence, baselineEvidence) => (
+    currentEvidence.previewImageCount > baselineEvidence.previewImageCount
+    || currentEvidence.previewMarkerCount > baselineEvidence.previewMarkerCount
+    || (currentEvidence.fileNameVisible && !baselineEvidence.fileNameVisible)
+);
+
+const waitForGeminiAttachmentToSettle = async ({
+    page,
+    promptLocator,
+    fileName,
+    baselineEvidence,
+    checkStop,
+    timeout = 12000,
+}) => {
+    // Không dùng input.files.length làm tín hiệu thành công: sau vài lượt Gemini
+    // có thể giữ một input cũ, input đó nhận file nhưng không gắn ảnh vào composer.
+    const uploadIndicators = page.locator([
+        '[aria-label*="uploading" i]',
+        '[aria-label*="đang tải" i]',
+        '[class*="upload-progress" i]',
+        '[class*="attachment-progress" i]',
+    ].join(', '));
+    const deadline = Date.now() + timeout;
+    let previewWasSeen = false;
+
+    while (Date.now() < deadline) {
+        if (checkStop?.()) throw new Error('STOP_REQUESTED');
+        const currentEvidence = await getGeminiAttachmentEvidence({
+            promptLocator,
+            fileName,
+        });
+        if (hasNewGeminiAttachment(currentEvidence, baselineEvidence)) {
+            previewWasSeen = true;
+        }
+
+        const count = await uploadIndicators.count().catch(() => 0);
+        let uploading = false;
+        for (let index = 0; index < count; index++) {
+            if (await uploadIndicators.nth(index).isVisible().catch(() => false)) {
+                uploading = true;
+                break;
+            }
+        }
+
+        if (previewWasSeen && !uploading) {
+            // Xác nhận thumbnail không chỉ lóe lên rồi bị Gemini xóa do upload lỗi.
+            await page.waitForTimeout(500);
+            const settledEvidence = await getGeminiAttachmentEvidence({
+                promptLocator,
+                fileName,
+            });
+            return hasNewGeminiAttachment(settledEvidence, baselineEvidence);
+        }
+        await page.waitForTimeout(400);
+    }
+
+    return false;
+};
+
+export const attachImageToGemini = async ({
+    page,
+    promptLocator,
+    image,
+    log = console.log,
+    checkStop = null,
+}) => {
+    if (!image?.buffer) return false;
+    const filePayload = getGeminiFilePayload(image);
+
+    // UI cũ hoặc một số phiên Gemini giữ sẵn input file ẩn trong DOM.
+    const existingInputs = page.locator('input[type="file"]');
+    const existingInputCount = await existingInputs.count().catch(() => 0);
+    for (let index = existingInputCount - 1; index >= 0; index--) {
+        if (checkStop?.()) throw new Error('STOP_REQUESTED');
+        const fileInput = existingInputs.nth(index);
+        try {
+            const baselineEvidence = await getGeminiAttachmentEvidence({
+                promptLocator,
+                fileName: filePayload.name,
+            });
+            await fileInput.setInputFiles(filePayload, { timeout: 5000 });
+            const selectedFileCount = await fileInput.evaluate(
+                (element) => element.files?.length || 0
+            ).catch(() => 0);
+            if (selectedFileCount > 0) {
+                const attachmentConfirmed = await waitForGeminiAttachmentToSettle({
+                    page,
+                    promptLocator,
+                    fileName: filePayload.name,
+                    baselineEvidence,
+                    checkStop,
+                    timeout: 9000,
+                });
+                if (attachmentConfirmed) {
+                    log('[Gemini] ✅ Đã đính kèm ảnh qua ô file sẵn có; thumbnail đã xuất hiện.');
+                    return true;
+                }
+
+                // Đây là lỗi thường xuất hiện sau lượt đầu: input cũ vẫn nhận file
+                // nhưng Angular không còn nối nó với composer hiện tại.
+                await fileInput.setInputFiles([]).catch(() => {});
+                log('[Gemini] ⚠️ Ô file cũ đã nhận dữ liệu nhưng không tạo thumbnail; chuyển sang menu + → Upload files...');
+                break;
+            }
+        } catch (error) {
+            // Input có thể là node cũ đã bị Angular thay thế. Thử menu mới bên dưới.
+        }
+    }
+
+    try {
+        let uploadMenuItem = await findGeminiUploadMenuItem(page);
+        if (!uploadMenuItem) {
+            const addButton = await findGeminiComposerAddButton(page, promptLocator);
+            if (!addButton) throw new Error('không tìm thấy nút + cạnh ô soạn');
+
+            log('[Gemini] Đang mở menu + để chọn Upload files...');
+            await addButton.click({ timeout: 6000 });
+            await page.waitForTimeout(500);
+            uploadMenuItem = await findGeminiUploadMenuItem(page);
+        }
+
+        if (!uploadMenuItem) throw new Error('menu đã mở nhưng không thấy mục Upload files');
+
+        const baselineEvidence = await getGeminiAttachmentEvidence({
+            promptLocator,
+            fileName: filePayload.name,
+        });
+        await setGeminiFileFromMenu({
+            page,
+            uploadMenuItem,
+            filePayload,
+        });
+
+        const attachmentConfirmed = await waitForGeminiAttachmentToSettle({
+            page,
+            promptLocator,
+            fileName: filePayload.name,
+            baselineEvidence,
+            checkStop,
+        });
+        if (!attachmentConfirmed) {
+            throw new Error('file đã được chọn nhưng Gemini không hiển thị thumbnail trong ô soạn');
+        }
+
+        log('[Gemini] ✅ Đã đính kèm ảnh qua menu + → Upload files; thumbnail đã xuất hiện.');
+        return true;
+    } catch (error) {
+        try { await page.keyboard.press('Escape'); } catch (escapeError) {}
+        log(`[Gemini] ❌ Không xác nhận được ảnh đính kèm (${error.message}).`);
+        return false;
+    }
+};
+
+const isGeminiRateLimitVisible = async (page) => {
+    const message = await page.locator('[role="dialog"], [role="alert"], .toast, [class*="error"]')
+        .evaluateAll((elements) => elements
+            .filter((element) => {
+                const style = window.getComputedStyle(element);
+                return style.display !== 'none' && style.visibility !== 'hidden' && element.getClientRects().length > 0;
+            })
+            .map((element) => element.innerText || '')
+            .join('\n'))
+        .catch(() => '');
+    return isGeminiRateLimitText(message);
+};
+
+const getGeminiResponseTexts = async (page) => page
+    .locator(GEMINI_RESPONSE_SELECTORS)
+    .evaluateAll((elements) => {
+        const uniqueTexts = [];
+        const seen = new Set();
+        for (const element of elements) {
+            const markdown = element.matches?.('.markdown')
+                ? element
+                : element.querySelector?.('.markdown');
+            const text = (markdown || element).innerText?.trim() || '';
+            if (!text || seen.has(text)) continue;
+            seen.add(text);
+            uniqueTexts.push(text);
+        }
+        return uniqueTexts;
+    })
+    .catch(() => []);
+
+export const findNewGeminiResponseText = (responseTexts, baselineResponseTexts) => {
+    const baseline = baselineResponseTexts instanceof Set
+        ? baselineResponseTexts
+        : new Set(baselineResponseTexts || []);
+    return [...(responseTexts || [])]
+        .reverse()
+        .find((text) => text?.trim() && !baseline.has(text))
+        ?.trim() || '';
+};
+
+const findEnabledGeminiSendButton = async (page, timeout = 12000) => {
+    const deadline = Date.now() + timeout;
+    while (Date.now() < deadline) {
+        if (await isGeminiRateLimitVisible(page)) throw createGeminiRateLimitError();
+        const buttons = page.locator(GEMINI_SEND_BUTTON_SELECTOR);
+        const count = await buttons.count().catch(() => 0);
+        for (let index = count - 1; index >= 0; index--) {
+            const button = buttons.nth(index);
+            const visible = await button.isVisible().catch(() => false);
+            const enabled = await button.isEnabled().catch(() => false);
+            const ariaDisabled = await button.getAttribute('aria-disabled').catch(() => null);
+            if (visible && enabled && ariaDisabled !== 'true') return button;
+        }
+        await page.waitForTimeout(250);
+    }
+    return null;
+};
+
+const fillGeminiPrompt = async ({
+    page,
+    promptLocator,
+    prompt,
+    log,
+    checkStop,
+}) => {
+    const expectedText = String(prompt || '').trim();
+    if (!expectedText) {
+        const error = new Error('Prompt gửi Gemini đang trống.');
+        error.code = 'GEMINI_SEND_FAILED';
+        throw error;
+    }
+
+    for (let attempt = 0; attempt < 2; attempt++) {
+        if (checkStop?.()) throw new Error('STOP_REQUESTED');
+
+        await promptLocator.click({ timeout: 8000 });
+        await promptLocator.fill('');
+        await page.waitForTimeout(200);
+
+        if (attempt === 0) {
+            // Playwright fill() phát đúng chuỗi input event mà giao diện
+            // Angular/Quill của Gemini dùng để chuyển micro thành nút Gửi.
+            await promptLocator.fill(expectedText);
+        } else {
+            // Fallback cho phiên Gemini bị kẹt state sau khi tái sử dụng tab.
+            await promptLocator.focus();
+            await page.keyboard.insertText(expectedText);
+            await promptLocator.dispatchEvent('input');
+            await promptLocator.dispatchEvent('change');
+        }
+
+        await page.waitForTimeout(500);
+        const composerText = (await getEditableText(promptLocator) || '').trim();
+        const textWasInserted = composerText.length >= Math.max(
+            20,
+            Math.floor(expectedText.length * 0.75)
+        );
+
+        if (!textWasInserted) {
+            log(`[Gemini] ⚠️ Lần nhập ${attempt + 1}: nội dung trong ô soạn chưa đầy đủ, đang thử lại...`);
+            continue;
+        }
+
+        const sendButton = await findEnabledGeminiSendButton(page, 4000);
+        if (sendButton) {
+            log('[Playwright] ✅ Gemini đã nhận nội dung và bật nút Gửi.');
+            return;
+        }
+
+        log(`[Gemini] ⚠️ Lần nhập ${attempt + 1}: chữ đã hiện nhưng nút Gửi chưa được kích hoạt, đang làm mới ô soạn...`);
+    }
+
+    const error = new Error(
+        'Gemini hiển thị prompt nhưng không kích hoạt nút Gửi. Tool đã dừng nhánh Gemini để tránh treo SKU.'
+    );
+    error.code = 'GEMINI_SEND_FAILED';
+    throw error;
+};
+
+const waitForGeminiSubmission = async ({ page, promptLocator, checkStop }) => {
+    const deadline = Date.now() + 12000;
+    while (Date.now() < deadline) {
+        if (checkStop?.()) throw new Error('STOP_REQUESTED');
+        if (await isGeminiRateLimitVisible(page)) throw createGeminiRateLimitError();
+
+        const stopVisible = await page.locator(
+            'button[aria-label*="Stop"], button[aria-label*="Dừng"], button[class*="stop"]'
+        ).last().isVisible().catch(() => false);
+        if (stopVisible) return true;
+
+        const composerText = await getEditableText(promptLocator);
+        if (composerText !== null && !composerText.trim()) return true;
+        await page.waitForTimeout(300);
+    }
+    return false;
+};
+
+const submitGeminiPrompt = async ({ page, promptLocator, log, checkStop }) => {
+    for (let attempt = 0; attempt < 3; attempt++) {
+        if (checkStop?.()) throw new Error('STOP_REQUESTED');
+        const sendButton = await findEnabledGeminiSendButton(page, attempt === 0 ? 5000 : 2500);
+
+        if (!sendButton) {
+            log(`[Gemini] ⚠️ Không còn thấy nút Gửi ở lần ${attempt + 1}; không dùng Enter để tránh chèn thêm dòng.`);
+            continue;
+        }
+
+        try {
+            if (attempt === 1) {
+                log('[Playwright] Thử Enter trực tiếp trong ô Gemini...');
+                await promptLocator.focus();
+                await promptLocator.press('Enter');
+            } else if (attempt === 0) {
+                log('[Playwright] Đã thấy nút Gửi Gemini, đang bấm gửi...');
+                await sendButton.click({ timeout: 8000 });
+            } else {
+                log('[Playwright] Thử kích hoạt trực tiếp nút Gửi Gemini lần cuối...');
+                await sendButton.evaluate((element) => element.click());
+            }
+        } catch (error) {
+            log(`[Playwright] ⚠️ Thao tác gửi Gemini lần ${attempt + 1} chưa thành công: ${error.message}`);
+        }
+
+        if (await waitForGeminiSubmission({ page, promptLocator, checkStop })) {
+            log('[Playwright] ✅ Đã xác nhận Gemini nhận yêu cầu.');
+            return;
+        }
+    }
+
+    const error = new Error('Không gửi được prompt vào Gemini: nội dung vẫn còn trong ô nhập sau 3 lần thử.');
+    error.code = 'GEMINI_SEND_FAILED';
+    throw error;
+};
+
+/**
+ * Mở một phiên Gemini Playwright dùng chung cho Auto-Fill.
+ * Dùng mutex riêng để ChatGPT và Gemini có thể xử lý hai SKU song song.
+ */
+export const createGeminiTextSession = async ({
+    log = console.log,
+    checkStop = null,
+} = {}) => {
+    let waitingWasLogged = false;
+    while (geminiTextMutex.isLocked()) {
+        if (checkStop?.()) throw new Error('STOP_REQUESTED');
+        if (!waitingWasLogged) {
+            log('[Playwright] Gemini đang xử lý tác vụ khác, Auto-Fill đang xếp hàng...');
+            waitingWasLogged = true;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+    await geminiTextMutex.lock();
+    if (checkStop?.()) {
+        geminiTextMutex.unlock();
+        throw new Error('STOP_REQUESTED');
+    }
+
+    const userDataDir = path.join(__dirname, '../../chrome_data_gemini');
+    let context = null;
+    let closed = false;
+    let pageInitialized = false;
+    let requestsInCurrentConversation = 0;
+    let lastGenerationCompletedAt = 0;
+
+    const close = async () => {
+        if (closed) return;
+        closed = true;
+        if (context) {
+            try { await context.close(); } catch (error) {
+                console.warn('[Playwright Gemini] Không thể đóng browser sạch sẽ:', error.message);
+            }
+        }
+        geminiTextMutex.unlock();
+    };
+
+    try {
+        log('[Playwright] Đang mở phiên Gemini song song (không dùng API)...');
+        context = await chromium.launchPersistentContext(
+            userDataDir,
+            humanLaunchOptions(['--window-position=980,60'])
+        );
+        const page = context.pages()[0] || await context.newPage();
+        await page.bringToFront();
+        await advancedAntiFingerprint(page);
+
+        const generate = async (prompt, image = null, currentCheckStop = null) => {
+            const shouldStop = currentCheckStop || checkStop;
+            if (closed) throw new Error('Phiên Gemini đã đóng.');
+            if (shouldStop?.()) throw new Error('STOP_REQUESTED');
+
+            if (lastGenerationCompletedAt > 0) {
+                const requestedGap = 5000 + Math.floor(Math.random() * 3001);
+                const waitMs = requestedGap - (Date.now() - lastGenerationCompletedAt);
+                if (waitMs > 0) {
+                    log(`[Gemini] ⏱️ Nghỉ ${Math.ceil(waitMs / 1000)} giây trước lượt tiếp theo...`);
+                    await waitWithStopCheck({ page, durationMs: waitMs, checkStop: shouldStop });
+                }
+            }
+
+            if (!pageInitialized || requestsInCurrentConversation >= 8) {
+                log('[Playwright] Đang mở cuộc trò chuyện Gemini mới...');
+                await page.goto('https://gemini.google.com/app', {
+                    waitUntil: 'domcontentloaded',
+                    timeout: 60000,
+                });
+                await page.waitForTimeout(2000);
+                pageInitialized = true;
+                requestsInCurrentConversation = 0;
+            }
+
+            if (await isGeminiRateLimitVisible(page)) throw createGeminiRateLimitError();
+
+            const promptLocator = await findGeminiPrompt(page);
+            if (!promptLocator) {
+                const error = new Error('Không tìm thấy ô nhập Gemini. Hãy đăng nhập Gemini trong phần Cài đặt AI.');
+                error.code = 'GEMINI_SESSION_UNAVAILABLE';
+                throw error;
+            }
+
+            if (image?.buffer) {
+                log('[Playwright] Đang đính kèm ảnh sản phẩm vào Gemini...');
+                const imageAttached = await attachImageToGemini({
+                    page,
+                    promptLocator,
+                    image,
+                    log,
+                    checkStop: shouldStop,
+                });
+                if (!imageAttached) {
+                    const error = new Error(
+                        'Gemini không hiển thị thumbnail ảnh. Tool không gửi prompt chữ để tránh AI đoán sai màu hoặc thông tin sản phẩm.'
+                    );
+                    error.code = 'GEMINI_ATTACHMENT_FAILED';
+                    throw error;
+                }
+            }
+
+            // Chụp chữ ký phản hồi cũ sau khi UI tải/đính kèm xong. Không dùng
+            // data-* tự gắn vì Gemini có thể render lại DOM và làm mất dấu,
+            // khiến tool nhận nhầm phản hồi cũ là phản hồi của prompt hiện tại.
+            const baselineResponseTexts = new Set(await getGeminiResponseTexts(page));
+
+            await fillGeminiPrompt({
+                page,
+                promptLocator,
+                prompt,
+                log,
+                checkStop: shouldStop,
+            });
+            await submitGeminiPrompt({ page, promptLocator, log, checkStop: shouldStop });
+            log('[Playwright] Đang chờ Gemini trả JSON...');
+            let lastText = '';
+            let stableCount = 0;
+            for (let attempt = 0; attempt < 150; attempt++) {
+                if (shouldStop?.()) throw new Error('STOP_REQUESTED');
+                if (await isGeminiRateLimitVisible(page)) throw createGeminiRateLimitError();
+                await page.waitForTimeout(2000);
+
+                const responseTexts = await getGeminiResponseTexts(page);
+                const normalized = findNewGeminiResponseText(
+                    responseTexts,
+                    baselineResponseTexts
+                );
+                if (normalized.length < 20) continue;
+                if (isGeminiRateLimitText(normalized)) throw createGeminiRateLimitError();
+
+                if (normalized === lastText) stableCount++;
+                else {
+                    lastText = normalized;
+                    stableCount = 0;
+                }
+                if (stableCount >= 3) {
+                    requestsInCurrentConversation++;
+                    lastGenerationCompletedAt = Date.now();
+                    return normalized;
+                }
+            }
+
+            throw new Error('Gemini phản hồi quá thời gian 5 phút.');
+        };
+
+        log('[Playwright] ✅ Phiên Gemini đã sẵn sàng.');
+        return { provider: 'gemini', generate, close };
     } catch (error) {
         await close();
         throw error;
@@ -1821,21 +2927,7 @@ export const generateContentOnChatGPT = async (prompt, type, imagePath = null) =
         
         await page.waitForTimeout(3000);
         
-        const PROMPT_SELECTORS = [
-            '#prompt-textarea',
-            'div[contenteditable="true"][data-lexical-editor]',
-            'div[contenteditable="true"]',
-            'p[data-placeholder]',
-        ];
-
-        let promptLocator = null;
-        for (const sel of PROMPT_SELECTORS) {
-            try {
-                await page.waitForSelector(sel, { state: 'visible', timeout: 5000 });
-                promptLocator = page.locator(sel).first();
-                break;
-            } catch (e) {}
-        }
+        const promptLocator = await findChatGPTPrompt(page, 15000);
 
         if (!promptLocator) {
             throw new Error('Không tìm thấy ô nhập liệu ChatGPT!');
@@ -1866,6 +2958,8 @@ export const generateContentOnChatGPT = async (prompt, type, imagePath = null) =
             }
         } catch (e) {}
 
+        const baselineAssistantMessageCount = await getChatGPTAssistantMessageCount(page);
+
         console.log('✍️ Đang gõ prompt text...');
         await promptLocator.click();
         await page.waitForTimeout(300);
@@ -1880,13 +2974,7 @@ export const generateContentOnChatGPT = async (prompt, type, imagePath = null) =
         await page.keyboard.press('Backspace');
         await page.waitForTimeout(500);
         
-        try {
-            const sendBtn = await page.waitForSelector('button[data-testid="send-button"]:not([disabled])', { timeout: 10000 });
-            if (sendBtn) await sendBtn.click();
-            else await page.keyboard.press('Enter');
-        } catch (err) {
-            await page.keyboard.press('Enter');
-        }
+        await submitChatGPTPrompt({ page, promptLocator, log: console.log, checkStop: null });
         
         // Ghi nhớ URL nếu chưa có (lấy URL hiện tại sau khi nó chuyển hướng)
         await page.waitForTimeout(3000);
@@ -1896,45 +2984,35 @@ export const generateContentOnChatGPT = async (prompt, type, imagePath = null) =
             updateAiTaskUrl(saveType, currentUrl);
         }
         
-        // Đánh dấu các tin nhắn cũ
-        await page.evaluate(() => {
-            document.querySelectorAll('div[data-message-author-role="assistant"]').forEach(el => {
-                el.classList.add('already-processed-msg');
-            });
-        });
-        
         console.log('⏳ Đang chờ ChatGPT viết nội dung...');
         
+        let lastAssistantText = '';
+        let stableAssistantTextPolls = 0;
         for (let attempt = 0; attempt < 60; attempt++) {
             await page.waitForTimeout(5000);
             // Đợi cho đến khi ChatGPT không còn nút Stop generating nữa (tức là đã viết xong)
-            try {
-                const stopBtn = await page.$('button[data-testid="stop-button"]');
-                if (stopBtn) continue; // Vẫn đang stream chữ
-            } catch (e) {}
+            const isGenerating = await page.locator('button[data-testid="stop-button"]').first()
+                .isVisible().catch(() => false);
             
-            // Lấy text mới nhất từ tin nhắn chưa đánh dấu
-            const newMessages = await page.$$('div[data-message-author-role="assistant"]:not(.already-processed-msg)');
-            if (newMessages.length > 0) {
-                const lastMsg = newMessages[newMessages.length - 1];
-                const text = await page.evaluate((el) => {
-                    // Chỉ đọc phần văn bản. Các chip nguồn/tệp của ChatGPT Project
-                    // thường là button/role=button nằm ngay trong khối markdown.
-                    const contentRoot = el.querySelector('.markdown') || el;
-                    const cleanRoot = contentRoot.cloneNode(true);
-                    cleanRoot.querySelectorAll([
-                        'button',
-                        '[role="button"]',
-                        '[data-testid*="source" i]',
-                        '[data-testid*="citation" i]',
-                        '[data-testid*="file" i]',
-                        '[aria-label*="source" i]',
-                        '[aria-label*="nguồn" i]',
-                    ].join(',')).forEach((node) => node.remove());
-                    return cleanRoot.innerText || cleanRoot.textContent || '';
-                }, lastMsg);
+            const text = await getLatestChatGPTAssistantTextAfterBaseline({
+                page,
+                baselineAssistantMessageCount,
+            });
+            const cleanText = text?.trim() || '';
+            if (!cleanText) {
+                if (isGenerating) continue; // Vẫn đang stream chữ nhưng chưa thấy text mới
+                continue;
+            }
+            if (cleanText === lastAssistantText) {
+                stableAssistantTextPolls++;
+            } else {
+                lastAssistantText = cleanText;
+                stableAssistantTextPolls = 0;
+            }
+            if (!isGenerating || stableAssistantTextPolls >= 2) {
+                if (isGenerating) await stopChatGPTGenerationIfVisible(page);
                 console.log('✅ Đã lấy xong nội dung!');
-                return sanitizeGeneratedSocialContent(text);
+                return sanitizeGeneratedSocialContent(cleanText);
             }
         }
 
@@ -2065,22 +3143,7 @@ export const analyzeNewSampleImages = async () => {
         const isLoggedOut = await page.isVisible('text="Log in"');
         if (isLoggedOut) throw new Error('Chưa đăng nhập ChatGPT!');
 
-        // Tìm ô nhập liệu
-        const PROMPT_SELECTORS = [
-            '#prompt-textarea',
-            'div[contenteditable="true"][data-lexical-editor]',
-            'div[contenteditable="true"]',
-            'p[data-placeholder]',
-        ];
-
-        let promptLocator = null;
-        for (const sel of PROMPT_SELECTORS) {
-            try {
-                await page.waitForSelector(sel, { state: 'visible', timeout: 8000 });
-                promptLocator = page.locator(sel).first();
-                break;
-            } catch (e) {}
-        }
+        const promptLocator = await findChatGPTPrompt(page, 15000);
         if (!promptLocator) throw new Error('Không tìm thấy ô nhập liệu ChatGPT!');
 
         for (let i = 0; i < newImages.length; i++) {
@@ -2130,42 +3193,44 @@ IMPORTANT:
 - Leave enough composition room for the full watch bracelet/strap. The prompt must not crop, hide, shorten, or cut the strap ends.
 - If a future product watch has a leather, rubber, or silicone strap while this reference image shows a steel bracelet, the future product strap must still remain full-length, continuous, and uncropped.`;
 
+                const baselineAssistantMessageCount = await getChatGPTAssistantMessageCount(page);
+
                 await promptLocator.click();
                 await page.waitForTimeout(300);
                 await promptLocator.fill(analyzePrompt);
                 await page.waitForTimeout(1000);
 
-                // Send
-                try {
-                    const sendBtn = await page.waitForSelector('button[data-testid="send-button"]:not([disabled])', { timeout: 10000 });
-                    if (sendBtn) await sendBtn.click();
-                    else await page.keyboard.press('Enter');
-                } catch (err) {
-                    await page.keyboard.press('Enter');
-                }
-
-                // Đánh dấu tin nhắn cũ
-                await page.evaluate(() => {
-                    document.querySelectorAll('div[data-message-author-role="assistant"]').forEach(el => {
-                        el.classList.add('already-processed-msg');
-                    });
-                });
+                await submitChatGPTPrompt({ page, promptLocator, log: console.log, checkStop: null });
 
                 console.log('⏳ Đang chờ ChatGPT phân tích ảnh...');
 
                 // Chờ response
                 let responseText = null;
+                let lastAssistantText = '';
+                let stableAssistantTextPolls = 0;
                 for (let attempt = 0; attempt < 40; attempt++) {
                     await page.waitForTimeout(5000);
-                    try {
-                        const stopBtn = await page.$('button[data-testid="stop-button"]');
-                        if (stopBtn) continue;
-                    } catch (e) {}
+                    const isGenerating = await page.locator('button[data-testid="stop-button"]').first()
+                        .isVisible().catch(() => false);
 
-                    const newMessages = await page.$$('div[data-message-author-role="assistant"]:not(.already-processed-msg)');
-                    if (newMessages.length > 0) {
-                        const lastMsg = newMessages[newMessages.length - 1];
-                        responseText = await lastMsg.innerText();
+                    const text = await getLatestChatGPTAssistantTextAfterBaseline({
+                        page,
+                        baselineAssistantMessageCount,
+                    });
+                    const cleanText = text?.trim() || '';
+                    if (!cleanText) {
+                        if (isGenerating) continue;
+                        continue;
+                    }
+                    if (cleanText === lastAssistantText) {
+                        stableAssistantTextPolls++;
+                    } else {
+                        lastAssistantText = cleanText;
+                        stableAssistantTextPolls = 0;
+                    }
+                    if (!isGenerating || stableAssistantTextPolls >= 2) {
+                        if (isGenerating) await stopChatGPTGenerationIfVisible(page);
+                        responseText = cleanText;
                         break;
                     }
                 }
@@ -2246,7 +3311,8 @@ export const openLoginHelper = async (provider) => {
         throw new Error('Provider không hợp lệ');
     }
     
-    await aiMutex.lock();
+    const providerMutex = provider === 'gemini' ? geminiTextMutex : aiMutex;
+    await providerMutex.lock();
     try {
         if (fs.existsSync(userDataDir)) {
         fs.rmSync(userDataDir, { recursive: true, force: true });
@@ -2273,6 +3339,6 @@ export const openLoginHelper = async (provider) => {
         });
     });
     } finally {
-        aiMutex.unlock();
+        providerMutex.unlock();
     }
 };
