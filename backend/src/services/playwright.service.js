@@ -302,6 +302,9 @@ const getRandomSampleImageLocal = () => {
 };
 
 const settingsPath = path.join(__dirname, '../../config/settings.json');
+const CHATGPT_CONTENT_PROJECT_URL = 'https://chatgpt.com/g/g-p-6a70189272548191ba378566fbdc544b/project';
+const CHATGPT_IMAGE_PROJECT_URL = 'https://chatgpt.com/g/g-p-6a701915014081919f90f09828c54131/project';
+
 const getSettingValue = (key) => {
     try {
         if (fs.existsSync(settingsPath)) {
@@ -796,7 +799,7 @@ export const generateBackgroundOnChatGPT = async (imagePath, promptsArray, abort
         await page.bringToFront();
         await advancedAntiFingerprint(page);
         
-        let targetUrl = getSettingValue('chatGptProjectUrl') || 'https://chatgpt.com/g/g-p-6a472fac29a08191bc9914d5a8c451ac/project';
+        let targetUrl = getSettingValue('chatGptProjectUrl') || CHATGPT_IMAGE_PROJECT_URL;
         let savedChatId = null;
         if (!isNewSession) {
             savedChatId = getAiTaskUrl('imageChatUrl');
@@ -1859,7 +1862,7 @@ export const createChatGPTTextSession = async ({
     const userDataDir = path.join(__dirname, '../../chrome_data_chatgpt');
     const targetUrl = projectUrl
         || getSettingValue('chatGptContentProjectUrl')
-        || 'https://chatgpt.com/';
+        || CHATGPT_CONTENT_PROJECT_URL;
     let activeTargetUrl = targetUrl;
     let context = null;
     let closed = false;
@@ -2920,7 +2923,7 @@ export const generateContentOnChatGPT = async (prompt, type, imagePath = null) =
         await page.bringToFront();
         await advancedAntiFingerprint(page);
         // Luôn sử dụng URL gốc của Dự án Content AI (Bảo đảm 100% chạy trong Dự án)
-        let targetUrl = getSettingValue('chatGptContentProjectUrl') || 'https://chatgpt.com/g/g-p-6a472f6b41d48191a7d769ade350641d-content-watch-ai/project';
+        let targetUrl = getSettingValue('chatGptContentProjectUrl') || CHATGPT_CONTENT_PROJECT_URL;
         
         console.log(`🌐 Đang truy cập Dự án Content AI: ${targetUrl}...`);
         await page.goto(targetUrl, { waitUntil: 'domcontentloaded' });
