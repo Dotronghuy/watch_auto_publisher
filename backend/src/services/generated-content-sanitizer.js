@@ -20,6 +20,43 @@ const isProjectSourceOnlyLine = (line) => {
   return labels.length > 0 && labels.every((label) => PROJECT_SOURCE_LABELS.has(label));
 };
 
+const normalizeAssistantText = (value) => String(value || '')
+  .replace(/\r\n?/g, '\n')
+  .replace(/\u00a0/g, ' ')
+  .replace(/[ \t]+/g, ' ')
+  .trim();
+
+const stripAssistantSpeechPrefix = (value) => normalizeAssistantText(value)
+  .replace(/^(?:ChatGPT\s*(?:đã nói|said)|Assistant)\s*[:：]\s*/i, '')
+  .trim();
+
+const foldForStatusMatch = (value) => stripAssistantSpeechPrefix(value)
+  .toLowerCase()
+  .normalize('NFD')
+  .replace(/[\u0300-\u036f]/g, '')
+  .replace(/đ/g, 'd')
+  .replace(/\s+/g, ' ')
+  .replace(/[.。…]+$/g, '')
+  .trim();
+
+const TRANSIENT_CHATGPT_STATUS_TEXTS = [
+  'dang tim kiem ngu canh du an',
+  'searching project context',
+  'dang suy luan',
+  'thinking',
+  'da ngung suy luan',
+  'stopped reasoning',
+];
+
+export const isTransientChatGPTAssistantText = (value) => {
+  const normalized = foldForStatusMatch(value);
+  if (!normalized) return true;
+
+  return TRANSIENT_CHATGPT_STATUS_TEXTS.some((status) => (
+    normalized === status || normalized.startsWith(`${status} `)
+  ));
+};
+
 /**
  * Loại các nhãn nguồn của ChatGPT Project khỏi caption trước khi đăng.
  * Chỉ xóa dòng đứng riêng hoàn toàn là tên nguồn; nội dung bình thường có nhắc
@@ -28,7 +65,10 @@ const isProjectSourceOnlyLine = (line) => {
 export const sanitizeGeneratedSocialContent = (value) => {
   if (value === null || value === undefined) return value;
 
-  return String(value)
+  const withoutAssistantPrefix = stripAssistantSpeechPrefix(value);
+  if (isTransientChatGPTAssistantText(withoutAssistantPrefix)) return '';
+
+  return withoutAssistantPrefix
     .replace(/\r\n?/g, '\n')
     .split('\n')
     .filter((line) => !isProjectSourceOnlyLine(line))
@@ -36,4 +76,3 @@ export const sanitizeGeneratedSocialContent = (value) => {
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 };
-

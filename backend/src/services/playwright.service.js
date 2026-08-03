@@ -1,4 +1,4 @@
-﻿import { chromium } from 'playwright-extra';
+import { chromium } from 'playwright-extra';
 import stealth from 'puppeteer-extra-plugin-stealth';
 import path from 'path';
 import fs from 'fs';
@@ -14,7 +14,7 @@ import {
     hasRequiredAttachmentPreviews,
 } from './chatgpt-submission-policy.js';
 import { selectNewChatGptImageCandidate } from './chatgpt-image-detection-policy.js';
-import { sanitizeGeneratedSocialContent } from './generated-content-sanitizer.js';
+import { isTransientChatGPTAssistantText, sanitizeGeneratedSocialContent } from './generated-content-sanitizer.js';
 
 const prisma = new PrismaClient();
 const __filename = fileURLToPath(import.meta.url);
@@ -1695,6 +1695,33 @@ const getLatestChatGPTAssistantTextAfterBaseline = async ({
         ].join(',')).forEach((node) => node.remove());
         return (cleanRoot.innerText || cleanRoot.textContent || '').trim();
     };
+    const stripAssistantSpeechPrefix = (value) => String(value || '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .replace(/^(?:ChatGPT\s*(?:đã nói|said)|Assistant)\s*[:：]\s*/i, '')
+        .trim();
+    const foldForStatusMatch = (value) => stripAssistantSpeechPrefix(value)
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/đ/g, 'd')
+        .replace(/\s+/g, ' ')
+        .replace(/[.。…]+$/g, '')
+        .trim();
+    const transientAssistantStatuses = [
+        'dang tim kiem ngu canh du an',
+        'searching project context',
+        'dang suy luan',
+        'thinking',
+        'da ngung suy luan',
+        'stopped reasoning',
+    ];
+    const isTransientAssistantText = (text) => {
+        const normalized = foldForStatusMatch(text);
+        return !normalized || transientAssistantStatuses.some((status) => (
+            normalized === status || normalized.startsWith(`${status} `)
+        ));
+    };
 
     const assistantMessages = uniqueTurns(assistantSelector);
     const userMessages = uniqueTurns(userSelector);
@@ -1710,7 +1737,7 @@ const getLatestChatGPTAssistantTextAfterBaseline = async ({
 
     for (const candidate of candidates.slice().reverse()) {
         const text = extractCleanText(candidate);
-        if (text) return text;
+        if (text && !isTransientAssistantText(text)) return text;
     }
 
     return '';
@@ -3002,9 +3029,13 @@ export const generateContentOnChatGPT = async (prompt, type, imagePath = null) =
                 page,
                 baselineAssistantMessageCount,
             });
-            const cleanText = text?.trim() || '';
+            const cleanText = sanitizeGeneratedSocialContent(text);
             if (!cleanText) {
                 if (isGenerating) continue; // Vẫn đang stream chữ nhưng chưa thấy text mới
+                continue;
+            }
+            if (isTransientChatGPTAssistantText(cleanText)) {
+                if (isGenerating) continue;
                 continue;
             }
             if (cleanText === lastAssistantText) {
@@ -3016,7 +3047,7 @@ export const generateContentOnChatGPT = async (prompt, type, imagePath = null) =
             if (!isGenerating || stableAssistantTextPolls >= 2) {
                 if (isGenerating) await stopChatGPTGenerationIfVisible(page);
                 console.log('✅ Đã lấy xong nội dung!');
-                return sanitizeGeneratedSocialContent(cleanText);
+                return cleanText;
             }
         }
 

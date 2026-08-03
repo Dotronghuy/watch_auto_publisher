@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { sanitizeGeneratedSocialContent } from './generated-content-sanitizer.js';
+import {
+  isTransientChatGPTAssistantText,
+  sanitizeGeneratedSocialContent,
+} from './generated-content-sanitizer.js';
 
 test('removes ChatGPT Project source chips from a generated caption', () => {
   const input = [
@@ -33,3 +36,16 @@ test('keeps normal prose that merely mentions a source name', () => {
   assert.equal(sanitizeGeneratedSocialContent(input), input);
 });
 
+test('drops transient ChatGPT Project context status', () => {
+  const input = 'ChatGPT đã nói:Đang tìm kiếm ngữ cảnh dự án';
+
+  assert.equal(isTransientChatGPTAssistantText(input), true);
+  assert.equal(sanitizeGeneratedSocialContent(input), '');
+});
+
+test('removes ChatGPT screen-reader prefix from final caption', () => {
+  assert.equal(
+    sanitizeGeneratedSocialContent('ChatGPT đã nói:Anh không cần thả thính — cứ để mặt xanh lên tiếng.'),
+    'Anh không cần thả thính — cứ để mặt xanh lên tiếng.',
+  );
+});
