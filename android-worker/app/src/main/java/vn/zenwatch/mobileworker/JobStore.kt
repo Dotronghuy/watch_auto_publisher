@@ -18,7 +18,7 @@ object JobStore {
             .edit()
             .clear()
             .putString(KEY_JOB, job.toJson().toString())
-            .putString(KEY_STEP, AutomationStep.OPEN_MENU.name)
+            .putString(KEY_STEP, AutomationStep.OPEN_POST.name)
             .putLong(KEY_STARTED_AT, now)
             .putLong(KEY_STEP_STARTED_AT, now)
             .apply()
@@ -54,6 +54,15 @@ object JobStore {
             .putString(KEY_STEP, step.name)
             .putLong(KEY_STEP_STARTED_AT, System.currentTimeMillis())
             .apply()
+    }
+
+    /**
+     * A service/app restart invalidates every assumption about Facebook's current
+     * screen. Restart from the exact-post gate instead of resuming on a stale
+     * menu or product-link form left by an older job.
+     */
+    fun restartNavigation(context: Context) {
+        setStep(context, AutomationStep.OPEN_POST)
     }
 
     fun markForReport(context: Context, success: Boolean, message: String) {

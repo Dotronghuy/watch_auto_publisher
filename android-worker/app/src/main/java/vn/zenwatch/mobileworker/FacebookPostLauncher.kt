@@ -7,10 +7,10 @@ import android.net.Uri
 /**
  * Opens the exact Facebook object described by a mobile-link job.
  *
- * Facebook's Android app sometimes treats /PageID/posts/PostID as a generic
- * feed route. A Page post's composite Graph ID is more precise, so regular
- * posts are opened with story_fbid + PageID first and then with two exact
- * permalink fallbacks. Reels keep the permalink returned by Graph API.
+ * Facebook's Android app sometimes treats a canonical PageID/PostID route as a
+ * generic feed route. Prefer the permalink returned by Graph API, then try the
+ * canonical representations. The fb://story route is kept only as the final
+ * fallback because some Facebook builds silently turn it into Home/News Feed.
  */
 object FacebookPostLauncher {
     private val compositePostId = Regex("^(\\d+)_(\\d+)$")
@@ -37,32 +37,40 @@ object FacebookPostLauncher {
 
     fun targetCount(job: MobileLinkJob): Int = targetUris(job).size
 
-    fun exactWebUrl(job: MobileLinkJob): String =
-        compositeParts(job.postId)?.let { (pageId, storyId) ->
-            buildStoryPermalink(pageId, storyId).toString()
-        } ?: job.postUrl
+    fun exactWebUrl(job: MobileLinkJob): String = job.postUrl
 
     private fun targetUris(job: MobileLinkJob): List<Uri> {
         val composite = compositeParts(job.postId)
         if (composite != null) {
             val (pageId, storyId) = composite
-            val webPermalink = buildStoryPermalink(pageId, storyId)
-            return listOf(
+            val graphPermalink = httpsUri(job.postUrl)
+            val canonicalPermalink = buildStoryPermalink(pageId, storyId)
+            return listOfNotNull(
+                graphPermalink,
+                graphPermalink?.let(::faceWebModal),
+                canonicalPermalink,
+                faceWebModal(canonicalPermalink),
                 Uri.Builder()
                     .scheme("fb")
                     .authority("story")
                     .appendQueryParameter("story_fbid", storyId)
                     .appendQueryParameter("id", pageId)
                     .build(),
-                webPermalink,
-                faceWebModal(webPermalink),
-            )
+            ).distinctBy(Uri::toString)
         }
 
-        val exactVideoUrl = Uri.parse(job.postUrl)
-        return listOf(
-            exactVideoUrl,
-            faceWebModal(exactVideoUrl),
+        val graphPermalink = httpsUri(job.postUrl)
+        val canonicalReel = Uri.Builder()
+            .scheme("https")
+            .authority("www.facebook.com")
+            .appendPath("reel")
+            .appendPath(job.postId.trim())
+            .build()
+        return listOfNotNull(
+            graphPermalink,
+            graphPermalink?.let(::faceWebModal),
+            canonicalReel,
+            faceWebModal(canonicalReel),
         ).distinctBy(Uri::toString)
     }
 
@@ -80,6 +88,12 @@ object FacebookPostLauncher {
             .appendQueryParameter("story_fbid", storyId)
             .appendQueryParameter("id", pageId)
             .build()
+
+    private fun httpsUri(value: String): Uri? = runCatching {
+        Uri.parse(value.trim()).takeIf { uri ->
+            uri.scheme.equals("https", ignoreCase = true) && !uri.host.isNullOrBlank()
+        }
+    }.getOrNull()
 
     private fun faceWebModal(webUri: Uri): Uri =
         Uri.Builder()

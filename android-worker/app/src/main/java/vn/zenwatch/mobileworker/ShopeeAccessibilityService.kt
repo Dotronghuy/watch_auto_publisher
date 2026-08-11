@@ -21,12 +21,15 @@ class ShopeeAccessibilityService : AccessibilityService() {
     private val processRunnable = Runnable { processCurrentStep() }
     private val menuSemanticTapAttempts = mutableMapOf<String, Int>()
     private val menuFallbackTapAttempts = mutableMapOf<String, Int>()
+    private val menuTapDispatched = mutableSetOf<String>()
+    private val linkManagerTapAttempts = mutableMapOf<String, Int>()
     private val reelScreenshotAttempts = mutableMapOf<String, Int>()
     private val reelScreenshotInFlight = mutableSetOf<String>()
     private val reelOptionsScrollAttempts = mutableMapOf<String, Int>()
     private val affiliateProductTapAttempts = mutableMapOf<String, Int>()
     private val saveFallbackAttempts = mutableSetOf<String>()
     private val exactPostReopenTargets = mutableMapOf<String, Int>()
+    private val exactPostLastLaunchAt = mutableMapOf<String, Long>()
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event?.packageName?.toString() != FACEBOOK_PACKAGE) return
@@ -60,6 +63,7 @@ class ShopeeAccessibilityService : AccessibilityService() {
 
         try {
             when (active.step) {
+                AutomationStep.OPEN_POST -> openExactPost(root, active)
                 AutomationStep.OPEN_MENU -> openPostMenu(root, active)
                 AutomationStep.OPEN_LINK_MANAGER -> openLinkManager(root, active)
                 AutomationStep.FILL_URL -> fillUrl(root, active)
@@ -77,7 +81,87 @@ class ShopeeAccessibilityService : AccessibilityService() {
         }
     }
 
+    /**
+     * Safety gate for every job. No menu or form interaction may run until the
+     * exact Facebook object opened by [FacebookPostLauncher] is visible as a
+     * dedicated post/Reel screen. In particular, an old product-link form is
+     * treated as stale UI and can never be reused by a new SKU.
+     */
+    private fun openExactPost(root: AccessibilityNodeInfo, active: ActiveJob) {
+        val fallbackKey = "${active.job.id}:${active.job.attempt}"
+        val staleProductUi = hasProductLinkSurface(root) || isReelOptionsMenuVisible(root)
+        val homeFeed = looksLikeFacebookHomeFeed(root)
+
+        if (!staleProductUi && !homeFeed && looksLikeExactPostDetail(root, active)) {
+            exactPostReopenTargets.remove(fallbackKey)
+            exactPostLastLaunchAt.remove(fallbackKey)
+            menuSemanticTapAttempts.remove(fallbackKey)
+            menuFallbackTapAttempts.remove(fallbackKey)
+            menuTapDispatched.remove(fallbackKey)
+            linkManagerTapAttempts.remove(fallbackKey)
+            reelScreenshotAttempts.remove(fallbackKey)
+            reelOptionsScrollAttempts.remove(fallbackKey)
+            JobStore.setStep(this, AutomationStep.OPEN_MENU)
+            scheduleNext(350)
+            return
+        }
+
+        if (elapsedInStep(active) < EXACT_POST_FIRST_RETRY_MS) {
+            scheduleNext(500)
+            return
+        }
+
+        val sinceLastLaunch = System.currentTimeMillis() -
+            (exactPostLastLaunchAt[fallbackKey] ?: 0L)
+        if (sinceLastLaunch < EXACT_POST_REOPEN_SETTLE_MS) {
+            scheduleNext(EXACT_POST_REOPEN_SETTLE_MS - sinceLastLaunch)
+            return
+        }
+
+        val currentTarget = exactPostReopenTargets[fallbackKey] ?: 0
+        val nextTarget = currentTarget + 1
+        if (nextTarget < FacebookPostLauncher.targetCount(active.job)) {
+            exactPostReopenTargets[fallbackKey] = nextTarget
+            if (FacebookPostLauncher.launch(this, active.job, nextTarget)) {
+                exactPostLastLaunchAt[fallbackKey] = System.currentTimeMillis()
+                scheduleNext(EXACT_POST_REOPEN_SETTLE_MS)
+                return
+            }
+        }
+
+        val reason = when {
+            staleProductUi -> "Facebook vẫn hiển thị menu/form của bài cũ"
+            homeFeed -> "Facebook vẫn đang ở News Feed"
+            else -> "Facebook chưa hiển thị màn hình chi tiết đúng bài/Reel"
+        }
+        failStepAfter(
+            active,
+            EXACT_POST_FAIL_TIMEOUT_MS,
+            "$reason; Worker đã dừng để tránh gắn nhầm link",
+        )
+    }
+
     private fun openPostMenu(root: AccessibilityNodeInfo, active: ActiveJob) {
+        // OPEN_MENU is reachable only after OPEN_POST has verified the detail
+        // screen. If Facebook jumps elsewhere, fail closed instead of reusing a
+        // product surface that may belong to an older post.
+        if (hasProductLinkForm(root)) {
+            JobStore.restartNavigation(this)
+            FacebookPostLauncher.launch(this, active.job)
+            scheduleNext(EXACT_POST_REOPEN_SETTLE_MS)
+            return
+        }
+        val fallbackKey = "${active.job.id}:${active.job.attempt}"
+
+        // Home must be rejected before examining any menu labels: a bottom sheet
+        // left by an older post can temporarily be exposed on top of News Feed.
+        if (looksLikeFacebookHomeFeed(root)) {
+            JobStore.restartNavigation(this)
+            FacebookPostLauncher.launch(this, active.job)
+            scheduleNext(EXACT_POST_REOPEN_SETTLE_MS)
+            return
+        }
+
         val linkManagerAlreadyVisible = findBestNode(
             root,
             listOf(
@@ -93,41 +177,21 @@ class ShopeeAccessibilityService : AccessibilityService() {
             visibleOnly = true,
         )
         if (linkManagerAlreadyVisible != null) {
+            if (!menuTapDispatched.contains(fallbackKey)) {
+                JobStore.restartNavigation(this)
+                FacebookPostLauncher.launch(this, active.job)
+                scheduleNext(EXACT_POST_REOPEN_SETTLE_MS)
+                return
+            }
             JobStore.setStep(this, AutomationStep.OPEN_LINK_MANAGER)
             scheduleNext(250)
             return
         }
 
-        val fallbackKey = "${active.job.id}:${active.job.attempt}"
-
         // Never attach a link to whichever post happens to be first in News Feed.
         // If Facebook interpreted an exact permalink as Home, retry the next
         // exact target. After all targets are exhausted, fail safely instead of
         // touching a potentially unrelated post.
-        if (looksLikeFacebookHomeFeed(root)) {
-            if (elapsedInStep(active) < EXACT_POST_FIRST_RETRY_MS) {
-                scheduleNext(500)
-                return
-            }
-
-            val currentTarget = exactPostReopenTargets[fallbackKey] ?: 0
-            val nextTarget = currentTarget + 1
-            if (nextTarget < FacebookPostLauncher.targetCount(active.job)) {
-                exactPostReopenTargets[fallbackKey] = nextTarget
-                if (FacebookPostLauncher.launch(this, active.job, nextTarget)) {
-                    scheduleNext(EXACT_POST_REOPEN_SETTLE_MS)
-                    return
-                }
-            }
-
-            failStepAfter(
-                active,
-                EXACT_POST_FAIL_TIMEOUT_MS,
-                "Facebook van dang o News Feed; Worker da dung de tranh gan link nham bai",
-            )
-            return
-        }
-
         // Full-screen Reels opens a tall bottom sheet. The product-management row
         // is below the first viewport, so scroll the already-open sheet instead of
         // tapping another three-dot button behind it.
@@ -192,6 +256,9 @@ class ShopeeAccessibilityService : AccessibilityService() {
             val gestureDispatched = tapNodeByGesture(button)
             val clicked = if (!gestureDispatched) click(button) else false
             menuSemanticTapAttempts[fallbackKey] = semanticTapAttempts + 1
+            if (gestureDispatched || clicked) {
+                menuTapDispatched.add(fallbackKey)
+            }
             scheduleNext(if (gestureDispatched || clicked) 1_000 else 450)
             return
         }
@@ -219,6 +286,7 @@ class ShopeeAccessibilityService : AccessibilityService() {
             }
             menuFallbackTapAttempts[fallbackKey] = fallbackTapAttempts + 1
             if (geometryGestureDispatched || geometryClicked || coordinateGestureDispatched) {
+                menuTapDispatched.add(fallbackKey)
                 scheduleNext(1_200)
                 return
             }
@@ -232,10 +300,19 @@ class ShopeeAccessibilityService : AccessibilityService() {
     }
 
     private fun openLinkManager(root: AccessibilityNodeInfo, active: ActiveJob) {
+        val navigationKey = "${active.job.id}:${active.job.attempt}"
         val urlFormAlreadyVisible = findEditableNodes(root).any {
             nodeLabel(it).contains("url", ignoreCase = true)
         }
         if (urlFormAlreadyVisible) {
+            // A URL form left open by an older job is not evidence that this job
+            // opened its own product manager. Never paste a new SKU into it.
+            if ((linkManagerTapAttempts[navigationKey] ?: 0) <= 0) {
+                JobStore.restartNavigation(this)
+                FacebookPostLauncher.launch(this, active.job)
+                scheduleNext(EXACT_POST_REOPEN_SETTLE_MS)
+                return
+            }
             JobStore.setStep(this, AutomationStep.FILL_URL)
             scheduleNext(250)
             return
@@ -304,6 +381,8 @@ class ShopeeAccessibilityService : AccessibilityService() {
             val gestureDispatched = tapNodeByGesture(linkManagerButton)
             val clicked = if (!gestureDispatched) click(linkManagerButton) else false
             if (gestureDispatched || clicked) {
+                linkManagerTapAttempts[navigationKey] =
+                    (linkManagerTapAttempts[navigationKey] ?: 0) + 1
                 scheduleNext(1_200)
                 return
             }
@@ -559,6 +638,68 @@ class ShopeeAccessibilityService : AccessibilityService() {
     private fun isVideoJob(active: ActiveJob): Boolean {
         val url = active.job.postUrl.lowercase()
         return VIDEO_URL_HINTS.any { url.contains(it) }
+    }
+
+    private fun hasProductLinkForm(root: AccessibilityNodeInfo): Boolean {
+        val inputs = findEditableNodes(root)
+        val hasUrlInput = inputs.any { node ->
+            nodeLabel(node).contains("url", ignoreCase = true)
+        }
+        if (!hasUrlInput) return false
+
+        return findBestNode(
+            root,
+            listOf(
+                "Thêm liên kết sản phẩm",
+                "Tên liên kết",
+                "Add product link",
+                "Link name",
+            ),
+            visibleOnly = true,
+        ) != null
+    }
+
+    private fun hasProductLinkSurface(root: AccessibilityNodeInfo): Boolean {
+        if (hasProductLinkForm(root)) return true
+        return findBestNode(
+            root,
+            listOf(
+                "Quản lý liên kết đến sản phẩm",
+                "Quản lý sản phẩm",
+                "Thêm sản phẩm liên kết tiếp thị",
+                "Manage product links",
+                "Manage products",
+                "Add affiliate product",
+            ),
+            visibleOnly = true,
+        ) != null
+    }
+
+    /**
+     * Verifies a dedicated detail screen, not merely a visible story in Home.
+     * The exact URI launch is the identity proof; this UI check prevents a failed
+     * deep link from silently degrading to News Feed or a stale product form.
+     */
+    private fun looksLikeExactPostDetail(
+        root: AccessibilityNodeInfo,
+        active: ActiveJob,
+    ): Boolean {
+        if (isVideoJob(active)) return looksLikeFullscreenReel(root)
+
+        val hasPostAge = findPostHeaderAnchorYFraction(root) != null
+        if (!hasPostAge) return false
+
+        val hasCommentComposer = findBestNode(
+            root,
+            COMMENT_COMPOSER_HINTS,
+            visibleOnly = true,
+        ) != null
+        val hasPostMenu = findBestNode(
+            root,
+            POST_MENU_BUTTON_KEYWORDS,
+            visibleOnly = true,
+        ) != null
+        return hasCommentComposer || hasPostMenu
     }
 
     private fun looksLikeFacebookHomeFeed(root: AccessibilityNodeInfo): Boolean {
@@ -831,6 +972,7 @@ class ShopeeAccessibilityService : AccessibilityService() {
                     }
 
                     if (target != null && tapScreenPoint(target.x, target.y)) {
+                        menuTapDispatched.add(fallbackKey)
                         scheduleNext(1_200)
                     } else {
                         scheduleNext(REEL_SCREENSHOT_RETRY_MS)
@@ -1146,6 +1288,12 @@ class ShopeeAccessibilityService : AccessibilityService() {
             "groups",
             "notifications",
             "profile",
+        )
+        private val COMMENT_COMPOSER_HINTS = listOf(
+            "Bình luận dưới tên",
+            "Viết bình luận",
+            "Write a comment",
+            "Comment as",
         )
         private val POST_MENU_BUTTON_KEYWORDS = listOf(
             "Lựa chọn khác cho bài viết",

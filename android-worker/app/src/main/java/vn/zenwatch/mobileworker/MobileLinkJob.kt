@@ -31,6 +31,7 @@ data class MobileLinkJob(
 }
 
 enum class AutomationStep {
+    OPEN_POST,
     OPEN_MENU,
     OPEN_LINK_MANAGER,
     FILL_URL,

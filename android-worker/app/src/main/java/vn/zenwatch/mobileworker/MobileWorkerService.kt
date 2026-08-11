@@ -96,13 +96,12 @@ class MobileWorkerService : Service() {
                             message = "Quá thời gian tại bước ${active.step.name}",
                         )
                     } else {
-                        // An app update or service restart preserves the active job.
-                        // If it has not left OPEN_MENU yet, reopen that exact post
-                        // once instead of continuing on a stale Facebook screen.
-                        if (
-                            active.step == AutomationStep.OPEN_MENU
-                            && lastLaunchedJobId != active.job.id
-                        ) {
+                        // An app update or service restart preserves the active job,
+                        // but Facebook may still show a menu/form from an older post.
+                        // Always invalidate the saved UI step and reopen this job's
+                        // exact post once before Accessibility is allowed to continue.
+                        if (lastLaunchedJobId != active.job.id) {
+                            JobStore.restartNavigation(this)
                             updateStatus("Đang mở lại bài ${active.job.postId}")
                             if (!launchFacebookPost(active.job)) {
                                 JobStore.markForReport(

@@ -2360,15 +2360,10 @@ const fallbackFacebookPostUrl = (postId) => {
 };
 
 const resolveFacebookPostUrl = async (postId, pageToken) => {
-  // A normal Page post has the stable Graph ID PageID_PostID. In practice,
-  // permalink_url can occasionally contain another owner/path which opens a
-  // neighbouring post in the Android Facebook app. Build the canonical post URL
-  // directly from the composite ID. Reels use a single video ID and still need
-  // the permalink returned by Graph API below.
-  if (/^\d+_\d+$/.test(String(postId || '').trim())) {
-    return fallbackFacebookPostUrl(postId);
-  }
-
+  // Prefer Facebook's own permalink for both Page posts and Reels. On some
+  // Android Facebook builds, the canonical story_fbid URL silently opens Home;
+  // the Graph permalink is much more likely to enter the dedicated detail view.
+  // The composite-ID URL remains the bounded fallback when Graph is unavailable.
   if (pageToken) {
     try {
       const response = await axios.get(`https://graph.facebook.com/v21.0/${postId}`, {
