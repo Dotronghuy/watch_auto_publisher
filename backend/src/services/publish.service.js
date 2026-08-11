@@ -33,6 +33,7 @@ import { computeHashFromBuffer } from './image-hash.service.js';
 import { saveImageHash } from '../utils/crm.db.js';
 import {
   enqueueMobileLinkJob,
+  fallbackFacebookPostUrl,
   isAllowedShopeeUrl,
   normalizeFacebookPostUrl,
 } from './mobileLinkJob.service.js';
@@ -1978,9 +1979,15 @@ export const autoPublishRoutine = async (retryContext = null) => {
                       pageToken,
                       sku: selectedSku.name,
                       productInfo,
+                      contentType: 'reel',
                     });
                   } catch (linkError) {
                     console.error('Lỗi khi xếp hàng tác vụ Android Worker cho video/Reels:', linkError);
+                    liveLog(
+                      `[Android Worker] Không thể tạo tác vụ gắn link cho video SKU ${selectedSku.name}: ${linkError.message}`,
+                      'error',
+                      'Facebook',
+                    );
                   }
                 }
               } catch (e) { liveLog(`❌ [${account.name}] Lỗi FB Reels: ${e.message}`, 'error', 'Facebook'); }
@@ -2273,18 +2280,10 @@ export const autoPublishRoutine = async (retryContext = null) => {
   }
 }
 
-const fallbackFacebookPostUrl = (postId) => {
-  const normalized = String(postId || '').trim();
-  const separator = normalized.indexOf('_');
-  if (separator > 0) {
-    const pageId = normalized.slice(0, separator);
-    const storyId = normalized.slice(separator + 1);
-    return `https://www.facebook.com/permalink.php?story_fbid=${encodeURIComponent(storyId)}&id=${encodeURIComponent(pageId)}`;
+const resolveFacebookPostUrl = async (postId, pageToken, { contentType = 'post' } = {}) => {
+  if (contentType === 'reel') {
+    return normalizeFacebookPostUrl('', postId, { contentType });
   }
-  return `https://www.facebook.com/reel/${normalized}`;
-};
-
-const resolveFacebookPostUrl = async (postId, pageToken) => {
   // Prefer Facebook's own permalink for both Page posts and Reels. On some
   // Android Facebook builds, the canonical story_fbid URL silently opens Home;
   // the Graph permalink is much more likely to enter the dedicated detail view.
@@ -2299,7 +2298,7 @@ const resolveFacebookPostUrl = async (postId, pageToken) => {
         timeout: 15000,
       });
       if (response.data?.permalink_url) {
-        return normalizeFacebookPostUrl(response.data.permalink_url, postId);
+        return normalizeFacebookPostUrl(response.data.permalink_url, postId, { contentType });
       }
     } catch (error) {
       liveLog(
@@ -2309,10 +2308,15 @@ const resolveFacebookPostUrl = async (postId, pageToken) => {
       );
     }
   }
-  return normalizeFacebookPostUrl(fallbackFacebookPostUrl(postId), postId);
+  return normalizeFacebookPostUrl(fallbackFacebookPostUrl(postId, contentType), postId, { contentType });
 };
 
-export async function dispatchShopeeLinkMobile(postId, shopeeLinkToAttach, pageToken) {
+export async function dispatchShopeeLinkMobile(
+  postId,
+  shopeeLinkToAttach,
+  pageToken,
+  { contentType = 'post' } = {},
+) {
   const mode = String(process.env.MOBILE_SHOPEE_LINK_MODE || 'android_worker')
     .trim()
     .toLowerCase();
@@ -2322,12 +2326,13 @@ export async function dispatchShopeeLinkMobile(postId, shopeeLinkToAttach, pageT
     return null;
   }
 
-  const postUrl = await resolveFacebookPostUrl(postId, pageToken);
+  const postUrl = await resolveFacebookPostUrl(postId, pageToken, { contentType });
   const job = await enqueueMobileLinkJob({
     postId,
     postUrl,
     shopeeUrl: shopeeLinkToAttach,
     linkName: process.env.MOBILE_SHOPEE_LINK_NAME || 'Mua ở đây',
+    contentType,
   });
 
   liveLog(
@@ -2343,9 +2348,16 @@ async function dispatchShopeeLinkForProduct({
   pageToken,
   sku,
   productInfo,
+  contentType = 'post',
 }) {
   const normalizedSku = String(sku || '').trim();
-  const shopeeLinkToAttach = getShopeeLinkFromProductInfo(productInfo);
+  // The Shopee URL is commonly edited after the product cache has already been
+  // warmed. Re-read the exact SKU before queueing so a video cannot silently skip
+  // its job (or inherit an older valid URL) during the cache lifetime.
+  const latestProductInfo = normalizedSku
+    ? await getProductInfoBySku(normalizedSku, { force: true })
+    : productInfo;
+  const shopeeLinkToAttach = getShopeeLinkFromProductInfo(latestProductInfo);
 
   if (!shopeeLinkToAttach) {
     liveLog(
@@ -2370,5 +2382,5 @@ async function dispatchShopeeLinkForProduct({
     'typing',
     'Facebook',
   );
-  return dispatchShopeeLinkMobile(postId, shopeeLinkToAttach, pageToken);
+  return dispatchShopeeLinkMobile(postId, shopeeLinkToAttach, pageToken, { contentType });
 }

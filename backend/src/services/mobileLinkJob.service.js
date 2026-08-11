@@ -5,8 +5,22 @@ const DEFAULT_LEASE_MS = 5 * 60 * 1000;
 
 const normalizeText = (value) => String(value || '').trim();
 
-const fallbackFacebookPostUrl = (postId) => {
+const normalizeContentType = (value) => (
+  ['reel', 'reels', 'video'].includes(normalizeText(value).toLowerCase()) ? 'reel' : 'post'
+);
+
+export const facebookObjectIdFromPostId = (postId) => {
   const normalized = normalizeText(postId);
+  const separator = normalized.indexOf('_');
+  return separator > 0 ? normalized.slice(separator + 1) : normalized;
+};
+
+export const fallbackFacebookPostUrl = (postId, contentType = 'post') => {
+  const normalized = normalizeText(postId);
+  if (normalizeContentType(contentType) === 'reel') {
+    const reelId = facebookObjectIdFromPostId(normalized);
+    return reelId ? `https://www.facebook.com/reel/${encodeURIComponent(reelId)}` : '';
+  }
   const separator = normalized.indexOf('_');
   if (separator > 0) {
     const pageId = normalized.slice(0, separator);
@@ -22,8 +36,12 @@ const fallbackFacebookPostUrl = (postId) => {
  * Mobile jobs must always contain an HTTPS URL because Android opens it outside
  * the trusted backend process.
  */
-export const normalizeFacebookPostUrl = (value, postId) => {
-  const fallback = fallbackFacebookPostUrl(postId);
+export const normalizeFacebookPostUrl = (value, postId, { contentType = 'post' } = {}) => {
+  const normalizedContentType = normalizeContentType(contentType);
+  const fallback = fallbackFacebookPostUrl(postId, normalizedContentType);
+  // Graph permalink_url for Reels is not stable in the Android Facebook app.
+  // Always persist a deterministic /reel/{videoId} route for mobile jobs.
+  if (normalizedContentType === 'reel') return fallback;
   let candidate = normalizeText(value);
   if (!candidate) return fallback;
 
@@ -70,12 +88,13 @@ export const enqueueMobileLinkJob = async ({
   shopeeUrl,
   linkName = 'Mua ở đây',
   force = false,
+  contentType = 'post',
 }) => {
   const normalizedPostId = normalizeText(postId);
   const normalizedShopeeUrl = normalizeText(shopeeUrl);
 
   if (!normalizedPostId) throw new Error('postId is required');
-  const normalizedPostUrl = normalizeFacebookPostUrl(postUrl, normalizedPostId);
+  const normalizedPostUrl = normalizeFacebookPostUrl(postUrl, normalizedPostId, { contentType });
   if (!normalizedPostUrl) throw new Error('postUrl is required');
   if (!/^https:\/\//i.test(normalizedPostUrl)) throw new Error('postUrl must use HTTPS');
   if (!isAllowedShopeeUrl(normalizedShopeeUrl)) {
