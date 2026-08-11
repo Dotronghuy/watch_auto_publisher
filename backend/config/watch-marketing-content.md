@@ -25,7 +25,7 @@ TUYỆT ĐỐI TRÁNH:
 - Câu dài hơn 20 chữ liên tục (chia nhỏ, tạo nhịp thở)
 - Giải thích quá nhiều — nếu cần giải thích, tức là câu chưa đủ hay
 - Dùng quá 2 dấu chấm than trong một bài
-- Emoji dày đặc — tối đa 1–2 emoji/bài nếu dùng
+- Emoji dày đặc — tối đa 1–3 emoji/bài nếu dùng
 - Văn phong học thuật hoặc quảng cáo rõ ràng
 ```
 
@@ -48,6 +48,9 @@ NHỊP ĐIỆU MẪU:
 > Mỗi bài viết được gán một tông giọng. AI chọn tông phù hợp với ngữ cảnh
 > và viết theo đặc trưng tông đó. Ví dụ bên dưới chỉ để minh họa phong cách —
 > KHÔNG sao chép lại.
+>
+> Hệ thống vận hành dùng đúng 8 mã TONE-01 → TONE-08. Tên và mã ở phần này
+> phải luôn đồng nhất với Tone Engine trong code.
 
 ---
 
@@ -172,6 +175,23 @@ Phù hợp với: Nội dung target nữ, tự thưởng, thời trang cá nhân
 Ví dụ phong cách (KHÔNG SAO CHÉP):
   "Nàng không mua vì ai nhìn.
   Nàng mua vì mỗi lần nhìn xuống cổ tay — thấy đúng mình."
+```
+
+---
+
+### TONE-08: Phối Đồ Có Gu
+
+```
+Đặc trưng:
+- Mở bằng một outfit hoặc hoàn cảnh sử dụng cụ thể — không nói chung chung “dễ phối”
+- Giọng của stylist thân thiện: tự tin, hiện đại, có thể dí dỏm nhẹ nhưng không cố gây cười
+- Chọn trang phục đúng đối tượng sản phẩm và giải thích ngắn vì sao đồng hồ hoàn thiện tổng thể
+- Không biến caption thành danh sách quần áo hoặc quảng cáo lộ liễu
+
+Phù hợp với: Instagram, Reels, nội dung lifestyle, ảnh đeo tay hoặc ảnh phối cảnh
+
+Ví dụ phong cách (KHÔNG SAO CHÉP):
+  “Blazer tối màu. Sơ mi vừa vặn. Cổ tay thêm một điểm sáng — thế là đủ có gu.”
 ```
 
 ---

@@ -1,4 +1,4 @@
-import { Activity, BarChart2, Send, HardDrive, Share2, Database, CheckCircle, Clock, TrendingUp, Zap, Calendar, ArrowRight, Play, RefreshCw, ScanSearch, Heart, MessageCircle, Repeat2 } from 'lucide-react';
+import { Activity, BarChart2, Send, HardDrive, Share2, Database, CheckCircle, Clock, TrendingUp, Calendar, Play, RefreshCw, ScanSearch, Heart, MessageCircle, Repeat2 } from 'lucide-react';
 import { Facebook, Instagram, TikTok, Threads } from '../components/SocialIcons';
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -47,6 +47,13 @@ const Dashboard = () => {
     socialHealth: { connected: 0, total: 4, platforms: {} },
     dbHealth: 100, recentActivities: []
   });
+  const [tonePerformance, setTonePerformance] = useState({
+    days: 30,
+    trackedPosts: 0,
+    scoringFormula: 'like + 2 × comment + 3 × share',
+    adaptiveReady: false,
+    tones: []
+  });
   const [isTracking, setIsTracking] = useState(false);
   const [accounts, setAccounts] = useState([]);
   const [selectedAccount, setSelectedAccount] = useState('');
@@ -66,19 +73,26 @@ const Dashboard = () => {
   useEffect(() => {
     const fetchAll = async () => {
       try {
-        const accParam = selectedAccount ? `&accountId=${selectedAccount}` : '';
-        const [statsRes, settingsRes, engagementRes] = await Promise.all([
+        const encodedAccount = selectedAccount ? encodeURIComponent(selectedAccount) : '';
+        const engagementUrl = encodedAccount
+          ? `/api/dashboard/engagement?accountId=${encodedAccount}`
+          : '/api/dashboard/engagement';
+        const toneUrl = `/api/dashboard/tone-performance?days=30${encodedAccount ? `&accountId=${encodedAccount}` : ''}`;
+        const [statsRes, settingsRes, engagementRes, toneRes] = await Promise.all([
           fetch(`/api/dashboard?timeRange=7days`),
           fetch('/api/settings'),
-          fetch(`/api/dashboard/engagement?${accParam}`)
+          fetch(engagementUrl),
+          fetch(toneUrl)
         ]);
         const statsData = await statsRes.json();
         const settingsData = await settingsRes.json();
         const engagementData = await engagementRes.json();
+        const toneData = await toneRes.json();
         
         if (!statsData.error) setStats(statsData);
         if (!settingsData.error) setSettings(settingsData);
         if (!engagementData.error && engagementData.today) setEngagement(engagementData.today);
+        if (!toneData.error && Array.isArray(toneData.tones)) setTonePerformance(toneData);
       } catch (err) { console.error(err); }
     };
     fetchAll();
@@ -99,6 +113,7 @@ const Dashboard = () => {
   const igTotal = engagement.byPlatform.instagram.likes + engagement.byPlatform.instagram.comments + engagement.byPlatform.instagram.shares;
   const fbPercent = totalEng > 0 ? (fbTotal / totalEng * 100) : 50;
   const igPercent = totalEng > 0 ? (igTotal / totalEng * 100) : 50;
+  const maxToneScore = Math.max(1, ...(tonePerformance.tones || []).map(tone => tone.averageScore || 0));
 
   const trackNow = async () => {
     setIsTracking(true);
@@ -341,6 +356,45 @@ const Dashboard = () => {
               </div>
             </div>
           </div>
+        </div>
+      </div>
+
+      {/* ═══ Tone Performance ═══ */}
+      <div className="tone-performance-section">
+        <div className="tone-performance-header">
+          <div>
+            <h3><span className="tone-section-icon"><BarChart2 size={14} /></span> Hiệu quả 8 phong cách caption</h3>
+            <p>30 ngày gần nhất · {tonePerformance.trackedPosts} bài có metadata · Điểm = {tonePerformance.scoringFormula}</p>
+          </div>
+          <span className={`adaptive-status ${tonePerformance.adaptiveReady ? 'ready' : ''}`}>
+            {tonePerformance.adaptiveReady ? 'Đủ dữ liệu tối ưu' : 'Đang tích lũy dữ liệu'}
+          </span>
+        </div>
+
+        {tonePerformance.trackedPosts === 0 && (
+          <div className="tone-empty-note">
+            Các bài cũ chưa có nhãn tone nên không bị suy đoán. Biểu đồ sẽ tự có dữ liệu từ bài đăng mới tiếp theo.
+          </div>
+        )}
+
+        <div className="tone-performance-grid">
+          {(tonePerformance.tones || []).map((tone, index) => (
+            <div className={`tone-performance-card ${index === 0 && tone.posts > 0 ? 'leader' : ''}`} key={tone.toneId}>
+              <div className="tone-card-heading">
+                <span className="tone-id">{tone.toneId}</span>
+                <span className="tone-posts">{tone.posts} bài</span>
+              </div>
+              <strong>{tone.toneName}</strong>
+              <div className="tone-score-row">
+                <span>Điểm TB</span>
+                <b>{Number(tone.averageScore || 0).toFixed(1)}</b>
+              </div>
+              <div className="tone-score-track">
+                <div style={{ width: `${tone.posts > 0 ? Math.max(5, (tone.averageScore / maxToneScore) * 100) : 0}%` }}></div>
+              </div>
+              <div className="tone-reactions">{tone.likes} thích · {tone.comments} bình luận · {tone.shares} chia sẻ</div>
+            </div>
+          ))}
         </div>
       </div>
 

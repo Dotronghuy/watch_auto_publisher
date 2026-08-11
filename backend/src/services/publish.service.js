@@ -11,7 +11,7 @@ import {
   clearExpiredPostInfo,
 } from './sheet.service.js';
 import { readFromSheet } from './sheets.service.js';
-import { getPostedImageIds, addPostedImageId, addPostMetric } from '../utils/history.js';
+import { getPostedImageIds, addPostedImageId, addPostMetric, getRecentContentSelections, getTonePerformance } from '../utils/history.js';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import {
@@ -36,6 +36,9 @@ import {
   isAllowedShopeeUrl,
   normalizeFacebookPostUrl,
 } from './mobileLinkJob.service.js';
+import { buildPerformanceMultipliers, getToneInstructionText, selectContentTone } from './content-tone.service.js';
+
+export { getToneInstructionText };
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -63,151 +66,12 @@ const generateImageWithEngine = async (imagePath, promptsArray, abortSignal, sam
     }
 };
 
-// ==========================================
-// CONTENT RANDOMIZER (THÊM ĐỂ ĐA DẠNG NỘI DUNG)
-// ==========================================
-export const getToneInstructionText = (tone, perspective, cta) => {
-  let instruction = `\n\n[YÊU CẦU BẮT BUỘC KHÁC NHAU MỖI BÀI]\n- Giọng văn: ${tone}\n- Góc nhìn: ${perspective}\n`;
-  
-  if (tone === 'Sang trọng, tinh tế') {
-    instruction += `- QUY TẮC BẮT BUỘC CHO PHONG CÁCH SANG TRỌNG:
-  + Hook (Câu mở đầu FB): Phải thật ngắn gọn, mạnh mẽ, in hoa, đập vào mắt (Ví dụ: "KHÔNG PHẢI MẪU TRẮNG NÀO CŨNG LÊN TAY SẠCH VÀ SANG."). KHÔNG viết hook quá dài dòng.
-  + Từ vựng: Đa dạng từ ngữ, không lạm dụng "sạch và sang". Hãy linh hoạt dùng: "sáng cổ tay", "gọn mắt", "thanh lịch", "lên tay chỉn chu", "sang mà không gồng".
-  + Emoji: Dùng các emoji sang trọng như ✨, 💎, ⌚, 🥂. CẤM dùng emoji kiểu cũ như 🕰️ hay các icon sến súa.
-  + ĐỐI VỚI BÀI FACEBOOK: Bài rất ngắn (50-80 từ). Dùng Call to Action (CTA): "${cta}"
-  + ĐỐI VỚI BÀI INSTAGRAM: BỎ QUA Call to Action (CTA). Caption IG phải thật ngắn, mang tính thẩm mỹ (Vd: "Mặt trắng, dây bạc — đủ sạch, đủ sang, đủ để cổ tay có điểm nhấn. ✨"). KHÔNG chèo kéo mua hàng.`;
-  } else if (tone === 'Gần gũi, đời thường') {
-    instruction += `- QUY TẮC BẮT BUỘC CHO PHONG CÁCH GẦN GŨI, ĐỜI THƯỜNG:
-  + Hook (Câu mở đầu FB): BẮT BUỘC VIẾT HOA TOÀN BỘ, phải bắt tai và thu hút (Ví dụ: "MUỐN MỘT CHIẾC ĐỒNG HỒ DỄ ĐEO MỖI NGÀY, MẪU NÀY RẤT ĐÁNG XEM." hoặc "CÓ NHỮNG MẪU KHÔNG CẦN QUÁ NỔI BẬT, NHƯNG LÊN TAY LẠI RẤT GỌN VÀ SÁNG.").
-  + Từ vựng: Tránh dùng từ quá kỹ thuật như "dây thép". Hãy dùng "dây kim loại bạc", "dây không gỉ", "dây sáng màu".
-  + Emoji: Thêm các emoji vui vẻ, sinh động (như 🌟, 🔥, 💯) để bài viết không bị khô khan.
-  + ĐỐI VỚI BÀI FACEBOOK: Bài viết rất ngắn (50-80 từ), súc tích. Dùng Call to Action (CTA): "${cta}"
-  + ĐỐI VỚI BÀI INSTAGRAM: Phải thật ngắn gọn, ít giải thích (Ví dụ: "Mặt trắng, dây kim loại bạc — dễ đeo, dễ phối, lên tay sạch và trưởng thành."). CTA viết tự nhiên, không chèo kéo (Ví dụ: "Cần tư vấn mẫu hợp cổ tay, để lại bình luận.").`;
-  } else if (tone === 'Kể chuyện (Storytelling)') {
-    instruction += `- QUY TẮC BẮT BUỘC CHO PHONG CÁCH KỂ CHUYỆN (STORYTELLING):
-  + Hook (Câu mở đầu FB): BẮT BUỘC VIẾT HOA TOÀN BỘ bằng một TÌNH HUỐNG đời thường (Ví dụ: "CÓ KHÁCH TỪNG NÓI VỚI TÔI: 'TÔI CẦN MỘT CHIẾC ĐỒNG HỒ ĐI LÀM HẰNG NGÀY, NHƯNG ĐỪNG QUÁ NỔI.'").
-  + Mạch văn: Dẫn dắt mượt mà từ câu chuyện sang sản phẩm, ngắn gọn không lê thê. Thêm các câu tạo cảm xúc sâu sắc ở gần cuối (Ví dụ: "Nhìn gần có chi tiết. Nhìn xa có phong thái.", "Một lựa chọn an toàn — nhưng không nhạt.").
-  + Từ vựng: KHÔNG dùng từ kỹ thuật cứng nhắc như "dây thép", hãy dùng "dây kim loại bạc", "dây thép không gỉ sáng màu".
-  + Emoji: Dùng khoảng 3-5 emoji tinh tế rải rác. Cấm dùng emoji sến (như 🤍, 🪞). Dùng ✨, 🌟, ☕ sẽ rất hợp.
-  + ĐỐI VỚI BÀI FACEBOOK: Ngắn gọn (50-80 từ). Dùng Call to Action (CTA): "${cta}"
-  + ĐỐI VỚI BÀI INSTAGRAM: Rất ngắn gọn, đọng lại cảm xúc. BỎ QUA CTA chèo kéo mua hàng.`;
-  } else if (tone === 'Trực diện, chốt sale') {
-    instruction += `- QUY TẮC BẮT BUỘC CHO PHONG CÁCH TRỰC DIỆN, CHỐT SALE:
-  + Hook (Câu mở đầu FB): Viết HOÀN TOÀN BẰNG CHỮ IN HOA, có lực, rõ đối tượng và lợi ích (Ví dụ: "MẪU NÀY RẤT HỢP VỚI NGƯỜI THÍCH SỰ CHỈN CHU — NHƯNG KHÔNG MUỐN BỊ NHẠT. ✦").
-  + Tuyệt đối KHÔNG dùng ngôn ngữ nội bộ (VD: "dễ chốt sale"). Hãy dùng "dễ phối", "rất đáng chọn", "sự an toàn có gu", "rất hợp làm quà".
-  + Từ vựng: Tránh từ "dây thép". Dùng "dây kim loại bạc" hoặc "dây thép không gỉ sáng màu".
-  + Emoji: Dùng emoji thu hút mạnh mẽ sự chú ý như 💥, 🔥, 💎, ✨, 🎯. KHÔNG dùng 🕰️.
-  + ĐỐI VỚI BÀI FACEBOOK: Ngắn gọn (50-80 từ), đánh trực diện vào hoàn cảnh sử dụng. Cuối bài xuống dòng ghi CTA: "${cta}"
-  + ĐỐI VỚI BÀI INSTAGRAM: Thật ngắn, ngắt dòng rõ ràng trước CTA.`;
-  } else if (tone === 'Kiến thức chuyên gia') {
-    instruction += `- QUY TẮC BẮT BUỘC CHO PHONG CÁCH KIẾN THỨC CHUYÊN GIA:
-  + Hook (Câu mở đầu FB): BẮT BUỘC VIẾT HOA TOÀN BỘ, nhận định chuyên môn tinh tế (Ví dụ: "MẶT TRẮNG KHÔNG PHẢI LÚC NÀO CŨNG DỄ ĐEO — NHƯNG KHI XỬ LÝ ĐÚNG, NÓ RẤT SÁNG TAY.").
-  + Mạch văn: Phân tích chuyên sâu nhưng CỰC KỲ NGẮN GỌN (Ví dụ: "thiết kế day-date đặt gọn ở góc 3 giờ"). KHÔNG gọi là "siêu phẩm" một cách sáo rỗng.
-  + Từ vựng: Tránh dùng "dây thép" thô cứng, hãy dùng "dây kim loại bạc".
-  + Emoji: Dùng các emoji mang tính sắc nét, chuyên môn như ✦, ◇, ⌚, ⚙️, 🔍. CẤM dùng các emoji mềm mỏng như 🤍 hay 🕊️.
-  + ĐỐI VỚI BÀI FACEBOOK: Ngắn gọn (50-80 từ). CTA bắt buộc phải được đặt sau một câu đệm chuyển ý mềm mại. (Ví dụ: "Nếu bạn đang tìm một mẫu cơ đầu tiên dễ đeo và lịch sự mỗi ngày — ${cta}").
-  + ĐỐI VỚI BÀI INSTAGRAM: Chọn ĐÚNG 1 thông số đắt giá. BỎ QUA HOÀN TOÀN CTA (Call to Action) để giữ độ "sang" cho khung hình.`;
-  } else if (tone === 'Hài hước, thả thính') {
-    instruction += `- QUY TẮC BẮT BUỘC CHO PHONG CÁCH HÀI HƯỚC, THẢ THÍNH:
-  + Hook (Câu mở đầu FB): BẮT BUỘC VIẾT HOA TOÀN BỘ câu đùa vui nhộn, thả thính (Ví dụ: "MẶT TRẮNG KHÔNG CÓ LỖI. CHỈ CÓ NGƯỜI CHƯA BIẾT ĐEO SAO CHO SANG. 😌").
-  + Mạch văn: Giữ nhịp độ nhanh, vui vẻ. KHÔNG phân tích thông số hay tỏ ra chuyên gia dài dòng.
-  + Từ vựng: KHÔNG dùng từ kỹ thuật như "dây thép". Đổi thành "dây kim loại sáng", "dây bạc".
-  + Emoji: Dùng các emoji vui nhộn, thả thính thả ga như 😌, 😎, 🔥, ✨, 🥂, 😘. CẤM dùng 🕰️.
-  + ĐỐI VỚI BÀI FACEBOOK: Ngắn gọn, có duyên (50-80 từ). Chốt bằng CTA nhẹ nhàng: "${cta}"
-  + ĐỐI VỚI BÀI INSTAGRAM: Cực kỳ bắt trend, dễ viral, mang tính thả thính cao.`;
-  } else if (tone === 'Kể chuyện hài, phối đồ') {
-    instruction += `- QUY TẮC BẮT BUỘC CHO PHONG CÁCH KỂ CHUYỆN HÀI + PHỐI ĐỒ:
-  + Hook (Câu mở đầu FB): BẮT BUỘC VIẾT HOA TOÀN BỘ, mở bằng tình huống hài hước đời thường (VD: "BẠN GÁI HỎI: 'SAO ANH CÓ MỖI MỘT CHIẾC ĐỒNG HỒ MÀ ĐEO HOÀI KHÔNG CHÁN?' — TÔI: 'VÌ NÓ HỢP VỚI MỌI THỨ ANH MẶC.' 😎", "ĐI ĂN CƯỚI BẠN, LOAY HOAY CẢ TỦ ĐỒ — CUỐI CÙNG CHỌN XONG OUTFIT NHỜ MỘT CHI TIẾT TRÊN CỔ TAY. 😌").
-  + Mạch văn: Kể chuyện ngắn vui vẻ (đi làm, hẹn hò, event...) → nhắc đến đồng hồ tự nhiên → gợi ý phối đồ cụ thể.
-  + PHẢI có gợi ý phối đồ cụ thể (VD: "Sơ mi trắng + quần tây + mẫu này = combo đi họp không ai chê", "Polo + kaki + cổ tay sáng = weekend có gu").
-  + Giọng hài kiểu Gen Z/Millennial — nhẹ nhàng, duyên dáng, KHÔNG ép hài, KHÔNG "boomer".
-  + Từ vựng: TRÁNH "dây thép", dùng "dây kim loại bạc", "dây da nâu". TRÁNH quảng cáo lộ liễu.
-  + Emoji: 😎, 😌, 🔥, ✨, 👔, 👗. Khoảng 4-5 emoji rải đều.
-  + ĐỐI VỚI BÀI FACEBOOK: 50-80 từ. Chuyện hài → phối đồ → CTA nhẹ: "${cta}"
-  + ĐỐI VỚI BÀI INSTAGRAM: 1-2 câu duyên dáng kèm gợi ý phối đồ tinh tế (VD: "Sơ mi trắng, quần tây, cổ tay sáng một chút — đủ để cả phòng họp liếc nhìn. 😌✨"). BỎ QUA CTA chèo kéo.`;
-  } else if (tone === 'Phối đồ') {
-    instruction += `- QUY TẮC BẮT BUỘC CHO PHONG CÁCH PHỐI ĐỒ:
-  + Hook (Câu mở đầu FB): BẮT BUỘC VIẾT HOA TOÀN BỘ, gợi ý outfit ngay từ đầu (VD: "SƠ MI TRẮNG + QUẦN ÂU + MỘT CHIẾC ĐỒNG HỒ MẶT TRẮNG DÂY BẠC — BỘ 3 KHÔNG BAO GIỜ SAI. ✨", "ÁO THUN ĐEN + QUẦN JOGGER + ĐỒNG HỒ DÂY DA — CASUAL NHƯNG KHÔNG HỀ TẦM THƯỜNG. 🔥").
-  + Mạch văn: Gợi ý 1-2 cách phối đồ cụ thể → giải thích tại sao đồng hồ này hợp → CTA.
-  + PHẢI đề cập outfit cụ thể: tên loại áo, quần, giày, phụ kiện. KHÔNG viết chung chung "phù hợp mọi phong cách".
-  + PHẢI phân biệt theo giới tính sản phẩm: NAM dùng từ (sơ mi, polo, vest, quần tây, quần kaki, giày tây, boots, sneakers trắng). NỮ dùng từ (đầm dự tiệc, áo blouse, chân váy midi, blazer, giày cao gót, túi xách).
-  + Giọng điệu: Tự tin, có gu, như stylist tư vấn cho bạn. KHÔNG quảng cáo lộ liễu.
-  + Từ vựng: TRÁNH "dây thép", dùng "dây kim loại bạc", "dây da nâu". Dùng từ thời trang: "outfit", "mix & match", "phong cách tối giản".
-  + Emoji: 👔, 👗, ✨, 🔥, 💎, 🎯. Khoảng 4-5 emoji.
-  + ĐỐI VỚI BÀI FACEBOOK: 50-80 từ. Gợi ý phối → tại sao hợp → CTA: "${cta}"
-  + ĐỐI VỚI BÀI INSTAGRAM: Cực ngắn, 1-2 câu combo phối đồ + đồng hồ (VD: "Blazer đen, áo trắng, cổ tay thêm một chút ánh kim — outfit đi event không cần nghĩ nhiều. ✨"). BỎ QUA CTA chèo kéo.`;
-  } else {
-    instruction += `- Lời kêu gọi (CTA): ${cta}`;
-  }
-
-  // QUY TẮC TRÌNH BÀY CHUNG (ĐẢM BẢO TÍNH THẨM MỸ, CHỐNG RỐI MẮT NHƯNG KHÔNG PHÁ VỠ VĂN PHONG)
-  instruction += `\n\n[QUY TẮC TRÌNH BÀY THẨM MỸ]:
-1. ĐỘ DÀI: BÀI FACEBOOK PHẢI CỰC KỲ NGẮN GỌN (CHỈ TỪ 50-80 TỪ), SÚC TÍCH, KHÔNG ĐƯỢC VIẾT NHIỀU CHỮ KHIẾN NGƯỜI ĐỌC BỊ LƯỜI.
-2. CÂU HOOK BẮT BUỘC: Câu đầu tiên của bài Facebook BẮT BUỘC PHẢI VIẾT HOA TOÀN BỘ CHỮ CÁI để thu hút sự chú ý.
-3. CẤU TRÚC ĐOẠN VĂN: Hãy viết tối đa 2-3 câu ngắn/đoạn. Giữa các đoạn phải có một dòng trống. Tuyệt đối không viết dồn ép.
-4. ĐIỂM XUYẾT EMOJI: Hãy sử dụng linh hoạt khoảng 4-6 emoji rải đều các đoạn văn để bài viết sinh động, bắt mắt. Tận dụng các icon sang trọng và thu hút. KHÂNG được để bài viết thiếu icon.`;
-
-  // ÉP BUỘC ĐỊNH DẠNG ĐẦU RA ĐỂ CHỐNG LỖI CỦA GPT:
-  instruction += `\n\n[LỆNH TỐI CAO DÀNH CHO BẠN (CẤM LÀM SAI):
-1. ĐÚNG GIỚI TÍNH SẢN PHẨM: Đọc kỹ "Đối tượng" (Nam hay Nữ) ở trên. Nếu là đồng hồ Nữ, tuyệt đối KHÔNG dùng các từ ngữ nam tính (như "vest, polo, mạnh mẽ, nam tính, đầm tay, quý ông"). Hãy dùng từ ngữ mềm mại, tôn vinh phái đẹp ("thanh lịch, tôn da, đầm váy, quý phái, nhẹ nhàng"). Nếu là đồng hồ Nam, dùng từ ngữ nam tính ("lịch lãm, sơ mi, vest, phong độ"). KHÔNG viết kiểu chung chung "hợp cho cả nam và nữ".
-2. CHỈ VIẾT ĐÚNG NỘI DUNG ĐƯỢC YÊU CẦU THEO NỀN TẢNG. NẾU TÔI BẢO VIẾT CHO FACEBOOK, BẠN CHỈ TRẢ VỀ DUY NHẤT BÀI FACEBOOK VÀ TUYỆT ĐỐI KHÔNG VIẾT INSTAGRAM. KHÔNG BAO GIỜ VIẾT TỪ "FACEBOOK:" HAY "INSTAGRAM:" TRONG KẾT QUẢ.]`;
-
-  return instruction;
-};
-
-const getRandomToneAndPerspective = () => {
-  // Weighted random: 90% ưu tiên (5 tone x 18%) / 10% còn lại (3 tone)
-  const weightedTones = [
-    { tone: "Sang trọng, tinh tế", weight: 18 },
-    { tone: "Trực diện, chốt sale", weight: 18 },
-    { tone: "Hài hước, thả thính", weight: 18 },
-    { tone: "Kể chuyện hài, phối đồ", weight: 18 },
-    { tone: "Phối đồ", weight: 18 },
-    { tone: "Gần gũi, đời thường", weight: 4 },
-    { tone: "Kể chuyện (Storytelling)", weight: 3 },
-    { tone: "Kiến thức chuyên gia", weight: 3 },
-  ];
-
-  const perspectives = [
-    "Góc nhìn của một người đam mê đồng hồ",
-    "Góc nhìn của chuyên gia tư vấn thời trang",
-    "Góc nhìn của người mua tặng quà",
-    "Góc nhìn của thương hiệu gửi đến khách hàng"
-  ];
-  
-  let ctas = [
-    "Inbox ngay để nhận ưu đãi",
-    "Để lại bình luận để được tư vấn chi tiết",
-    "Đừng bỏ lỡ siêu phẩm này",
-    "Nhắn tin cho shop ngay nhé"
-  ];
-  try {
-    const marketingPath = path.join(__dirname, '../../config/watch-marketing-content.md');
-    if (fs.existsSync(marketingPath)) {
-      const markContent = fs.readFileSync(marketingPath, 'utf8');
-      const ctaMatch = markContent.match(/### 2\\.2 Call To Action \\(CTA\\)[\\s\\S]*?(?=###|$)/);
-      if (ctaMatch) {
-        const ctaLines = ctaMatch[0].split('\n').filter(line => line.trim().startsWith('- '));
-        if (ctaLines.length > 0) {
-          ctas = ctaLines.map(line => line.replace(/^- /, '').trim());
-        }
-      }
-    }
-  } catch(e) {}
-
-  // Weighted random selection
-  const totalWeight = weightedTones.reduce((sum, t) => sum + t.weight, 0);
-  let roll = Math.random() * totalWeight;
-  let randomTone = weightedTones[0].tone;
-  for (const t of weightedTones) {
-    roll -= t.weight;
-    if (roll <= 0) { randomTone = t.tone; break; }
-  }
-
-  const randomPersp = perspectives[Math.floor(Math.random() * perspectives.length)];
-  const randomCta = ctas[Math.floor(Math.random() * ctas.length)];
-
-  return getToneInstructionText(randomTone, randomPersp, randomCta);
+// Tone Engine là nguồn duy nhất cho 8 phong cách, lựa chọn theo ngữ cảnh và lịch sử gần nhất.
+const selectToneForPrompt = (context, recentSelections, performanceByTone = {}) => {
+  const selection = selectContentTone(context, { recentSelections, performanceByTone });
+  recentSelections.unshift(selection);
+  if (recentSelections.length > 8) recentSelections.length = 8;
+  return selection;
 };
 
 export const parseColorsFromFilename = (filename, baseSku) => {
@@ -871,6 +735,8 @@ If Image 2 HAS a human hand or wrist, apply these MANDATORY rules:
         let firstFbContent = null;
         let firstIgContent = null;
         let firstThContent = null;
+        const recentToneSelections = await getRecentContentSelections(5);
+        const performanceByTone = buildPerformanceMultipliers(await getTonePerformance(30));
 
         for (const account of activeAccounts) {
           liveLog(`🚀 Sinh Content test cho tài khoản: ${account.name}...`, 'info', 'System');
@@ -882,7 +748,13 @@ If Image 2 HAS a human hand or wrist, apply these MANDATORY rules:
                reelsPrompt = `Đây là một video Daily Vlog (hoạt động hằng ngày: đóng hàng, giao hàng, vệ sinh đồng hồ...). Hãy đóng vai nhân viên của I&W Carnival, viết một đoạn caption thật ngắn gọn, tự nhiên, vui vẻ, thân thiện. Tuyệt đối KHÔNG quảng cáo hay chèo kéo mua hàng. Chỉ dùng hashtag #iwcarnivalvietnam #iwcarnival #dailyvlog`;
             } else {
                const reelsFallback = `Hãy đóng vai TikTok creator. Viết caption ngắn giật tít cho video Reels giới thiệu đồng hồ SKU ${selectedSku.name}. Chỉ trả về caption, dùng hashtag #iwcarnivalvietnam #iwcarnival #donghoiwcarnival và các hashtag trending.`;
-               reelsPrompt = (reelsPromptFinal || reelsFallback) + getRandomToneAndPerspective();
+               const toneSelection = selectToneForPrompt({
+                 sku: selectedSku.name,
+                 genderLabel,
+                 productInfoText,
+                 platform: 'reels'
+               }, recentToneSelections, performanceByTone);
+               reelsPrompt = (reelsPromptFinal || reelsFallback) + toneSelection.instruction;
             }
 
             const sampleFolders = ['1_Anh_Hang', '2_Anh_Tu_Chup'];
@@ -908,7 +780,13 @@ If Image 2 HAS a human hand or wrist, apply these MANDATORY rules:
             liveLog(`🎉 [${account.name}] Test xong Reels!`, 'success', 'System');
           } else {
             const fallbackPrompt = `Hãy viết 2 bài theo đúng format:\n## FACEBOOK:\n[Bài FB 50-80 từ, câu mở đầu VIẾT IN HOA, có hashtag #iwcarnivalvietnam #iwcarnival #donghoiwcarnival]\n## INSTAGRAM:\n[Caption IG 15-35 từ, góc nhìn KHÁC bài FB, có hashtag #iwcarnivalvietnam #iwcarnival #donghoiwcarnival]\nSản phẩm: đồng hồ SKU ${selectedSku.name}. Không kèm giải thích.`;
-            const combinedPrompt = (fbPromptFinal || fallbackPrompt) + getRandomToneAndPerspective();
+            const toneSelection = selectToneForPrompt({
+              sku: selectedSku.name,
+              genderLabel,
+              productInfoText,
+              platform: 'crosspost'
+            }, recentToneSelections, performanceByTone);
+            const combinedPrompt = (fbPromptFinal || fallbackPrompt) + toneSelection.instruction;
             const fbSpecificPrompt = combinedPrompt + "\n\n[LƯU Ý: HÃY CHỈ VIẾT NỘI DUNG CHO FACEBOOK DỰA THEO HƯỚNG DẪN TRÊN. BỎ QUA CÁC PHẦN KHÁC. TRẢ VỀ TRỰC TIẾP NỘI DUNG MÀ KHÔNG CẦN TIÊU ĐỀ ## FACEBOOK]";
             const igSpecificPrompt = combinedPrompt + "\n\n[LƯU Ý: HÃY CHỈ VIẾT NỘI DUNG CHO INSTAGRAM DỰA THEO HƯỚNG DẪN TRÊN. BỎ QUA CÁC PHẦN KHÁC. TRẢ VỀ TRỰC TIẾP NỘI DUNG MÀ KHÔNG CẦN TIÊU ĐỀ ## INSTAGRAM]";
 
@@ -1396,11 +1274,19 @@ export const trainContentOnly = async () => {
     
     let firstFbContent = null;
     let firstIgContent = null;
+    const recentToneSelections = await getRecentContentSelections(5);
+    const performanceByTone = buildPerformanceMultipliers(await getTonePerformance(30));
 
     for (const account of activeAccounts) {
       liveLog(`🚀 Sinh Content test cho tài khoản: ${account.name}...`, 'info', 'System');
       checkAbort();
-      const combinedPrompt = (fbPromptFinal || fallbackPrompt) + getRandomToneAndPerspective();
+      const toneSelection = selectToneForPrompt({
+        sku: selectedSku.name,
+        genderLabel,
+        productInfoText,
+        platform: 'crosspost'
+      }, recentToneSelections, performanceByTone);
+      const combinedPrompt = (fbPromptFinal || fallbackPrompt) + toneSelection.instruction;
       const fbSpecificPrompt = combinedPrompt + "\n\n[LƯU Ý: HÃY CHỈ VIẾT NỘI DUNG CHO FACEBOOK DỰA THEO HƯỚNG DẪN TRÊN. BỎ QUA CÁC PHẦN KHÁC. TRẢ VỀ TRỰC TIẾP NỘI DUNG MÀ KHÔNG CẦN TIÊU ĐỀ ## FACEBOOK]";
       const igSpecificPrompt = combinedPrompt + "\n\n[LƯU Ý: HÃY CHỈ VIẾT NỘI DUNG CHO INSTAGRAM DỰA THEO HƯỚNG DẪN TRÊN. BỎ QUA CÁC PHẦN KHÁC. TRẢ VỀ TRỰC TIẾP NỘI DUNG MÀ KHÔNG CẦN TIÊU ĐỀ ## INSTAGRAM]";
 
@@ -1895,6 +1781,8 @@ export const autoPublishRoutine = async (retryContext = null) => {
       }
 
       let mainPostId = null;
+      const recentToneSelections = await getRecentContentSelections(5);
+      const performanceByTone = buildPerformanceMultipliers(await getTonePerformance(30));
 
       for (const account of activeAccounts) {
          liveLog(`🚀 Đang xử lý cho tài khoản: ${account.name}`, 'info', 'System');
@@ -1906,6 +1794,8 @@ export const autoPublishRoutine = async (retryContext = null) => {
          let postContent = null;
          let targetImgPathForGemini = null;
          let tempImgDownloaded = null;
+         let contentSelection = null;
+         const accountMetricId = account.id || account.fbPageId || account.igUserId || account.name;
 
          // 3.2 GỌI GEMINI ĐỂ VIẾT CONTENT RIÊNG CHO ACCOUNT NÀY
          try {
@@ -1945,7 +1835,13 @@ export const autoPublishRoutine = async (retryContext = null) => {
                  reelsPrompt = `Đây là một video Daily Vlog (hoạt động hằng ngày: đóng hàng, giao hàng, vệ sinh đồng hồ...). Hãy đóng vai nhân viên của I&W Carnival, viết một đoạn caption thật ngắn gọn, tự nhiên, vui vẻ, thân thiện. Tuyệt đối KHÔNG quảng cáo hay chèo kéo mua hàng. Chỉ dùng hashtag #iwcarnivalvietnam #iwcarnival #dailyvlog`;
               } else {
                  const reelsFallback = `Hãy đóng vai TikTok creator. Viết caption ngắn giật tít cho video Reels giới thiệu đồng hồ SKU ${selectedSku.name}. Chỉ trả về caption, dùng hashtag #iwcarnivalvietnam #iwcarnival #donghoiwcarnival và các hashtag trending.`;
-                 reelsPrompt = (reelsPromptFinal || reelsFallback) + getRandomToneAndPerspective();
+                 contentSelection = selectToneForPrompt({
+                   sku: selectedSku.name,
+                   genderLabel,
+                   productInfoText,
+                   platform: 'reels'
+                 }, recentToneSelections, performanceByTone);
+                 reelsPrompt = (reelsPromptFinal || reelsFallback) + contentSelection.instruction;
               }
 
               const sampleFolders = ['1_Anh_Hang', '2_Anh_Tu_Chup'];
@@ -1968,7 +1864,13 @@ export const autoPublishRoutine = async (retryContext = null) => {
               thContent = reelsContent;
             } else {
               const fallbackPrompt = `Hãy viết 2 bài theo đúng format:\n## FACEBOOK:\n[Bài FB 50-80 từ, câu mở đầu VIẾT IN HOA, có hashtag #iwcarnivalvietnam #iwcarnival #donghoiwcarnival]\n## INSTAGRAM:\n[Caption IG 15-35 từ, góc nhìn KHÁC bài FB, có hashtag #iwcarnivalvietnam #iwcarnival #donghoiwcarnival]\nSản phẩm: đồng hồ SKU ${selectedSku.name}. Không kèm giải thích.`;
-              const combinedPrompt = (fbPromptFinal || fallbackPrompt) + getRandomToneAndPerspective();
+              contentSelection = selectToneForPrompt({
+                sku: selectedSku.name,
+                genderLabel,
+                productInfoText,
+                platform: 'crosspost'
+              }, recentToneSelections, performanceByTone);
+              const combinedPrompt = (fbPromptFinal || fallbackPrompt) + contentSelection.instruction;
               const fbSpecificPrompt = combinedPrompt + "\n\n[LƯU Ý: HÃY CHỈ VIẾT NỘI DUNG CHO FACEBOOK DỰA THEO HƯỚNG DẪN TRÊN. BỎ QUA CÁC PHẦN KHÁC. TRẢ VỀ TRỰC TIẾP NỘI DUNG MÀ KHÔNG CẦN TIÊU ĐỀ ## FACEBOOK]";
               const igSpecificPrompt = combinedPrompt + "\n\n[LƯU Ý: HÃY CHỈ VIẾT NỘI DUNG CHO INSTAGRAM DỰA THEO HƯỚNG DẪN TRÊN. BỎ QUA CÁC PHẦN KHÁC. TRẢ VỀ TRỰC TIẾP NỘI DUNG MÀ KHÔNG CẦN TIÊU ĐỀ ## INSTAGRAM]";
 
@@ -1986,11 +1888,16 @@ export const autoPublishRoutine = async (retryContext = null) => {
          } catch (geminiError) {
             checkAbort();
             console.log(`⚠️ Lỗi Playwright ChatGPT: ${geminiError.message}. Dùng nội dung dự phòng.`);
+            contentSelection = null;
             fbContent = `[Đăng Tự Động] Khám phá ngay siêu phẩm đồng hồ ${selectedSku.name} tuyệt đẹp. #iwcarnivalvietnam #iwcarnival #donghoiwcarnival`;
             igContent = fbContent;
             thContent = fbContent;
             postContent = fbContent;
          }
+
+         const metricMetadata = contentSelection
+           ? { ...contentSelection, accountId: accountMetricId }
+           : { accountId: accountMetricId };
 
          liveLog(`✅ [${account.name}] Đã chuẩn bị xong nội dung FB, IG & TH.`, 'success', 'System', { fbContent, igContent, thContent });
 
@@ -2057,7 +1964,7 @@ export const autoPublishRoutine = async (retryContext = null) => {
                   successfulPlatforms.add('facebook');
                 }
                 try {
-                  await addPostMetric('facebook_reels', postId, selectedSku.name, postContent);
+                  await addPostMetric('facebook_reels', postId, selectedSku.name, postContent, metricMetadata);
                 } catch (metricError) {
                   console.warn(`⚠️ FB Reels đã đăng nhưng không lưu được metric: ${metricError.message}`);
                 }
@@ -2089,7 +1996,14 @@ export const autoPublishRoutine = async (retryContext = null) => {
                 let igSuccess = false;
                 for (let i = 1; i <= 3; i++) {
                   try {
-                    await publishIGReels(finalVideoPath, igContent, [], { igAccessToken: igTokenToUse, igUserId: igUserToUse });
+                    const igMediaId = await publishIGReels(finalVideoPath, igContent, [], { igAccessToken: igTokenToUse, igUserId: igUserToUse });
+                    if (igMediaId) {
+                      try {
+                        await addPostMetric('instagram', igMediaId, selectedSku.name, igContent, metricMetadata);
+                      } catch (metricError) {
+                        console.warn(`⚠️ IG Reels đã đăng nhưng không lưu được metric: ${metricError.message}`);
+                      }
+                    }
                     igSuccess = true;
                     publishSucceeded = true;
                     successfulPlatforms.add('instagram');
@@ -2126,7 +2040,7 @@ export const autoPublishRoutine = async (retryContext = null) => {
                     successfulPlatforms.add('facebook');
                   }
                   try {
-                    await addPostMetric('facebook', postId, selectedSku.name, postContent);
+                    await addPostMetric('facebook', postId, selectedSku.name, postContent, metricMetadata);
                   } catch (metricError) {
                     console.warn(`⚠️ Bài Facebook đã đăng nhưng không lưu được metric: ${metricError.message}`);
                   }
@@ -2165,7 +2079,14 @@ export const autoPublishRoutine = async (retryContext = null) => {
                     const publicUrl = imgMetaRes.data.images[0].source;
                     const delayMs = getIgDelayMs();
                     if (delayMs > 0) await sleep(delayMs, globalStopController.signal);
-                    await publishToInstagram(igContent, publicUrl, [], { igAccessToken: igTokenToUse, igUserId: igUserToUse });
+                    const igRes = await publishToInstagram(igContent, publicUrl, [], { igAccessToken: igTokenToUse, igUserId: igUserToUse });
+                    if (igRes?.mediaId) {
+                      try {
+                        await addPostMetric('instagram', igRes.mediaId, selectedSku.name, igContent, metricMetadata);
+                      } catch (metricError) {
+                        console.warn(`⚠️ Bài Instagram đã đăng nhưng không lưu được metric: ${metricError.message}`);
+                      }
+                    }
                     publishSucceeded = true;
                     successfulPlatforms.add('instagram');
                     liveLog(`✅ [${account.name}] Đăng IG 1 ảnh thành công!`, 'success', 'Instagram');
@@ -2213,7 +2134,7 @@ export const autoPublishRoutine = async (retryContext = null) => {
                     successfulPlatforms.add('facebook');
                   }
                   try {
-                    await addPostMetric('facebook', postId, selectedSku.name, postContent);
+                    await addPostMetric('facebook', postId, selectedSku.name, postContent, metricMetadata);
                   } catch (metricError) {
                     console.warn(`⚠️ Album Facebook đã đăng nhưng không lưu được metric: ${metricError.message}`);
                   }
@@ -2252,7 +2173,11 @@ export const autoPublishRoutine = async (retryContext = null) => {
                     if (igRes && igRes.mediaId) {
                        publishSucceeded = true;
                        successfulPlatforms.add('instagram');
-                       await addPostMetric('instagram', igRes.mediaId, selectedSku.name, igContent);
+                       try {
+                         await addPostMetric('instagram', igRes.mediaId, selectedSku.name, igContent, metricMetadata);
+                       } catch (metricError) {
+                         console.warn(`⚠️ Album Instagram đã đăng nhưng không lưu được metric: ${metricError.message}`);
+                       }
                        liveLog(`✅ [${account.name}] Đăng Album IG thành công!`, 'success', 'Instagram');
                     }
                   }

@@ -9,7 +9,7 @@ import { google } from 'googleapis';
 import multer from 'multer';
 import { spawn } from 'child_process';
 import { startScheduler } from '../scheduler.js';
-import { autoPublishRoutine, dryRunRoutine, resetGlobalStop, triggerGlobalStop, getIsRunning, forceResetRunningState, trainImageOnly, trainContentOnly, getToneInstructionText } from '../services/publish.service.js';
+import { autoPublishRoutine, dryRunRoutine, resetGlobalStop, triggerGlobalStop, getIsRunning, forceResetRunningState, trainImageOnly, trainContentOnly } from '../services/publish.service.js';
 import { getProductInfoBySku } from '../services/sheet.service.js';
 import { openLoginHelper, generateContentOnChatGPT, generateBackgroundOnChatGPT, analyzeNewSampleImages, isAiIdle } from '../services/playwright.service.js';
 import { connection as redisConnection, publishQueue } from '../workers/queue.js';
@@ -18,7 +18,7 @@ import {
   markLastSuccessfulRun,
 } from '../services/publish-run-state.service.js';
 import { recentActivities, addActivity } from '../utils/activity.js';
-import { getAllPostedHistory, getTodayEngagement } from '../utils/history.js';
+import { getAllPostedHistory, getTodayEngagement, getTonePerformance } from '../utils/history.js';
 import { readJsonFileSync, writeJsonFileSync } from '../utils/json-file.js';
 import { trackPostMetrics } from '../services/tracking.service.js';
 import logEmitter from '../utils/liveLog.js';
@@ -28,6 +28,7 @@ import { syncAllCRM, replyCRM } from '../services/crm.service.js';
 import { autoTagAllConversations } from '../services/autotag.service.js';
 import { syncHashesFromSheets } from '../services/image-hash.service.js';
 import { startArena, stopArena, getArenaStatus, arenaEmitter } from '../services/ai_arena.service.js';
+import { CONTENT_CTAS, CONTENT_TONES, TONE_PROMPT_VERSION, getToneInstructionText } from '../services/content-tone.service.js';
 
 // Khởi tạo bảng CRM DB nếu chưa có
 initCRMDB().then(() => console.log('✅ Đã khởi tạo CRM SQLite DB')).catch(e => console.error('Lỗi CRM DB:', e));
@@ -274,7 +275,42 @@ router.get('/dashboard/engagement', async (req, res) => {
   }
 });
 
-// 1c. Quét tương tác ngay lập tức (trigger thủ công)
+// 1c. Hiệu quả theo phong cách caption trong 30 ngày gần nhất.
+router.get('/dashboard/tone-performance', async (req, res) => {
+  try {
+    const days = Math.min(365, Math.max(1, Number.parseInt(req.query.days, 10) || 30));
+    const accountId = req.query.accountId || null;
+    const tracked = await getTonePerformance(days, accountId);
+    const trackedById = new Map(tracked.map(item => [item.toneId, item]));
+    const tones = CONTENT_TONES.map(tone => ({
+      toneId: tone.id,
+      toneName: tone.name,
+      ...(trackedById.get(tone.id) || {
+        posts: 0,
+        likes: 0,
+        comments: 0,
+        shares: 0,
+        score: 0,
+        averageScore: 0
+      })
+    })).sort((a, b) => b.averageScore - a.averageScore || b.posts - a.posts || a.toneId.localeCompare(b.toneId));
+    const trackedPosts = tones.reduce((sum, tone) => sum + tone.posts, 0);
+
+    res.json({
+      days,
+      trackedPosts,
+      promptVersion: TONE_PROMPT_VERSION,
+      scoringFormula: 'like + 2 × comment + 3 × share',
+      adaptiveReady: tones.filter(tone => tone.posts >= 8).length >= 4,
+      tones
+    });
+  } catch (err) {
+    console.error('Lỗi lấy hiệu quả tone:', err);
+    res.status(500).json({ error: 'Cannot fetch tone performance' });
+  }
+});
+
+// 1d. Quét tương tác ngay lập tức (trigger thủ công)
 router.post('/dashboard/track-now', async (req, res) => {
   try {
     const accountId = req.query.accountId || null;
@@ -533,15 +569,8 @@ router.get('/publish/test-tones', async (req, res) => {
   };
 
   try {
-    const tones = [
-      "Sang trọng, tinh tế", "Gần gũi, đời thường", "Kể chuyện (Storytelling)", 
-      "Trực diện, chốt sale", "Kiến thức chuyên gia", "Hài hước, thả thính",
-      "Kể chuyện hài, phối đồ", "Phối đồ"
-    ];
-    const ctas = [
-      "Inbox ngay để nhận ưu đãi", "Để lại bình luận để được tư vấn chi tiết",
-      "Đừng bỏ lỡ siêu phẩm này", "Nhắn tin cho shop ngay nhé"
-    ];
+    const tones = CONTENT_TONES;
+    const ctas = CONTENT_CTAS.map(cta => cta.text);
 
     // Lấy template
     const templatePath = path.join(__dirname, '../../config/gemini-prompt-template.md');
@@ -645,25 +674,26 @@ ${customerContext ? `[CHÂN DUNG KHÁCH HÀNG]\n${customerContext}\n\n` : ''}`;
     const baseIgPrompt = igPromptTemplate ? prepareTemplate(igPromptTemplate) : `Sản phẩm: Đồng hồ ${skuName}. Hãy viết bài.`;
 
     for (let i = 0; i < tones.length; i++) {
-      const tone = tones[i];
+      const toneDefinition = tones[i];
+      const tone = toneDefinition.name;
       const cta = ctas[Math.floor(Math.random() * ctas.length)];
       const perspective = "Góc nhìn của chuyên gia tư vấn";
       
-      const instruction = getToneInstructionText(tone, perspective, cta);
+      const instruction = getToneInstructionText(toneDefinition.id, perspective, cta);
 
       const fbFinalPrompt = baseFbPrompt + instruction + "\n\n[LƯU Ý QUAN TRỌNG: BẠN PHẢI CHỈ VIẾT NỘI DUNG CHO FACEBOOK DỰA THEO HƯỚNG DẪN TRÊN. BỎ QUA CÁC YÊU CẦU CHO NỀN TẢNG KHÁC. TRẢ VỀ TRỰC TIẾP NỘI DUNG MÀ KHÔNG CẦN TIÊU ĐỀ ## FACEBOOK]";
       const igFinalPrompt = baseIgPrompt + instruction + "\n\n[LƯU Ý QUAN TRỌNG: BẠN PHẢI CHỈ VIẾT NỘI DUNG CHO INSTAGRAM DỰA THEO HƯỚNG DẪN TRÊN. BỎ QUA CÁC YÊU CẦU CHO NỀN TẢNG KHÁC. TRẢ VỀ TRỰC TIẾP NỘI DUNG MÀ KHÔNG CẦN TIÊU ĐỀ ## INSTAGRAM]";
 
-      sendEvent('progress', { index: i + 1, total: tones.length, tone });
+      sendEvent('progress', { index: i + 1, total: tones.length, toneId: toneDefinition.id, tone });
 
       try {
         const fbContent = await generateContentOnChatGPT(fbFinalPrompt, 'fb', sampleImgPath);
         const igContent = await generateContentOnChatGPT(igFinalPrompt, 'ig', sampleImgPath);
         
         const combinedContent = `========== DÀNH CHO FACEBOOK ==========\n${fbContent}\n\n========== DÀNH CHO INSTAGRAM ==========\n${igContent}`;
-        sendEvent('result', { index: i + 1, tone, cta, content: combinedContent });
+        sendEvent('result', { index: i + 1, toneId: toneDefinition.id, tone, cta, content: combinedContent });
       } catch (e) {
-        sendEvent('result', { index: i + 1, tone, cta, content: `Lỗi: ${e.message}` });
+        sendEvent('result', { index: i + 1, toneId: toneDefinition.id, tone, cta, content: `Lỗi: ${e.message}` });
       }
     }
 
