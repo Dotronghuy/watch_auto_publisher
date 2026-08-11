@@ -7,7 +7,6 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
-import android.net.Uri
 import android.os.Build
 import android.os.IBinder
 import java.util.concurrent.atomic.AtomicBoolean
@@ -17,6 +16,7 @@ class MobileWorkerService : Service() {
     private val running = AtomicBoolean(false)
     private var workerThread: Thread? = null
     private lateinit var wakeController: DeviceWakeController
+    private var lastLaunchedJobId: String? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -96,6 +96,26 @@ class MobileWorkerService : Service() {
                             message = "Quá thời gian tại bước ${active.step.name}",
                         )
                     } else {
+                        // An app update or service restart preserves the active job.
+                        // If it has not left OPEN_MENU yet, reopen that exact post
+                        // once instead of continuing on a stale Facebook screen.
+                        if (
+                            active.step == AutomationStep.OPEN_MENU
+                            && lastLaunchedJobId != active.job.id
+                        ) {
+                            updateStatus("Đang mở lại bài ${active.job.postId}")
+                            if (!launchFacebookPost(active.job)) {
+                                JobStore.markForReport(
+                                    this,
+                                    success = false,
+                                    message = "Không mở được đúng bài viết Facebook",
+                                )
+                                sleepInterruptibly(ACTIVE_POLL_MS)
+                                continue
+                            }
+                            lastLaunchedJobId = active.job.id
+                            sleepInterruptibly(DEVICE_WAKE_SETTLE_MS)
+                        }
                         api.heartbeat(active.job.id, deviceId)
                         updateStatus("Đang xử lý ${active.job.id} • ${active.step.name}")
                     }
@@ -118,15 +138,16 @@ class MobileWorkerService : Service() {
                             updateStatus("Đã nhận job ${job.id} • mở Facebook")
                             sleepInterruptibly(DEVICE_WAKE_SETTLE_MS)
                         }
-                        if (
-                            JobStore.load(this)?.reportStatus == null
-                            && !launchFacebookPost(job.postUrl)
-                        ) {
-                            JobStore.markForReport(
-                                this,
-                                success = false,
-                                message = "Không mở được ứng dụng Facebook",
-                            )
+                        if (JobStore.load(this)?.reportStatus == null) {
+                            if (!launchFacebookPost(job)) {
+                                JobStore.markForReport(
+                                    this,
+                                    success = false,
+                                    message = "Không mở được ứng dụng Facebook",
+                                )
+                            } else {
+                                lastLaunchedJobId = job.id
+                            }
                         }
                         sleepMs = ACTIVE_POLL_MS
                     }
@@ -140,19 +161,8 @@ class MobileWorkerService : Service() {
         }
     }
 
-    private fun launchFacebookPost(postUrl: String): Boolean {
-        val uri = Uri.parse(postUrl)
-        val facebookIntent = Intent(Intent.ACTION_VIEW, uri)
-            .setPackage(FACEBOOK_PACKAGE)
-            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-
-        return try {
-            if (facebookIntent.resolveActivity(packageManager) == null) return false
-            startActivity(facebookIntent)
-            true
-        } catch (_: Exception) {
-            false
-        }
+    private fun launchFacebookPost(job: MobileLinkJob): Boolean {
+        return FacebookPostLauncher.launch(this, job)
     }
 
     private fun updateStatus(message: String) {
@@ -198,7 +208,6 @@ class MobileWorkerService : Service() {
     companion object {
         private const val CHANNEL_ID = "zenwatch_mobile_worker"
         private const val NOTIFICATION_ID = 7201
-        private const val FACEBOOK_PACKAGE = "com.facebook.katana"
         private const val IDLE_POLL_MS = 12_000L
         private const val ACTIVE_POLL_MS = 5_000L
         private const val DEVICE_WAKE_SETTLE_MS = 800L

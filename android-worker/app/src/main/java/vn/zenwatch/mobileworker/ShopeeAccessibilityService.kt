@@ -26,6 +26,7 @@ class ShopeeAccessibilityService : AccessibilityService() {
     private val reelOptionsScrollAttempts = mutableMapOf<String, Int>()
     private val affiliateProductTapAttempts = mutableMapOf<String, Int>()
     private val saveFallbackAttempts = mutableSetOf<String>()
+    private val exactPostReopenTargets = mutableMapOf<String, Int>()
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event?.packageName?.toString() != FACEBOOK_PACKAGE) return
@@ -98,6 +99,34 @@ class ShopeeAccessibilityService : AccessibilityService() {
         }
 
         val fallbackKey = "${active.job.id}:${active.job.attempt}"
+
+        // Never attach a link to whichever post happens to be first in News Feed.
+        // If Facebook interpreted an exact permalink as Home, retry the next
+        // exact target. After all targets are exhausted, fail safely instead of
+        // touching a potentially unrelated post.
+        if (looksLikeFacebookHomeFeed(root)) {
+            if (elapsedInStep(active) < EXACT_POST_FIRST_RETRY_MS) {
+                scheduleNext(500)
+                return
+            }
+
+            val currentTarget = exactPostReopenTargets[fallbackKey] ?: 0
+            val nextTarget = currentTarget + 1
+            if (nextTarget < FacebookPostLauncher.targetCount(active.job)) {
+                exactPostReopenTargets[fallbackKey] = nextTarget
+                if (FacebookPostLauncher.launch(this, active.job, nextTarget)) {
+                    scheduleNext(EXACT_POST_REOPEN_SETTLE_MS)
+                    return
+                }
+            }
+
+            failStepAfter(
+                active,
+                EXACT_POST_FAIL_TIMEOUT_MS,
+                "Facebook van dang o News Feed; Worker da dung de tranh gan link nham bai",
+            )
+            return
+        }
 
         // Full-screen Reels opens a tall bottom sheet. The product-management row
         // is below the first viewport, so scroll the already-open sheet instead of
@@ -357,11 +386,15 @@ class ShopeeAccessibilityService : AccessibilityService() {
             return
         }
 
-        val saveStillVisible = findBestNode(
+        // The Reels options sheet also contains "Lưu thước phim" / "Save reel".
+        // Only an exact "Lưu" / "Save" belongs to the product-link form; a
+        // substring match here would save the reel after the link form closes.
+        val exactSaveButtonVisible = findExactNode(
             root,
             listOf("Lưu", "Save"),
-            exactFirst = true,
+            visibleOnly = true,
         ) != null
+        val saveStillVisible = exactSaveButtonVisible
         val formStillVisible = saveStillVisible || findEditableNodes(root).any { node ->
             val label = nodeLabel(node)
             label.contains("url", ignoreCase = true)
@@ -386,7 +419,11 @@ class ShopeeAccessibilityService : AccessibilityService() {
             && elapsedInStep(active) >= 3_000
             && saveFallbackAttempts.add(verifyFallbackKey)
         ) {
-            val saveButton = findBestNode(root, listOf("Lưu", "Save"), exactFirst = true)
+            val saveButton = findExactNode(
+                root,
+                listOf("Lưu", "Save"),
+                visibleOnly = true,
+            )
             val gestureDispatched = saveButton?.let { tapNodeByGesture(it) }
                 ?: tapSaveByGesture()
             if (gestureDispatched) {
@@ -456,6 +493,19 @@ class ShopeeAccessibilityService : AccessibilityService() {
             .firstOrNull()
     }
 
+    private fun findExactNode(
+        root: AccessibilityNodeInfo,
+        keywords: List<String>,
+        visibleOnly: Boolean = false,
+    ): AccessibilityNodeInfo? {
+        val nodes = mutableListOf<AccessibilityNodeInfo>()
+        collectNodes(root, nodes)
+        return nodes.firstOrNull { node ->
+            (!visibleOnly || node.isVisibleToUser)
+                && keywords.any { keyword -> nodeLabel(node).trim().equals(keyword, true) }
+        }
+    }
+
     private fun findEditableNodes(root: AccessibilityNodeInfo): List<AccessibilityNodeInfo> {
         val nodes = mutableListOf<AccessibilityNodeInfo>()
         collectNodes(root, nodes)
@@ -509,6 +559,45 @@ class ShopeeAccessibilityService : AccessibilityService() {
     private fun isVideoJob(active: ActiveJob): Boolean {
         val url = active.job.postUrl.lowercase()
         return VIDEO_URL_HINTS.any { url.contains(it) }
+    }
+
+    private fun looksLikeFacebookHomeFeed(root: AccessibilityNodeInfo): Boolean {
+        val nodes = mutableListOf<AccessibilityNodeInfo>()
+        collectNodes(root, nodes)
+
+        val height = resources.displayMetrics.heightPixels
+        if (height <= 0) return false
+
+        var hasFacebookHeader = false
+        val bottomNavigationLabels = mutableSetOf<String>()
+        nodes.forEach { node ->
+            if (!node.isVisibleToUser) return@forEach
+            val label = nodeLabel(node)
+                .trim()
+                .replace(Regex("\\s+"), " ")
+                .lowercase()
+            if (label.isBlank()) return@forEach
+
+            val bounds = Rect()
+            node.getBoundsInScreen(bounds)
+            if (bounds.isEmpty) return@forEach
+
+            if (
+                bounds.centerY() < height * 0.24f
+                && (label == "facebook" || label.startsWith("facebook "))
+            ) {
+                hasFacebookHeader = true
+            }
+
+            if (bounds.centerY() > height * 0.70f) {
+                HOME_FEED_BOTTOM_NAV_HINTS.firstOrNull { hint ->
+                    label == hint || label.startsWith("$hint ") || label.contains(" $hint")
+                }?.let(bottomNavigationLabels::add)
+            }
+        }
+
+        return bottomNavigationLabels.size >= 3 ||
+            (hasFacebookHeader && bottomNavigationLabels.isNotEmpty())
     }
 
     private fun postMenuTapTargets(anchorYFraction: Float?): List<Float> {
@@ -1021,6 +1110,9 @@ class ShopeeAccessibilityService : AccessibilityService() {
         private const val REEL_SCREENSHOT_TAP_LIMIT = 4
         private const val REEL_OPTIONS_SCROLL_LIMIT = 5
         private const val AFFILIATE_PRODUCT_TAP_LIMIT = 3
+        private const val EXACT_POST_FIRST_RETRY_MS = 1_200L
+        private const val EXACT_POST_REOPEN_SETTLE_MS = 2_000L
+        private const val EXACT_POST_FAIL_TIMEOUT_MS = 20_000L
         private const val VERIFY_FORM_CLOSED_SUCCESS_MS = 5_000L
         private const val FACEBOOK_PACKAGE = "com.facebook.katana"
         private const val EVENT_SETTLE_MS = 600L
@@ -1040,6 +1132,21 @@ class ShopeeAccessibilityService : AccessibilityService() {
         private const val REEL_ELLIPSIS_EXPECTED_Y = 0.80f
         private val MENU_TAP_Y_FRACTIONS =
             floatArrayOf(0.16f, 0.20f, 0.24f, 0.28f, 0.32f, 0.36f, 0.40f)
+        private val HOME_FEED_BOTTOM_NAV_HINTS = listOf(
+            "trang ch\u1ee7",
+            "b\u1ea3ng \u0111i\u1ec1u khi\u1ec3n chuy\u00ean nghi\u1ec7p",
+            "b\u1ea1n b\u00e8",
+            "nh\u00f3m",
+            "th\u00f4ng b\u00e1o",
+            "trang c\u00e1 nh\u00e2n",
+            "menu",
+            "home",
+            "professional dashboard",
+            "friends",
+            "groups",
+            "notifications",
+            "profile",
+        )
         private val POST_MENU_BUTTON_KEYWORDS = listOf(
             "Lựa chọn khác cho bài viết",
             "Lựa chọn khác",

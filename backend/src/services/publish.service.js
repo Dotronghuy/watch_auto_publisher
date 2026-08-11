@@ -31,7 +31,11 @@ import { readJsonFileSync } from '../utils/json-file.js';
 import { shouldTryNextSkuAfterAiFailure } from './auto-publish-policy.js';
 import { computeHashFromBuffer } from './image-hash.service.js';
 import { saveImageHash } from '../utils/crm.db.js';
-import { enqueueMobileLinkJob, isAllowedShopeeUrl } from './mobileLinkJob.service.js';
+import {
+  enqueueMobileLinkJob,
+  isAllowedShopeeUrl,
+  normalizeFacebookPostUrl,
+} from './mobileLinkJob.service.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -2350,12 +2354,21 @@ const fallbackFacebookPostUrl = (postId) => {
   if (separator > 0) {
     const pageId = normalized.slice(0, separator);
     const storyId = normalized.slice(separator + 1);
-    return `https://www.facebook.com/${pageId}/posts/${storyId}`;
+    return `https://www.facebook.com/permalink.php?story_fbid=${encodeURIComponent(storyId)}&id=${encodeURIComponent(pageId)}`;
   }
-  return `https://www.facebook.com/${normalized}`;
+  return `https://www.facebook.com/reel/${normalized}`;
 };
 
 const resolveFacebookPostUrl = async (postId, pageToken) => {
+  // A normal Page post has the stable Graph ID PageID_PostID. In practice,
+  // permalink_url can occasionally contain another owner/path which opens a
+  // neighbouring post in the Android Facebook app. Build the canonical post URL
+  // directly from the composite ID. Reels use a single video ID and still need
+  // the permalink returned by Graph API below.
+  if (/^\d+_\d+$/.test(String(postId || '').trim())) {
+    return fallbackFacebookPostUrl(postId);
+  }
+
   if (pageToken) {
     try {
       const response = await axios.get(`https://graph.facebook.com/v21.0/${postId}`, {
@@ -2365,7 +2378,9 @@ const resolveFacebookPostUrl = async (postId, pageToken) => {
         },
         timeout: 15000,
       });
-      if (response.data?.permalink_url) return response.data.permalink_url;
+      if (response.data?.permalink_url) {
+        return normalizeFacebookPostUrl(response.data.permalink_url, postId);
+      }
     } catch (error) {
       liveLog(
         `[Android Worker] Khong lay duoc permalink tu Graph API, dung URL du phong: ${error.message}`,
@@ -2374,7 +2389,7 @@ const resolveFacebookPostUrl = async (postId, pageToken) => {
       );
     }
   }
-  return fallbackFacebookPostUrl(postId);
+  return normalizeFacebookPostUrl(fallbackFacebookPostUrl(postId), postId);
 };
 
 export async function dispatchShopeeLinkMobile(postId, shopeeLinkToAttach, pageToken) {

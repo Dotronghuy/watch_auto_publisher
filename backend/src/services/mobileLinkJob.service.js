@@ -5,6 +5,50 @@ const DEFAULT_LEASE_MS = 5 * 60 * 1000;
 
 const normalizeText = (value) => String(value || '').trim();
 
+const fallbackFacebookPostUrl = (postId) => {
+  const normalized = normalizeText(postId);
+  const separator = normalized.indexOf('_');
+  if (separator > 0) {
+    const pageId = normalized.slice(0, separator);
+    const storyId = normalized.slice(separator + 1);
+    return `https://www.facebook.com/permalink.php?story_fbid=${encodeURIComponent(storyId)}&id=${encodeURIComponent(pageId)}`;
+  }
+  return normalized ? `https://www.facebook.com/reel/${encodeURIComponent(normalized)}` : '';
+};
+
+/**
+ * Graph API normally returns an absolute permalink_url, but some responses and
+ * older call sites can provide a protocol-relative, root-relative, or HTTP URL.
+ * Mobile jobs must always contain an HTTPS URL because Android opens it outside
+ * the trusted backend process.
+ */
+export const normalizeFacebookPostUrl = (value, postId) => {
+  const fallback = fallbackFacebookPostUrl(postId);
+  let candidate = normalizeText(value);
+  if (!candidate) return fallback;
+
+  if (candidate.startsWith('//')) {
+    candidate = `https:${candidate}`;
+  } else if (candidate.startsWith('/')) {
+    candidate = `https://www.facebook.com${candidate}`;
+  } else if (/^(?:www\.)?facebook\.com\//i.test(candidate)) {
+    candidate = `https://${candidate}`;
+  }
+
+  try {
+    const url = new URL(candidate);
+    const hostname = url.hostname.toLowerCase();
+    const isFacebookHost = hostname === 'facebook.com'
+      || hostname.endsWith('.facebook.com')
+      || hostname === 'fb.watch';
+    if (!isFacebookHost || !['http:', 'https:'].includes(url.protocol)) return fallback;
+    url.protocol = 'https:';
+    return url.toString();
+  } catch {
+    return fallback;
+  }
+};
+
 export const isAllowedShopeeUrl = (value) => {
   try {
     const url = new URL(value);
@@ -28,10 +72,10 @@ export const enqueueMobileLinkJob = async ({
   force = false,
 }) => {
   const normalizedPostId = normalizeText(postId);
-  const normalizedPostUrl = normalizeText(postUrl);
   const normalizedShopeeUrl = normalizeText(shopeeUrl);
 
   if (!normalizedPostId) throw new Error('postId is required');
+  const normalizedPostUrl = normalizeFacebookPostUrl(postUrl, normalizedPostId);
   if (!normalizedPostUrl) throw new Error('postUrl is required');
   if (!/^https:\/\//i.test(normalizedPostUrl)) throw new Error('postUrl must use HTTPS');
   if (!isAllowedShopeeUrl(normalizedShopeeUrl)) {
