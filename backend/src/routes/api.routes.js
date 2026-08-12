@@ -394,12 +394,28 @@ router.post('/trigger-sync', (req, res) => {
 
 // 4. Nút Chạy Auto Ngay - Gọi hàm THẬT
 router.post('/trigger-workflow', async (req, res) => {
+  const requestedContentKind = String(req.body?.contentKind || '').trim().toLowerCase();
+  if (requestedContentKind && !['video', 'post'].includes(requestedContentKind)) {
+    return res.status(400).json({
+      success: false,
+      message: 'contentKind must be video or post',
+    });
+  }
+  if (requestedContentKind && getIsRunning()) {
+    return res.status(409).json({
+      success: false,
+      message: 'Another publish workflow is already running',
+    });
+  }
   // Reset stop signal trước mỗi lần chạy mới
   resetGlobalStop();
   addActivity('Bắt đầu luồng Auto đăng bài (AI Workflow)', 'info');
   sendLogToClients({ time: new Date().toLocaleTimeString(), sender: 'System', message: '🚀 Bắt đầu luồng thực tế...', type: 'info' });
 
-  autoPublishRoutine()
+  autoPublishRoutine(null, {
+    forceContentKind: requestedContentKind || null,
+    ignoreCooldown: Boolean(requestedContentKind),
+  })
     .then(async (result) => {
       if (hasSuccessfulPublishResult(result)) {
         try {

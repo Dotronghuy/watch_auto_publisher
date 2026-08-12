@@ -1331,9 +1331,13 @@ export const trainContentOnly = async () => {
   }
 };
 
-export const autoPublishRoutine = async (retryContext = null) => {
+export const autoPublishRoutine = async (retryContext = null, runOptions = {}) => {
   const isRootAttempt = retryContext === null;
   const context = retryContext || { failedAiSkus: new Set() };
+  const forcedContentKind = ['video', 'post'].includes(runOptions?.forceContentKind)
+    ? runOptions.forceContentKind
+    : null;
+  const ignoreCooldown = runOptions?.ignoreCooldown === true;
 
   if (isRootAttempt) {
     if (isRoutineRunning) {
@@ -1420,7 +1424,7 @@ export const autoPublishRoutine = async (retryContext = null) => {
 
       const productInfo = allProductsInfo.find(p => p.sku === skuFolder.name);
 
-      if (productInfo && productInfo.postDate) {
+      if (!ignoreCooldown && productInfo && productInfo.postDate) {
         const lastPostTime = parseVietnameseDate(productInfo.postDate);
         // Tính theo phút (minutes) thay vì ngày như yêu cầu test của user
         const cycleMs = productInfo.cycleMinutes * 60 * 1000;
@@ -1451,7 +1455,11 @@ export const autoPublishRoutine = async (retryContext = null) => {
     // Áp dụng Smart Filter để ưu tiên
     const shuffledSkus = await getSmartFilteredSkus(eligibleSkus, []);
 
-    const folderTypes = ['0_Anh_AVT', '1_Anh_Hang', '2_Anh_Tu_Chup', '3_Video_Doc'];
+    const folderTypes = forcedContentKind === 'video'
+      ? ['3_Video_Doc']
+      : forcedContentKind === 'post'
+        ? ['0_Anh_AVT', '1_Anh_Hang', '2_Anh_Tu_Chup']
+        : ['0_Anh_AVT', '1_Anh_Hang', '2_Anh_Tu_Chup', '3_Video_Doc'];
     let selectedImages = [];
     let selectedSku = null;
     let postMode = 'SINGLE'; // SINGLE (AI), ALBUM, hoặc REELS
@@ -1459,6 +1467,7 @@ export const autoPublishRoutine = async (retryContext = null) => {
     // Tìm ảnh/video chưa đăng
     for (const skuFolder of shuffledSkus) {
       if (skuFolder.name.toUpperCase().includes('DAILY VLOG')) {
+        if (forcedContentKind) continue;
         const mediaFiles = await getVideosInFolder(skuFolder.id);
         const freshMedia = mediaFiles.filter(item => !postedIds.includes(item.id));
         if (freshMedia.length > 0) {
@@ -2268,7 +2277,7 @@ export const autoPublishRoutine = async (retryContext = null) => {
         'warning',
         'System',
       );
-      return await autoPublishRoutine(context);
+      return await autoPublishRoutine(context, runOptions);
     }
 
     console.error('❌ Tiến trình tự động thất bại:', error.response?.data || error.message);

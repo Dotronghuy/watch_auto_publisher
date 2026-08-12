@@ -5,7 +5,9 @@
   "scripts": {
     "dev": "concurrently \"npm --prefix backend run dev\" \"npx wait-on http://127.0.0.1:3000/api/settings && npm --prefix frontend run dev\" \"ngrok http 3000\"",
     "dev:no-ngrok": "concurrently \"npm --prefix backend run dev\" \"npx wait-on http://127.0.0.1:3000/api/settings && npm --prefix frontend run dev\"",
-    "start:no-ngrok": "concurrently --kill-others --names BACKEND,FRONTEND \"npm --prefix backend run start\" \"npx wait-on http://127.0.0.1:3000/api/settings && npm --prefix frontend run dev\""
+    "start:no-ngrok": "concurrently --kill-others --names BACKEND,FRONTEND \"npm --prefix backend run start\" \"npx wait-on http://127.0.0.1:3000/api/settings && npm --prefix frontend run dev\"",
+    "publish:test-video": "npm --prefix backend run publish:test-video",
+    "publish:test-post": "npm --prefix backend run publish:test-post"
   },
   "devDependencies": {
     "concurrently": "^8.2.2",

@@ -16,7 +16,9 @@
     "test:mobile-worker": "node src/scripts/test_mobile_worker.js",
     "test:mobile-worker-gateway": "node src/scripts/test_mobile_worker_gateway.js",
     "test:mobile-worker-public": "node src/scripts/test_mobile_worker_public.js",
-    "retry:latest-mobile-link": "node --env-file=.env src/scripts/retry_latest_failed_mobile_link_job.js"
+    "retry:latest-mobile-link": "node --env-file=.env src/scripts/retry_latest_failed_mobile_link_job.js",
+    "publish:test-video": "node --env-file=.env src/scripts/trigger_publish_once.js video",
+    "publish:test-post": "node --env-file=.env src/scripts/trigger_publish_once.js post"
   },
   "keywords": [],
   "author": "",
