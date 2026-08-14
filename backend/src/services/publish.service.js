@@ -35,7 +35,6 @@ import {
   enqueueMobileLinkJob,
   fallbackFacebookPostUrl,
   facebookObjectIdFromPostId,
-  facebookUrlReferencesPostId,
   isAllowedShopeeUrl,
   normalizeFacebookPostUrl,
 } from './mobileLinkJob.service.js';
@@ -2291,60 +2290,45 @@ export const autoPublishRoutine = async (retryContext = null, runOptions = {}) =
   }
 }
 
-const REEL_PERMALINK_ATTEMPTS = 10;
-const REEL_PERMALINK_RETRY_MS = 3_000;
-
 const resolveFacebookPostUrl = async (postId, pageToken, { contentType = 'post' } = {}) => {
   const reelJob = contentType === 'reel';
   const objectId = facebookObjectIdFromPostId(postId);
-  const graphLookupId = reelJob ? objectId : postId;
-  const maxAttempts = reelJob ? REEL_PERMALINK_ATTEMPTS : 1;
   let lastGraphError = null;
 
-  // Do not enqueue a Reel until Facebook exposes the permalink for the exact
-  // video object just published. Opening /reel/{id} while the object is still
-  // propagating can land the Android app in a generic Reels viewer.
-  if (pageToken) {
-    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-      try {
-        const response = await axios.get(`https://graph.facebook.com/v21.0/${graphLookupId}`, {
-          params: {
-            fields: 'id,permalink_url',
-            access_token: pageToken,
-          },
-          timeout: 15000,
-        });
-        const graphId = String(response.data?.id || '').trim();
-        const permalink = String(response.data?.permalink_url || '').trim();
-        if (
-          facebookObjectIdFromPostId(graphId) === objectId
-          && permalink
-          && (!reelJob || facebookUrlReferencesPostId(permalink, postId))
-        ) {
-          return normalizeFacebookPostUrl(permalink, postId, { contentType });
-        }
-        lastGraphError = new Error('Facebook chưa trả permalink khớp video_id');
-      } catch (error) {
-        lastGraphError = error;
-      }
-
-      if (attempt < maxAttempts) {
-        if (reelJob) {
-          liveLog(
-            `[Android Worker] Reel ${objectId} chưa sẵn sàng (${attempt}/${maxAttempts}); đang chờ permalink chính xác.`,
-            'typing',
-            'Facebook',
-          );
-        }
-        await new Promise((resolve) => setTimeout(resolve, REEL_PERMALINK_RETRY_MS));
-      }
-    }
+  // Reel jobs now open the owning Page profile and identify the freshly
+  // published card by caption. A Graph permalink is neither used nor required;
+  // waiting for it here would prevent the Android worker from receiving the job.
+  if (reelJob) {
+    liveLog(
+      `[Android Worker] Reel ${objectId}: tạo job ngay để tìm bài trên profile Fanpage.`,
+      'info',
+      'Facebook',
+    );
+    return normalizeFacebookPostUrl(
+      fallbackFacebookPostUrl(postId, contentType),
+      postId,
+      { contentType },
+    );
   }
 
-  if (reelJob && pageToken) {
-    throw new Error(
-      `Facebook chưa xác nhận permalink của đúng Reel ${objectId}; không tạo job để tránh gắn link nhầm. ${lastGraphError?.message || ''}`.trim(),
-    );
+  if (pageToken) {
+    try {
+      const response = await axios.get(`https://graph.facebook.com/v21.0/${postId}`, {
+        params: {
+          fields: 'id,permalink_url',
+          access_token: pageToken,
+        },
+        timeout: 15000,
+      });
+      const graphId = String(response.data?.id || '').trim();
+      const permalink = String(response.data?.permalink_url || '').trim();
+      if (facebookObjectIdFromPostId(graphId) === objectId && permalink) {
+        return normalizeFacebookPostUrl(permalink, postId, { contentType });
+      }
+      lastGraphError = new Error('Facebook chưa trả permalink khớp post_id');
+    } catch (error) {
+      lastGraphError = error;
+    }
   }
 
   if (lastGraphError) {
