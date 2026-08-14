@@ -30,6 +30,20 @@ export const fallbackFacebookPostUrl = (postId, contentType = 'post') => {
   return normalized ? `https://www.facebook.com/reel/${encodeURIComponent(normalized)}` : '';
 };
 
+export const facebookUrlReferencesPostId = (value, postId) => {
+  const expectedObjectId = facebookObjectIdFromPostId(postId);
+  if (!expectedObjectId) return false;
+
+  try {
+    const url = new URL(value);
+    const numericParts = decodeURIComponent(`${url.pathname}${url.search}`)
+      .match(/\d+/g) || [];
+    return numericParts.includes(expectedObjectId);
+  } catch {
+    return false;
+  }
+};
+
 /**
  * Graph API normally returns an absolute permalink_url, but some responses and
  * older call sites can provide a protocol-relative, root-relative, or HTTP URL.
@@ -39,9 +53,6 @@ export const fallbackFacebookPostUrl = (postId, contentType = 'post') => {
 export const normalizeFacebookPostUrl = (value, postId, { contentType = 'post' } = {}) => {
   const normalizedContentType = normalizeContentType(contentType);
   const fallback = fallbackFacebookPostUrl(postId, normalizedContentType);
-  // Graph permalink_url for Reels is not stable in the Android Facebook app.
-  // Always persist a deterministic /reel/{videoId} route for mobile jobs.
-  if (normalizedContentType === 'reel') return fallback;
   let candidate = normalizeText(value);
   if (!candidate) return fallback;
 
@@ -61,6 +72,15 @@ export const normalizeFacebookPostUrl = (value, postId, { contentType = 'post' }
       || hostname === 'fb.watch';
     if (!isFacebookHost || !['http:', 'https:'].includes(url.protocol)) return fallback;
     url.protocol = 'https:';
+    // A Reel job is allowed to open only a permalink that contains the exact
+    // video object ID returned by the upload. Share/Page URLs without that ID can
+    // degrade to a generic Reels feed and expose an unrelated video on Android.
+    if (
+      normalizedContentType === 'reel'
+      && !facebookUrlReferencesPostId(url.toString(), postId)
+    ) {
+      return fallback;
+    }
     return url.toString();
   } catch {
     return fallback;

@@ -30,6 +30,7 @@ class ShopeeAccessibilityService : AccessibilityService() {
     private val saveFallbackAttempts = mutableSetOf<String>()
     private val exactPostReopenTargets = mutableMapOf<String, Int>()
     private val exactPostLastLaunchAt = mutableMapOf<String, Long>()
+    private val reelViewerEntryAttempts = mutableMapOf<String, Int>()
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event?.packageName?.toString() != FACEBOOK_PACKAGE) return
@@ -91,10 +92,12 @@ class ShopeeAccessibilityService : AccessibilityService() {
         val fallbackKey = "${active.job.id}:${active.job.attempt}"
         val staleProductUi = hasProductLinkSurface(root) || isReelOptionsMenuVisible(root)
         val homeFeed = looksLikeFacebookHomeFeed(root)
+        val currentTarget = exactPostReopenTargets[fallbackKey] ?: 0
 
         if (!staleProductUi && !homeFeed && looksLikeExactPostDetail(root, active)) {
             exactPostReopenTargets.remove(fallbackKey)
             exactPostLastLaunchAt.remove(fallbackKey)
+            reelViewerEntryAttempts.remove(fallbackKey)
             menuSemanticTapAttempts.remove(fallbackKey)
             menuFallbackTapAttempts.remove(fallbackKey)
             menuTapDispatched.remove(fallbackKey)
@@ -104,6 +107,27 @@ class ShopeeAccessibilityService : AccessibilityService() {
             JobStore.setStep(this, AutomationStep.OPEN_MENU)
             scheduleNext(350)
             return
+        }
+
+        // A Facebook Reel permalink can initially render as a normal post-detail
+        // card. That layout has a different three-dot menu and must never be used
+        // for a Reel job. Enter the actual full-screen viewer first; only that
+        // viewer exposes the lower caption ellipsis and "Quản lý sản phẩm" flow.
+        if (
+            isVideoJob(active)
+            && !staleProductUi
+            && !homeFeed
+            && looksLikeRegularPostDetail(root)
+            && elapsedInStep(active) >= REEL_VIEWER_FIRST_ENTRY_MS
+        ) {
+            val viewerAttempts = reelViewerEntryAttempts[fallbackKey] ?: 0
+            if (viewerAttempts < REEL_VIEWER_ENTRY_LIMIT) {
+                reelViewerEntryAttempts[fallbackKey] = viewerAttempts + 1
+                if (tapVideoPreviewToEnterReel(root)) {
+                    scheduleNext(REEL_VIEWER_ENTRY_SETTLE_MS)
+                    return
+                }
+            }
         }
 
         if (elapsedInStep(active) < EXACT_POST_FIRST_RETRY_MS) {
@@ -118,7 +142,6 @@ class ShopeeAccessibilityService : AccessibilityService() {
             return
         }
 
-        val currentTarget = exactPostReopenTargets[fallbackKey] ?: 0
         val nextTarget = currentTarget + 1
         if (nextTarget < FacebookPostLauncher.targetCount(active.job)) {
             exactPostReopenTargets[fallbackKey] = nextTarget
@@ -213,20 +236,50 @@ class ShopeeAccessibilityService : AccessibilityService() {
             return
         }
 
+        val fullscreenReel = looksLikeFullscreenReel(root)
+        if (isVideoJob(active) && !fullscreenReel) {
+            // Fail closed: never fall through to the normal post-header menu for a
+            // Reel job. Re-open the canonical Reel and wait for the full-screen
+            // viewer instead of touching whichever post Facebook currently shows.
+            JobStore.restartNavigation(this)
+            FacebookPostLauncher.launch(this, active.job)
+            scheduleNext(EXACT_POST_REOPEN_SETTLE_MS)
+            return
+        }
+
         val semanticTapAttempts = menuSemanticTapAttempts[fallbackKey] ?: 0
         val fallbackTapAttempts = menuFallbackTapAttempts[fallbackKey] ?: 0
-        val fullscreenReel = isVideoJob(active) || looksLikeFullscreenReel(root)
         val anchorYFraction = findPostHeaderAnchorYFraction(root)
         val tapTargets = postMenuTapTargets(anchorYFraction)
 
-        // Facebook does not reliably expose the lower Reel ellipsis as an
-        // accessibility node. Coordinate guesses can hit the bookmark/save button
-        // above it, so locate the three bright dots from a temporary screenshot and
-        // tap the detected centre instead. Never sweep guessed Reel coordinates.
-        if (
-            fullscreenReel
-            && elapsedInStep(active) >= 900
-        ) {
+        val button = findFullscreenReelMenuButton(root) ?: if (!fullscreenReel) {
+            findBestNode(root, POST_MENU_BUTTON_KEYWORDS)
+        } else {
+            // In Reels there is also a page-level three-dot button at the top.
+            // If the lower post button is absent from the accessibility tree, use
+            // the measured lower-right coordinate rather than clicking the top one.
+            null
+        }
+        val semanticTapLimit = if (fullscreenReel) 1 else POST_MENU_SEMANTIC_TAP_LIMIT
+        if (button != null && semanticTapAttempts < semanticTapLimit) {
+            // Facebook can report ACTION_CLICK as accepted without actually opening
+            // the menu. Dispatch a real accessibility gesture at the detected node
+            // first, and retry it before using screen-coordinate fallbacks.
+            val gestureDispatched = tapNodeByGesture(button)
+            val clicked = if (!gestureDispatched) click(button) else false
+            menuSemanticTapAttempts[fallbackKey] = semanticTapAttempts + 1
+            if (gestureDispatched || clicked) {
+                menuTapDispatched.add(fallbackKey)
+            }
+            scheduleNext(if (gestureDispatched || clicked) 1_000 else 450)
+            return
+        }
+
+        // Facebook often omits the lower Reel ellipsis from Accessibility. Detect
+        // its three bright dots in the lower caption area. This runs only after the
+        // full-screen Reel safety gate above, so the top page menu and News Feed can
+        // never be selected for a video job.
+        if (fullscreenReel && elapsedInStep(active) >= 900) {
             val screenshotAttempts = reelScreenshotAttempts[fallbackKey] ?: 0
             if (
                 Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
@@ -239,28 +292,18 @@ class ShopeeAccessibilityService : AccessibilityService() {
                 scheduleNext(REEL_SCREENSHOT_SETTLE_MS)
                 return
             }
-        }
 
-        val button = findFullscreenReelMenuButton(root) ?: if (!fullscreenReel) {
-            findBestNode(root, POST_MENU_BUTTON_KEYWORDS)
-        } else {
-            // In Reels there is also a page-level three-dot button at the top.
-            // If the lower post button is absent from the accessibility tree, use
-            // the measured lower-right coordinate rather than clicking the top one.
-            null
-        }
-        if (button != null && semanticTapAttempts < POST_MENU_SEMANTIC_TAP_LIMIT) {
-            // Facebook can report ACTION_CLICK as accepted without actually opening
-            // the menu. Dispatch a real accessibility gesture at the detected node
-            // first, and retry it before using screen-coordinate fallbacks.
-            val gestureDispatched = tapNodeByGesture(button)
-            val clicked = if (!gestureDispatched) click(button) else false
-            menuSemanticTapAttempts[fallbackKey] = semanticTapAttempts + 1
-            if (gestureDispatched || clicked) {
-                menuTapDispatched.add(fallbackKey)
+            // Last, bounded fallback for Facebook builds whose screenshot masks the
+            // controls. Do not sweep the screen: one measured lower-caption point
+            // is safer than coordinates near the bookmark or video surface.
+            if (fallbackTapAttempts < REEL_MENU_FALLBACK_Y_FRACTIONS.size) {
+                menuFallbackTapAttempts[fallbackKey] = fallbackTapAttempts + 1
+                if (tapPostMenuByGesture(REEL_MENU_FALLBACK_Y_FRACTIONS[fallbackTapAttempts])) {
+                    menuTapDispatched.add(fallbackKey)
+                    scheduleNext(1_200)
+                    return
+                }
             }
-            scheduleNext(if (gestureDispatched || clicked) 1_000 else 450)
-            return
         }
 
         if (
@@ -684,8 +727,14 @@ class ShopeeAccessibilityService : AccessibilityService() {
         root: AccessibilityNodeInfo,
         active: ActiveJob,
     ): Boolean {
+        // Reel jobs must reach the real full-screen viewer. A regular post-detail
+        // card is only an intermediate screen and has an incompatible product menu.
         if (isVideoJob(active)) return looksLikeFullscreenReel(root)
 
+        return looksLikeRegularPostDetail(root)
+    }
+
+    private fun looksLikeRegularPostDetail(root: AccessibilityNodeInfo): Boolean {
         val hasPostAge = findPostHeaderAnchorYFraction(root) != null
         if (!hasPostAge) return false
 
@@ -700,6 +749,21 @@ class ShopeeAccessibilityService : AccessibilityService() {
             visibleOnly = true,
         ) != null
         return hasCommentComposer || hasPostMenu
+    }
+
+    private fun tapVideoPreviewToEnterReel(root: AccessibilityNodeInfo): Boolean {
+        val semanticPreview = findBestNode(
+            root,
+            VIDEO_PREVIEW_LABEL_HINTS,
+            visibleOnly = true,
+        )
+        if (semanticPreview != null && tapNodeByGesture(semanticPreview)) return true
+        if (semanticPreview != null && click(semanticPreview)) return true
+
+        val width = resources.displayMetrics.widthPixels.toFloat()
+        val height = resources.displayMetrics.heightPixels.toFloat()
+        if (width <= 0f || height <= 0f) return false
+        return tapScreenPoint(width * 0.50f, height * REEL_PREVIEW_ENTRY_Y_FRACTION)
     }
 
     private fun looksLikeFacebookHomeFeed(root: AccessibilityNodeInfo): Boolean {
@@ -1250,11 +1314,14 @@ class ShopeeAccessibilityService : AccessibilityService() {
     companion object {
         private const val POST_MENU_SEMANTIC_TAP_LIMIT = 3
         private const val REEL_SCREENSHOT_TAP_LIMIT = 4
+        private const val REEL_VIEWER_ENTRY_LIMIT = 2
         private const val REEL_OPTIONS_SCROLL_LIMIT = 5
         private const val AFFILIATE_PRODUCT_TAP_LIMIT = 3
         private const val EXACT_POST_FIRST_RETRY_MS = 1_200L
         private const val EXACT_POST_REOPEN_SETTLE_MS = 2_000L
-        private const val EXACT_POST_FAIL_TIMEOUT_MS = 20_000L
+        private const val EXACT_POST_FAIL_TIMEOUT_MS = 65_000L
+        private const val REEL_VIEWER_FIRST_ENTRY_MS = 1_000L
+        private const val REEL_VIEWER_ENTRY_SETTLE_MS = 1_600L
         private const val VERIFY_FORM_CLOSED_SUCCESS_MS = 5_000L
         private const val FACEBOOK_PACKAGE = "com.facebook.katana"
         private const val EVENT_SETTLE_MS = 600L
@@ -1262,16 +1329,18 @@ class ShopeeAccessibilityService : AccessibilityService() {
         private const val REEL_SCREENSHOT_SETTLE_MS = 1_800L
         private const val REEL_SCREENSHOT_RETRY_MS = 450L
         private const val POST_MENU_X_FRACTION = 0.936f
-        private const val REEL_MENU_PRIMARY_Y_FRACTION = 0.80f
+        private const val REEL_MENU_PRIMARY_Y_FRACTION = 0.83f
+        private const val REEL_PREVIEW_ENTRY_Y_FRACTION = 0.62f
         private const val REEL_ELLIPSIS_CROP_LEFT = 0.84f
         private const val REEL_ELLIPSIS_CROP_RIGHT = 0.995f
-        private const val REEL_ELLIPSIS_CROP_TOP = 0.65f
+        private const val REEL_ELLIPSIS_CROP_TOP = 0.70f
         private const val REEL_ELLIPSIS_CROP_BOTTOM = 0.91f
         private const val REEL_ELLIPSIS_MIN_X = 0.86f
-        private const val REEL_ELLIPSIS_MIN_Y = 0.69f
+        private const val REEL_ELLIPSIS_MIN_Y = 0.72f
         private const val REEL_ELLIPSIS_MAX_Y = 0.89f
         private const val REEL_ELLIPSIS_EXPECTED_X = 0.936f
-        private const val REEL_ELLIPSIS_EXPECTED_Y = 0.80f
+        private const val REEL_ELLIPSIS_EXPECTED_Y = 0.83f
+        private val REEL_MENU_FALLBACK_Y_FRACTIONS = floatArrayOf(0.83f, 0.86f)
         private val MENU_TAP_Y_FRACTIONS =
             floatArrayOf(0.16f, 0.20f, 0.24f, 0.28f, 0.32f, 0.36f, 0.40f)
         private val HOME_FEED_BOTTOM_NAV_HINTS = listOf(
@@ -1327,6 +1396,16 @@ class ShopeeAccessibilityService : AccessibilityService() {
             "save reel",
             "remix thước phim",
             "remix this reel",
+        )
+        private val VIDEO_PREVIEW_LABEL_HINTS = listOf(
+            "Phát video",
+            "Phát thước phim",
+            "Xem video",
+            "Xem thước phim",
+            "Play video",
+            "Play reel",
+            "Watch video",
+            "Watch reel",
         )
         private val VIDEO_URL_HINTS = listOf(
             "/reel/",

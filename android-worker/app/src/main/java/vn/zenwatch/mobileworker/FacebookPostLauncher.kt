@@ -18,20 +18,19 @@ object FacebookPostLauncher {
         val targets = targetUris(job)
         if (targetIndex !in targets.indices) return false
 
-        for (uri in targets.drop(targetIndex)) {
-            val intent = Intent(Intent.ACTION_VIEW, uri)
-                .setPackage(FACEBOOK_PACKAGE)
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-            try {
-                if (intent.resolveActivity(context.packageManager) != null) {
-                    context.startActivity(intent)
-                    return true
-                }
-            } catch (_: Exception) {
-                // Try the next exact permalink representation.
+        val intent = Intent(Intent.ACTION_VIEW, targets[targetIndex])
+            .setPackage(FACEBOOK_PACKAGE)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+        return try {
+            if (intent.resolveActivity(context.packageManager) != null) {
+                context.startActivity(intent)
+                true
+            } else {
+                false
             }
+        } catch (_: Exception) {
+            false
         }
-        return false
     }
 
     fun targetCount(job: MobileLinkJob): Int = targetUris(job).size
@@ -48,10 +47,10 @@ object FacebookPostLauncher {
                 val canonicalReel = buildReelPermalink(storyId)
                 val pageVideo = buildPageVideoPermalink(pageId, storyId)
                 return listOfNotNull(
-                    canonicalReel,
-                    faceWebModal(canonicalReel),
                     graphPermalink,
                     graphPermalink?.let(::faceWebModal),
+                    canonicalReel,
+                    faceWebModal(canonicalReel),
                     pageVideo,
                     faceWebModal(pageVideo),
                 ).distinctBy(Uri::toString)
@@ -75,10 +74,10 @@ object FacebookPostLauncher {
         val canonicalReel = buildReelPermalink(job.postId.trim())
         return if (reelJob) {
             listOfNotNull(
-                canonicalReel,
-                faceWebModal(canonicalReel),
                 graphPermalink,
                 graphPermalink?.let(::faceWebModal),
+                canonicalReel,
+                faceWebModal(canonicalReel),
             ).distinctBy(Uri::toString)
         } else {
             listOfNotNull(
@@ -90,7 +89,7 @@ object FacebookPostLauncher {
         }
     }
 
-    private fun isReelJob(job: MobileLinkJob): Boolean =
+    fun isReelJob(job: MobileLinkJob): Boolean =
         REEL_URL_HINTS.any { hint -> job.postUrl.contains(hint, ignoreCase = true) }
 
     private fun compositeParts(postId: String): Pair<String, String>? {
