@@ -2,19 +2,13 @@ package vn.zenwatch.mobileworker
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
-import android.graphics.Bitmap
 import android.graphics.Path
-import android.graphics.PointF
 import android.graphics.Rect
-import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.view.Display
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
-import kotlin.math.abs
-import kotlin.math.max
 
 class ShopeeAccessibilityService : AccessibilityService() {
     private val handler = Handler(Looper.getMainLooper())
@@ -23,14 +17,12 @@ class ShopeeAccessibilityService : AccessibilityService() {
     private val menuFallbackTapAttempts = mutableMapOf<String, Int>()
     private val menuTapDispatched = mutableSetOf<String>()
     private val linkManagerTapAttempts = mutableMapOf<String, Int>()
-    private val reelScreenshotAttempts = mutableMapOf<String, Int>()
-    private val reelScreenshotInFlight = mutableSetOf<String>()
-    private val reelOptionsScrollAttempts = mutableMapOf<String, Int>()
     private val affiliateProductTapAttempts = mutableMapOf<String, Int>()
     private val saveFallbackAttempts = mutableSetOf<String>()
     private val exactPostReopenTargets = mutableMapOf<String, Int>()
     private val exactPostLastLaunchAt = mutableMapOf<String, Long>()
-    private val reelViewerEntryAttempts = mutableMapOf<String, Int>()
+    private val reelProfileAnchorY = mutableMapOf<String, Float>()
+    private val reelProfileAllTabAttempts = mutableMapOf<String, Int>()
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event?.packageName?.toString() != FACEBOOK_PACKAGE) return
@@ -82,13 +74,13 @@ class ShopeeAccessibilityService : AccessibilityService() {
         }
     }
 
-    /**
-     * Safety gate for every job. No menu or form interaction may run until the
-     * exact Facebook object opened by [FacebookPostLauncher] is visible as a
-     * dedicated post/Reel screen. In particular, an old product-link form is
-     * treated as stale UI and can never be reused by a new SKU.
-     */
+    /** Safety gate before any post menu or product form is touched. */
     private fun openExactPost(root: AccessibilityNodeInfo, active: ActiveJob) {
+        if (isVideoJob(active)) {
+            openLatestReelOnProfile(root, active)
+            return
+        }
+
         val fallbackKey = "${active.job.id}:${active.job.attempt}"
         val staleProductUi = hasProductLinkSurface(root) || isReelOptionsMenuVisible(root)
         val homeFeed = looksLikeFacebookHomeFeed(root)
@@ -97,37 +89,13 @@ class ShopeeAccessibilityService : AccessibilityService() {
         if (!staleProductUi && !homeFeed && looksLikeExactPostDetail(root, active)) {
             exactPostReopenTargets.remove(fallbackKey)
             exactPostLastLaunchAt.remove(fallbackKey)
-            reelViewerEntryAttempts.remove(fallbackKey)
             menuSemanticTapAttempts.remove(fallbackKey)
             menuFallbackTapAttempts.remove(fallbackKey)
             menuTapDispatched.remove(fallbackKey)
             linkManagerTapAttempts.remove(fallbackKey)
-            reelScreenshotAttempts.remove(fallbackKey)
-            reelOptionsScrollAttempts.remove(fallbackKey)
             JobStore.setStep(this, AutomationStep.OPEN_MENU)
             scheduleNext(350)
             return
-        }
-
-        // A Facebook Reel permalink can initially render as a normal post-detail
-        // card. That layout has a different three-dot menu and must never be used
-        // for a Reel job. Enter the actual full-screen viewer first; only that
-        // viewer exposes the lower caption ellipsis and "Quản lý sản phẩm" flow.
-        if (
-            isVideoJob(active)
-            && !staleProductUi
-            && !homeFeed
-            && looksLikeRegularPostDetail(root)
-            && elapsedInStep(active) >= REEL_VIEWER_FIRST_ENTRY_MS
-        ) {
-            val viewerAttempts = reelViewerEntryAttempts[fallbackKey] ?: 0
-            if (viewerAttempts < REEL_VIEWER_ENTRY_LIMIT) {
-                reelViewerEntryAttempts[fallbackKey] = viewerAttempts + 1
-                if (tapVideoPreviewToEnterReel(root)) {
-                    scheduleNext(REEL_VIEWER_ENTRY_SETTLE_MS)
-                    return
-                }
-            }
         }
 
         if (elapsedInStep(active) < EXACT_POST_FIRST_RETRY_MS) {
@@ -164,6 +132,85 @@ class ShopeeAccessibilityService : AccessibilityService() {
         )
     }
 
+    /**
+     * Reel-only navigation: stay on the Page profile, locate the newly published
+     * card in the All tab, then hand its header position to OPEN_MENU. The caption
+     * from the backend is used when Facebook exposes it; otherwise the topmost
+     * visible post is the bounded fallback because publishing and enqueueing are
+     * part of the same routine.
+     */
+    private fun openLatestReelOnProfile(root: AccessibilityNodeInfo, active: ActiveJob) {
+        val fallbackKey = "${active.job.id}:${active.job.attempt}"
+        val staleProductUi = hasProductLinkSurface(root) || isReelOptionsMenuVisible(root)
+        val anchorY = if (!staleProductUi && looksLikeProfileTimeline(root)) {
+            findProfilePostAnchorY(root, active.job.postText)
+        } else {
+            null
+        }
+
+        if (anchorY != null) {
+            reelProfileAnchorY[fallbackKey] = anchorY
+            reelProfileAllTabAttempts.remove(fallbackKey)
+            exactPostReopenTargets.remove(fallbackKey)
+            exactPostLastLaunchAt.remove(fallbackKey)
+            menuSemanticTapAttempts.remove(fallbackKey)
+            menuFallbackTapAttempts.remove(fallbackKey)
+            menuTapDispatched.remove(fallbackKey)
+            linkManagerTapAttempts.remove(fallbackKey)
+            JobStore.setStep(this, AutomationStep.OPEN_MENU)
+            scheduleNext(350)
+            return
+        }
+
+        if (!staleProductUi && looksLikeProfileTimeline(root)) {
+            val allTabAttempts = reelProfileAllTabAttempts[fallbackKey] ?: 0
+            val allTab = findProfileTab(root, PROFILE_ALL_TAB_LABELS)
+            if (allTab != null && allTabAttempts < PROFILE_ALL_TAB_TAP_LIMIT) {
+                reelProfileAllTabAttempts[fallbackKey] = allTabAttempts + 1
+                val gestureDispatched = tapNodeByGesture(allTab)
+                val clicked = if (!gestureDispatched) click(allTab) else false
+                if (gestureDispatched || clicked) {
+                    scheduleNext(1_200)
+                    return
+                }
+            }
+        }
+
+        if (elapsedInStep(active) < PROFILE_FIRST_RETRY_MS) {
+            scheduleNext(500)
+            return
+        }
+
+        val sinceLastLaunch = System.currentTimeMillis() -
+            (exactPostLastLaunchAt[fallbackKey] ?: 0L)
+        if (sinceLastLaunch < PROFILE_REOPEN_SETTLE_MS) {
+            scheduleNext(PROFILE_REOPEN_SETTLE_MS - sinceLastLaunch)
+            return
+        }
+
+        val currentTarget = exactPostReopenTargets[fallbackKey] ?: 0
+        val nextTarget = currentTarget + 1
+        if (nextTarget < FacebookPostLauncher.targetCount(active.job)) {
+            exactPostReopenTargets[fallbackKey] = nextTarget
+            if (FacebookPostLauncher.launch(this, active.job, nextTarget)) {
+                exactPostLastLaunchAt[fallbackKey] = System.currentTimeMillis()
+                scheduleNext(PROFILE_REOPEN_SETTLE_MS)
+                return
+            }
+        }
+
+        val reason = when {
+            staleProductUi -> "Facebook vẫn hiển thị menu/form của bài cũ"
+            !looksLikeProfileTimeline(root) -> "Facebook chưa mở đúng profile/Page ở tab Tất cả"
+            else -> "Không tìm thấy thẻ bài Reels mới đăng trên profile"
+        }
+        failStepAfter(
+            active,
+            PROFILE_POST_FAIL_TIMEOUT_MS,
+            "$reason; Worker đã dừng để tránh gắn nhầm link",
+        )
+    }
+
     private fun openPostMenu(root: AccessibilityNodeInfo, active: ActiveJob) {
         // OPEN_MENU is reachable only after OPEN_POST has verified the detail
         // screen. If Facebook jumps elsewhere, fail closed instead of reusing a
@@ -178,7 +225,7 @@ class ShopeeAccessibilityService : AccessibilityService() {
 
         // Home must be rejected before examining any menu labels: a bottom sheet
         // left by an older post can temporarily be exposed on top of News Feed.
-        if (looksLikeFacebookHomeFeed(root)) {
+        if (looksLikeFacebookHomeFeed(root) && !looksLikeProfileTimeline(root)) {
             JobStore.restartNavigation(this)
             FacebookPostLauncher.launch(this, active.job)
             scheduleNext(EXACT_POST_REOPEN_SETTLE_MS)
@@ -211,39 +258,8 @@ class ShopeeAccessibilityService : AccessibilityService() {
             return
         }
 
-        // Never attach a link to whichever post happens to be first in News Feed.
-        // If Facebook interpreted an exact permalink as Home, retry the next
-        // exact target. After all targets are exhausted, fail safely instead of
-        // touching a potentially unrelated post.
-        // Full-screen Reels opens a tall bottom sheet. The product-management row
-        // is below the first viewport, so scroll the already-open sheet instead of
-        // tapping another three-dot button behind it.
-        val priorReelScrollAttempts = reelOptionsScrollAttempts[fallbackKey] ?: 0
-        if (isReelOptionsMenuVisible(root) || priorReelScrollAttempts > 0) {
-            val scrollAttempts = priorReelScrollAttempts
-            if (scrollAttempts < REEL_OPTIONS_SCROLL_LIMIT) {
-                reelOptionsScrollAttempts[fallbackKey] = scrollAttempts + 1
-                if (swipeReelOptionsUp()) {
-                    scheduleNext(1_200)
-                    return
-                }
-            }
-            failStepAfter(
-                active,
-                45_000,
-                "Đã mở tùy chọn Reels nhưng không tìm thấy mục Quản lý sản phẩm sau khi cuộn",
-            )
-            return
-        }
-
-        val fullscreenReel = looksLikeFullscreenReel(root)
-        if (isVideoJob(active) && !fullscreenReel) {
-            // Fail closed: never fall through to the normal post-header menu for a
-            // Reel job. Re-open the canonical Reel and wait for the full-screen
-            // viewer instead of touching whichever post Facebook currently shows.
-            JobStore.restartNavigation(this)
-            FacebookPostLauncher.launch(this, active.job)
-            scheduleNext(EXACT_POST_REOPEN_SETTLE_MS)
+        if (isVideoJob(active)) {
+            openReelProfilePostMenu(root, active, fallbackKey)
             return
         }
 
@@ -252,16 +268,8 @@ class ShopeeAccessibilityService : AccessibilityService() {
         val anchorYFraction = findPostHeaderAnchorYFraction(root)
         val tapTargets = postMenuTapTargets(anchorYFraction)
 
-        val button = findFullscreenReelMenuButton(root) ?: if (!fullscreenReel) {
-            findBestNode(root, POST_MENU_BUTTON_KEYWORDS)
-        } else {
-            // In Reels there is also a page-level three-dot button at the top.
-            // If the lower post button is absent from the accessibility tree, use
-            // the measured lower-right coordinate rather than clicking the top one.
-            null
-        }
-        val semanticTapLimit = if (fullscreenReel) 1 else POST_MENU_SEMANTIC_TAP_LIMIT
-        if (button != null && semanticTapAttempts < semanticTapLimit) {
+        val button = findBestNode(root, POST_MENU_BUTTON_KEYWORDS)
+        if (button != null && semanticTapAttempts < POST_MENU_SEMANTIC_TAP_LIMIT) {
             // Facebook can report ACTION_CLICK as accepted without actually opening
             // the menu. Dispatch a real accessibility gesture at the detected node
             // first, and retry it before using screen-coordinate fallbacks.
@@ -275,44 +283,12 @@ class ShopeeAccessibilityService : AccessibilityService() {
             return
         }
 
-        // Facebook often omits the lower Reel ellipsis from Accessibility. Detect
-        // its three bright dots in the lower caption area. This runs only after the
-        // full-screen Reel safety gate above, so the top page menu and News Feed can
-        // never be selected for a video job.
-        if (fullscreenReel && elapsedInStep(active) >= 900) {
-            val screenshotAttempts = reelScreenshotAttempts[fallbackKey] ?: 0
-            if (
-                Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
-                && screenshotAttempts < REEL_SCREENSHOT_TAP_LIMIT
-            ) {
-                if (reelScreenshotInFlight.add(fallbackKey)) {
-                    reelScreenshotAttempts[fallbackKey] = screenshotAttempts + 1
-                    captureAndTapReelMenu(fallbackKey)
-                }
-                scheduleNext(REEL_SCREENSHOT_SETTLE_MS)
-                return
-            }
-
-            // Last, bounded fallback for Facebook builds whose screenshot masks the
-            // controls. Do not sweep the screen: one measured lower-caption point
-            // is safer than coordinates near the bookmark or video surface.
-            if (fallbackTapAttempts < REEL_MENU_FALLBACK_Y_FRACTIONS.size) {
-                menuFallbackTapAttempts[fallbackKey] = fallbackTapAttempts + 1
-                if (tapPostMenuByGesture(REEL_MENU_FALLBACK_Y_FRACTIONS[fallbackTapAttempts])) {
-                    menuTapDispatched.add(fallbackKey)
-                    scheduleNext(1_200)
-                    return
-                }
-            }
-        }
-
         if (
-            !fullscreenReel
-            && elapsedInStep(active) >= 1_500
+            elapsedInStep(active) >= 1_500
             && fallbackTapAttempts < tapTargets.size
         ) {
-            val geometryButton = if (fallbackTapAttempts == 0 && !fullscreenReel) {
-                findPostMenuByGeometry(root, anchorYFraction, fullscreenReel)
+            val geometryButton = if (fallbackTapAttempts == 0) {
+                findPostMenuByGeometry(root, anchorYFraction)
             } else {
                 null
             }
@@ -339,6 +315,59 @@ class ShopeeAccessibilityService : AccessibilityService() {
             active,
             35_000,
             "Không tìm thấy nút ba chấm của bài viết. ${postMenuDiagnostics(root)}",
+        )
+    }
+
+    private fun openReelProfilePostMenu(
+        root: AccessibilityNodeInfo,
+        active: ActiveJob,
+        fallbackKey: String,
+    ) {
+        if (!looksLikeProfileTimeline(root)) {
+            JobStore.restartNavigation(this)
+            FacebookPostLauncher.launch(this, active.job)
+            scheduleNext(PROFILE_REOPEN_SETTLE_MS)
+            return
+        }
+
+        val anchorY = findProfilePostAnchorY(root, active.job.postText)
+            ?: reelProfileAnchorY[fallbackKey]
+        if (anchorY == null) {
+            JobStore.restartNavigation(this)
+            FacebookPostLauncher.launch(this, active.job)
+            scheduleNext(PROFILE_REOPEN_SETTLE_MS)
+            return
+        }
+        reelProfileAnchorY[fallbackKey] = anchorY
+
+        val semanticAttempts = menuSemanticTapAttempts[fallbackKey] ?: 0
+        val fallbackAttempts = menuFallbackTapAttempts[fallbackKey] ?: 0
+        val button = findProfilePostMenuButton(root, anchorY)
+        if (button != null && semanticAttempts < PROFILE_MENU_SEMANTIC_TAP_LIMIT) {
+            val gestureDispatched = tapNodeByGesture(button)
+            val clicked = if (!gestureDispatched) click(button) else false
+            menuSemanticTapAttempts[fallbackKey] = semanticAttempts + 1
+            if (gestureDispatched || clicked) menuTapDispatched.add(fallbackKey)
+            scheduleNext(if (gestureDispatched || clicked) 1_000 else 450)
+            return
+        }
+
+        if (
+            elapsedInStep(active) >= 1_200
+            && fallbackAttempts < PROFILE_MENU_FALLBACK_LIMIT
+        ) {
+            menuFallbackTapAttempts[fallbackKey] = fallbackAttempts + 1
+            if (tapPostMenuByGesture(anchorY)) {
+                menuTapDispatched.add(fallbackKey)
+                scheduleNext(1_200)
+                return
+            }
+        }
+
+        failStepAfter(
+            active,
+            PROFILE_MENU_FAIL_TIMEOUT_MS,
+            "Không tìm thấy dấu ba chấm của bài Reels mới nhất trên profile. ${postMenuDiagnostics(root)}",
         )
     }
 
@@ -678,10 +707,190 @@ class ShopeeAccessibilityService : AccessibilityService() {
             .minOrNull()
     }
 
-    private fun isVideoJob(active: ActiveJob): Boolean {
-        val url = active.job.postUrl.lowercase()
-        return VIDEO_URL_HINTS.any { url.contains(it) }
+    private data class ProfilePostAnchor(
+        val yFraction: Float,
+        val nearbyText: String,
+    )
+
+    private fun looksLikeProfileTimeline(root: AccessibilityNodeInfo): Boolean {
+        val nodes = mutableListOf<AccessibilityNodeInfo>()
+        collectNodes(root, nodes)
+        val height = resources.displayMetrics.heightPixels
+        if (height <= 0) return false
+
+        fun hasTab(labels: List<String>): Boolean = nodes.any { node ->
+            if (!node.isVisibleToUser) return@any false
+            val bounds = Rect()
+            node.getBoundsInScreen(bounds)
+            val normalized = nodeLabel(node).trim()
+            !bounds.isEmpty
+                && bounds.centerY() < height * 0.58f
+                && labels.any { label ->
+                    normalized.equals(label, ignoreCase = true)
+                        || normalized.startsWith("$label ", ignoreCase = true)
+                        || normalized.startsWith("$label,", ignoreCase = true)
+                }
+        }
+
+        return hasTab(PROFILE_ALL_TAB_LABELS)
+            && hasTab(PROFILE_PHOTOS_TAB_LABELS)
+            && hasTab(PROFILE_REELS_TAB_LABELS)
     }
+
+    private fun findProfileTab(
+        root: AccessibilityNodeInfo,
+        labels: List<String>,
+    ): AccessibilityNodeInfo? {
+        val nodes = mutableListOf<AccessibilityNodeInfo>()
+        collectNodes(root, nodes)
+        val height = resources.displayMetrics.heightPixels
+        if (height <= 0) return null
+        return nodes.firstOrNull { node ->
+            if (!node.isVisibleToUser) return@firstOrNull false
+            val bounds = Rect()
+            node.getBoundsInScreen(bounds)
+            val normalized = nodeLabel(node).trim()
+            !bounds.isEmpty
+                && bounds.centerY() < height * 0.58f
+                && labels.any { label ->
+                    normalized.equals(label, ignoreCase = true)
+                        || normalized.startsWith("$label ", ignoreCase = true)
+                        || normalized.startsWith("$label,", ignoreCase = true)
+                }
+        }
+    }
+
+    private fun findProfilePostAnchorY(
+        root: AccessibilityNodeInfo,
+        postText: String,
+    ): Float? {
+        val nodes = mutableListOf<AccessibilityNodeInfo>()
+        collectNodes(root, nodes)
+        val width = resources.displayMetrics.widthPixels
+        val height = resources.displayMetrics.heightPixels
+        if (width <= 0 || height <= 0) return null
+
+        val anchors = nodes
+            .asSequence()
+            .filter { it.isVisibleToUser }
+            .mapNotNull { node ->
+                val label = listOfNotNull(
+                    node.text?.toString(),
+                    node.contentDescription?.toString(),
+                ).joinToString(" ").trim()
+                if (label.isBlank() || label.length > 140 || !POST_AGE_PATTERN.containsMatchIn(label)) {
+                    return@mapNotNull null
+                }
+
+                val bounds = Rect()
+                node.getBoundsInScreen(bounds)
+                if (
+                    bounds.isEmpty
+                    || bounds.centerX() > width * 0.78f
+                    || bounds.centerY() < height * 0.12f
+                    || bounds.centerY() > height * 0.72f
+                ) {
+                    return@mapNotNull null
+                }
+
+                val localTop = bounds.centerY() - height * 0.10f
+                val localBottom = bounds.centerY() + height * 0.25f
+                val nearbyText = nodes
+                    .asSequence()
+                    .filter { it.isVisibleToUser }
+                    .mapNotNull { nearby ->
+                        val nearbyBounds = Rect()
+                        nearby.getBoundsInScreen(nearbyBounds)
+                        val nearbyLabel = nodeLabel(nearby).trim()
+                        if (
+                            nearbyBounds.isEmpty
+                            || nearbyBounds.centerY().toFloat() !in localTop..localBottom
+                            || nearbyBounds.centerX() > width * 0.96f
+                            || nearbyLabel.isBlank()
+                            || nearbyLabel.length > 500
+                        ) {
+                            null
+                        } else {
+                            nearbyLabel
+                        }
+                    }
+                    .distinct()
+                    .take(24)
+                    .joinToString(" ")
+
+                ProfilePostAnchor(
+                    yFraction = bounds.centerY().toFloat() / height,
+                    nearbyText = nearbyText,
+                )
+            }
+            .distinctBy { (it.yFraction * 100).toInt() }
+            .sortedBy(ProfilePostAnchor::yFraction)
+            .toList()
+        if (anchors.isEmpty()) return null
+
+        val captionMatch = anchors
+            .map { anchor ->
+                anchor to ReelProfilePolicy.captionMatchScore(postText, anchor.nearbyText)
+            }
+            .maxByOrNull { it.second }
+            ?.takeIf { (anchor, score) ->
+                score > 0 && ReelProfilePolicy.hasStrongCaptionMatch(postText, anchor.nearbyText)
+            }
+            ?.first
+        return (captionMatch ?: anchors.first()).yFraction
+    }
+
+    private fun findProfilePostMenuButton(
+        root: AccessibilityNodeInfo,
+        anchorYFraction: Float,
+    ): AccessibilityNodeInfo? {
+        val nodes = mutableListOf<AccessibilityNodeInfo>()
+        collectNodes(root, nodes)
+        val width = resources.displayMetrics.widthPixels
+        val height = resources.displayMetrics.heightPixels
+        if (width <= 0 || height <= 0) return null
+
+        val targetX = width * POST_MENU_X_FRACTION
+        val targetY = height * anchorYFraction
+        val yTolerance = maxOf(48f, height * 0.075f)
+        return nodes
+            .asSequence()
+            .filter { it.isVisibleToUser }
+            .mapNotNull { node ->
+                val bounds = Rect()
+                node.getBoundsInScreen(bounds)
+                val label = nodeLabel(node).trim().lowercase()
+                val semanticMatch = POST_MENU_LABEL_HINTS.any { hint -> label.contains(hint) }
+                    || label == "menu"
+                val looksInteractive = node.isClickable
+                    || node.parent?.isClickable == true
+                    || node.className?.toString()?.contains("Button", ignoreCase = true) == true
+                    || node.className?.toString()?.contains("ImageView", ignoreCase = true) == true
+                val excluded = POST_MENU_EXCLUDED_LABELS.any { hint -> label.contains(hint) }
+                if (
+                    bounds.isEmpty
+                    || bounds.centerX() < width * 0.75f
+                    || kotlin.math.abs(bounds.centerY() - targetY) > yTolerance
+                    || bounds.width() > width * 0.24f
+                    || bounds.height() > height * 0.12f
+                    || !looksInteractive
+                    || excluded
+                    || (!semanticMatch && (label.isNotBlank() || bounds.centerX() < width * 0.86f))
+                ) {
+                    null
+                } else {
+                    val score = kotlin.math.abs(bounds.centerX() - targetX)
+                        + kotlin.math.abs(bounds.centerY() - targetY) * 2f
+                        + if (semanticMatch) -220f else 0f
+                    node to score
+                }
+            }
+            .minByOrNull { it.second }
+            ?.first
+    }
+
+    private fun isVideoJob(active: ActiveJob): Boolean =
+        FacebookPostLauncher.isReelJob(active.job)
 
     private fun hasProductLinkForm(root: AccessibilityNodeInfo): Boolean {
         val inputs = findEditableNodes(root)
@@ -718,23 +927,16 @@ class ShopeeAccessibilityService : AccessibilityService() {
         ) != null
     }
 
-    /**
-     * Verifies a dedicated detail screen, not merely a visible story in Home.
-     * The exact URI launch is the identity proof; this UI check prevents a failed
-     * deep link from silently degrading to News Feed or a stale product form.
-     */
+    /** Verifies a dedicated detail screen for non-Reel posts. */
     private fun looksLikeExactPostDetail(
         root: AccessibilityNodeInfo,
         active: ActiveJob,
     ): Boolean {
-        // Reel jobs must reach the real full-screen viewer. A regular post-detail
-        // card is only an intermediate screen and has an incompatible product menu.
-        if (isVideoJob(active)) return looksLikeFullscreenReel(root)
-
         return looksLikeRegularPostDetail(root)
     }
 
     private fun looksLikeRegularPostDetail(root: AccessibilityNodeInfo): Boolean {
+
         val hasPostAge = findPostHeaderAnchorYFraction(root) != null
         if (!hasPostAge) return false
 
@@ -749,21 +951,6 @@ class ShopeeAccessibilityService : AccessibilityService() {
             visibleOnly = true,
         ) != null
         return hasCommentComposer || hasPostMenu
-    }
-
-    private fun tapVideoPreviewToEnterReel(root: AccessibilityNodeInfo): Boolean {
-        val semanticPreview = findBestNode(
-            root,
-            VIDEO_PREVIEW_LABEL_HINTS,
-            visibleOnly = true,
-        )
-        if (semanticPreview != null && tapNodeByGesture(semanticPreview)) return true
-        if (semanticPreview != null && click(semanticPreview)) return true
-
-        val width = resources.displayMetrics.widthPixels.toFloat()
-        val height = resources.displayMetrics.heightPixels.toFloat()
-        if (width <= 0f || height <= 0f) return false
-        return tapScreenPoint(width * 0.50f, height * REEL_PREVIEW_ENTRY_Y_FRACTION)
     }
 
     private fun looksLikeFacebookHomeFeed(root: AccessibilityNodeInfo): Boolean {
@@ -819,7 +1006,6 @@ class ShopeeAccessibilityService : AccessibilityService() {
     private fun findPostMenuByGeometry(
         root: AccessibilityNodeInfo,
         anchorYFraction: Float?,
-        fullscreenReel: Boolean,
     ): AccessibilityNodeInfo? {
         val nodes = mutableListOf<AccessibilityNodeInfo>()
         collectNodes(root, nodes)
@@ -827,10 +1013,7 @@ class ShopeeAccessibilityService : AccessibilityService() {
         val width = resources.displayMetrics.widthPixels
         val height = resources.displayMetrics.heightPixels
         val targetX = width * 0.93f
-        val targetY = height * when {
-            fullscreenReel -> REEL_MENU_PRIMARY_Y_FRACTION
-            else -> anchorYFraction ?: 0.22f
-        }
+        val targetY = height * (anchorYFraction ?: 0.22f)
 
         return nodes
             .asSequence()
@@ -842,9 +1025,7 @@ class ShopeeAccessibilityService : AccessibilityService() {
                     bounds.isEmpty
                     || bounds.centerX() < width * 0.75f
                     || bounds.top < height * 0.08f
-                    || (!fullscreenReel && bounds.bottom > height * 0.52f)
-                    || (fullscreenReel && bounds.centerY() < height * 0.62f)
-                    || bounds.bottom > height * 0.92f
+                    || bounds.bottom > height * 0.52f
                     || bounds.width() > width * 0.26f
                     || bounds.height() > height * 0.14f
                 ) {
@@ -879,68 +1060,6 @@ class ShopeeAccessibilityService : AccessibilityService() {
             }
             .minByOrNull { it.second }
             ?.first
-    }
-
-    private fun findFullscreenReelMenuButton(
-        root: AccessibilityNodeInfo,
-    ): AccessibilityNodeInfo? {
-        val nodes = mutableListOf<AccessibilityNodeInfo>()
-        collectNodes(root, nodes)
-
-        val width = resources.displayMetrics.widthPixels
-        val height = resources.displayMetrics.heightPixels
-        if (width <= 0 || height <= 0) return null
-
-        return nodes
-            .asSequence()
-            .filter { it.isVisibleToUser }
-            .mapNotNull { node ->
-                val bounds = Rect()
-                node.getBoundsInScreen(bounds)
-                val label = nodeLabel(node).lowercase()
-                val semanticMatch = REEL_MENU_LABEL_HINTS.any { label.contains(it) }
-                if (
-                    bounds.isEmpty
-                    || bounds.centerX() < width * 0.86f
-                    || bounds.centerY() < height * 0.62f
-                    || bounds.centerY() > height * 0.92f
-                    || bounds.width() > width * 0.20f
-                    || bounds.height() > height * 0.10f
-                    || !semanticMatch
-                ) {
-                    null
-                } else {
-                    node
-                }
-            }
-            .maxByOrNull { node ->
-                val bounds = Rect()
-                node.getBoundsInScreen(bounds)
-                bounds.centerY()
-            }
-    }
-
-    private fun looksLikeFullscreenReel(root: AccessibilityNodeInfo): Boolean {
-        val nodes = mutableListOf<AccessibilityNodeInfo>()
-        collectNodes(root, nodes)
-
-        val height = resources.displayMetrics.heightPixels
-        if (height <= 0) return false
-
-        return nodes.any { node ->
-            if (!node.isVisibleToUser) return@any false
-            val label = nodeLabel(node).lowercase()
-            if (REEL_SCREEN_LABEL_HINTS.any { label.contains(it) }) {
-                return@any true
-            }
-
-            val bounds = Rect()
-            node.getBoundsInScreen(bounds)
-            bounds.centerY() > height * 0.62f && (
-                label.contains("xem thêm")
-                    || label.contains("see more")
-            )
-        }
     }
 
     private fun isReelOptionsMenuVisible(root: AccessibilityNodeInfo): Boolean {
@@ -1004,202 +1123,6 @@ class ShopeeAccessibilityService : AccessibilityService() {
         return dispatchGesture(gesture, null, null)
     }
 
-    private fun captureAndTapReelMenu(fallbackKey: String) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
-            reelScreenshotInFlight.remove(fallbackKey)
-            return
-        }
-
-        takeScreenshot(
-            Display.DEFAULT_DISPLAY,
-            mainExecutor,
-            object : TakeScreenshotCallback {
-                override fun onSuccess(screenshot: ScreenshotResult) {
-                    reelScreenshotInFlight.remove(fallbackKey)
-                    val hardwareBuffer = screenshot.hardwareBuffer
-                    val bitmap = try {
-                        Bitmap.wrapHardwareBuffer(hardwareBuffer, screenshot.colorSpace)
-                            ?.copy(Bitmap.Config.ARGB_8888, false)
-                    } finally {
-                        hardwareBuffer.close()
-                    }
-
-                    if (bitmap == null) {
-                        scheduleNext(REEL_SCREENSHOT_RETRY_MS)
-                        return
-                    }
-
-                    val target = try {
-                        findReelEllipsisCenter(bitmap)
-                    } finally {
-                        bitmap.recycle()
-                    }
-
-                    if (target != null && tapScreenPoint(target.x, target.y)) {
-                        menuTapDispatched.add(fallbackKey)
-                        scheduleNext(1_200)
-                    } else {
-                        scheduleNext(REEL_SCREENSHOT_RETRY_MS)
-                    }
-                }
-
-                override fun onFailure(errorCode: Int) {
-                    reelScreenshotInFlight.remove(fallbackKey)
-                    scheduleNext(REEL_SCREENSHOT_RETRY_MS)
-                }
-            },
-        )
-    }
-
-    private data class BrightBlob(
-        val centerX: Float,
-        val centerY: Float,
-        val width: Int,
-        val height: Int,
-        val area: Int,
-    )
-
-    /**
-     * Finds the three separate bright circles used by Facebook's lower Reel menu.
-     * The crop excludes the top page menu and the vertical reaction controls. A
-     * bookmark outline is one large component, so it cannot satisfy the triple-dot
-     * shape and will never be selected as the target.
-     */
-    private fun findReelEllipsisCenter(bitmap: Bitmap): PointF? {
-        val screenWidth = bitmap.width
-        val screenHeight = bitmap.height
-        if (screenWidth <= 0 || screenHeight <= 0) return null
-
-        val cropLeft = (screenWidth * REEL_ELLIPSIS_CROP_LEFT).toInt()
-        val cropTop = (screenHeight * REEL_ELLIPSIS_CROP_TOP).toInt()
-        val cropRight = (screenWidth * REEL_ELLIPSIS_CROP_RIGHT).toInt()
-        val cropBottom = (screenHeight * REEL_ELLIPSIS_CROP_BOTTOM).toInt()
-        val cropWidth = cropRight - cropLeft
-        val cropHeight = cropBottom - cropTop
-        if (cropWidth <= 0 || cropHeight <= 0) return null
-
-        val pixels = IntArray(cropWidth * cropHeight)
-        bitmap.getPixels(pixels, 0, cropWidth, cropLeft, cropTop, cropWidth, cropHeight)
-        val visited = BooleanArray(pixels.size)
-        val queue = IntArray(pixels.size)
-        val blobs = mutableListOf<BrightBlob>()
-        val minDotArea = max(4, screenWidth / 180)
-        val maxDotArea = max(180, screenWidth * screenHeight / 2_500)
-        val maxDotDiameter = max(16, screenWidth / 28)
-
-        fun isBright(index: Int): Boolean {
-            val color = pixels[index]
-            val alpha = color ushr 24 and 0xff
-            val red = color ushr 16 and 0xff
-            val green = color ushr 8 and 0xff
-            val blue = color and 0xff
-            return alpha >= 200 && red >= 205 && green >= 205 && blue >= 205
-        }
-
-        pixels.indices.forEach { start ->
-            if (visited[start] || !isBright(start)) return@forEach
-            visited[start] = true
-            var queueHead = 0
-            var queueTail = 0
-            queue[queueTail++] = start
-            var area = 0
-            var minX = cropWidth
-            var maxX = 0
-            var minY = cropHeight
-            var maxY = 0
-            var sumX = 0L
-            var sumY = 0L
-
-            while (queueHead < queueTail) {
-                val current = queue[queueHead++]
-                val x = current % cropWidth
-                val y = current / cropWidth
-                area += 1
-                sumX += x
-                sumY += y
-                minX = minOf(minX, x)
-                maxX = maxOf(maxX, x)
-                minY = minOf(minY, y)
-                maxY = maxOf(maxY, y)
-
-                for (dy in -1..1) {
-                    for (dx in -1..1) {
-                        if (dx == 0 && dy == 0) continue
-                        val nextX = x + dx
-                        val nextY = y + dy
-                        if (nextX !in 0 until cropWidth || nextY !in 0 until cropHeight) continue
-                        val next = nextY * cropWidth + nextX
-                        if (!visited[next] && isBright(next)) {
-                            visited[next] = true
-                            queue[queueTail++] = next
-                        }
-                    }
-                }
-            }
-
-            val blobWidth = maxX - minX + 1
-            val blobHeight = maxY - minY + 1
-            if (
-                area in minDotArea..maxDotArea
-                && blobWidth <= maxDotDiameter
-                && blobHeight <= maxDotDiameter
-            ) {
-                blobs += BrightBlob(
-                    centerX = cropLeft + sumX.toFloat() / area,
-                    centerY = cropTop + sumY.toFloat() / area,
-                    width = blobWidth,
-                    height = blobHeight,
-                    area = area,
-                )
-            }
-        }
-
-        val candidates = blobs
-            .filter {
-                it.centerX >= screenWidth * REEL_ELLIPSIS_MIN_X
-                    && it.centerY >= screenHeight * REEL_ELLIPSIS_MIN_Y
-                    && it.centerY <= screenHeight * REEL_ELLIPSIS_MAX_Y
-            }
-            .sortedBy { it.centerX }
-        val yTolerance = max(7f, screenHeight * 0.008f)
-        val minGap = max(4f, screenWidth * 0.006f)
-        val maxGap = max(28f, screenWidth * 0.045f)
-        val gapTolerance = max(6f, screenWidth * 0.012f)
-        var bestTarget: PointF? = null
-        var bestScore = Float.MAX_VALUE
-
-        for (firstIndex in 0 until candidates.size - 2) {
-            for (secondIndex in firstIndex + 1 until candidates.size - 1) {
-                for (thirdIndex in secondIndex + 1 until candidates.size) {
-                    val first = candidates[firstIndex]
-                    val second = candidates[secondIndex]
-                    val third = candidates[thirdIndex]
-                    val minY = minOf(first.centerY, second.centerY, third.centerY)
-                    val maxY = maxOf(first.centerY, second.centerY, third.centerY)
-                    if (maxY - minY > yTolerance) continue
-
-                    val firstGap = second.centerX - first.centerX
-                    val secondGap = third.centerX - second.centerX
-                    if (firstGap !in minGap..maxGap || secondGap !in minGap..maxGap) continue
-                    if (abs(firstGap - secondGap) > gapTolerance) continue
-
-                    val centerX = (first.centerX + second.centerX + third.centerX) / 3f
-                    val centerY = (first.centerY + second.centerY + third.centerY) / 3f
-                    val sizeDifference = abs(first.area - second.area) + abs(second.area - third.area)
-                    val score = abs(centerY - screenHeight * REEL_ELLIPSIS_EXPECTED_Y)
-                        + abs(centerX - screenWidth * REEL_ELLIPSIS_EXPECTED_X) * 0.4f
-                        + abs(firstGap - secondGap) * 2f
-                        + sizeDifference * 0.15f
-                    if (score < bestScore) {
-                        bestScore = score
-                        bestTarget = PointF(centerX, centerY)
-                    }
-                }
-            }
-        }
-        return bestTarget
-    }
-
     private fun tapSaveByGesture(): Boolean {
         val width = resources.displayMetrics.widthPixels.toFloat()
         val height = resources.displayMetrics.heightPixels.toFloat()
@@ -1220,21 +1143,6 @@ class ShopeeAccessibilityService : AccessibilityService() {
         }
         val gesture = GestureDescription.Builder()
             .addStroke(GestureDescription.StrokeDescription(path, 0, 120))
-            .build()
-        return dispatchGesture(gesture, null, null)
-    }
-
-    private fun swipeReelOptionsUp(): Boolean {
-        val width = resources.displayMetrics.widthPixels.toFloat()
-        val height = resources.displayMetrics.heightPixels.toFloat()
-        val path = Path().apply {
-            // A controlled upward finger swipe moves the bottom-sheet contents just
-            // enough to reveal "Quản lý sản phẩm" without skipping past the row.
-            moveTo(width * 0.50f, height * 0.82f)
-            lineTo(width * 0.50f, height * 0.50f)
-        }
-        val gesture = GestureDescription.Builder()
-            .addStroke(GestureDescription.StrokeDescription(path, 0, 480))
             .build()
         return dispatchGesture(gesture, null, null)
     }
@@ -1313,36 +1221,27 @@ class ShopeeAccessibilityService : AccessibilityService() {
 
     companion object {
         private const val POST_MENU_SEMANTIC_TAP_LIMIT = 3
-        private const val REEL_SCREENSHOT_TAP_LIMIT = 4
-        private const val REEL_VIEWER_ENTRY_LIMIT = 2
-        private const val REEL_OPTIONS_SCROLL_LIMIT = 5
+        private const val PROFILE_MENU_SEMANTIC_TAP_LIMIT = 3
+        private const val PROFILE_MENU_FALLBACK_LIMIT = 2
+        private const val PROFILE_ALL_TAB_TAP_LIMIT = 2
         private const val AFFILIATE_PRODUCT_TAP_LIMIT = 3
         private const val EXACT_POST_FIRST_RETRY_MS = 1_200L
         private const val EXACT_POST_REOPEN_SETTLE_MS = 2_000L
         private const val EXACT_POST_FAIL_TIMEOUT_MS = 65_000L
-        private const val REEL_VIEWER_FIRST_ENTRY_MS = 1_000L
-        private const val REEL_VIEWER_ENTRY_SETTLE_MS = 1_600L
+        private const val PROFILE_FIRST_RETRY_MS = 1_200L
+        private const val PROFILE_REOPEN_SETTLE_MS = 2_500L
+        private const val PROFILE_POST_FAIL_TIMEOUT_MS = 65_000L
+        private const val PROFILE_MENU_FAIL_TIMEOUT_MS = 35_000L
         private const val VERIFY_FORM_CLOSED_SUCCESS_MS = 5_000L
         private const val FACEBOOK_PACKAGE = "com.facebook.katana"
         private const val EVENT_SETTLE_MS = 600L
         private const val ROOT_RETRY_MS = 500L
-        private const val REEL_SCREENSHOT_SETTLE_MS = 1_800L
-        private const val REEL_SCREENSHOT_RETRY_MS = 450L
         private const val POST_MENU_X_FRACTION = 0.936f
-        private const val REEL_MENU_PRIMARY_Y_FRACTION = 0.83f
-        private const val REEL_PREVIEW_ENTRY_Y_FRACTION = 0.62f
-        private const val REEL_ELLIPSIS_CROP_LEFT = 0.84f
-        private const val REEL_ELLIPSIS_CROP_RIGHT = 0.995f
-        private const val REEL_ELLIPSIS_CROP_TOP = 0.70f
-        private const val REEL_ELLIPSIS_CROP_BOTTOM = 0.91f
-        private const val REEL_ELLIPSIS_MIN_X = 0.86f
-        private const val REEL_ELLIPSIS_MIN_Y = 0.72f
-        private const val REEL_ELLIPSIS_MAX_Y = 0.89f
-        private const val REEL_ELLIPSIS_EXPECTED_X = 0.936f
-        private const val REEL_ELLIPSIS_EXPECTED_Y = 0.83f
-        private val REEL_MENU_FALLBACK_Y_FRACTIONS = floatArrayOf(0.83f, 0.86f)
         private val MENU_TAP_Y_FRACTIONS =
             floatArrayOf(0.16f, 0.20f, 0.24f, 0.28f, 0.32f, 0.36f, 0.40f)
+        private val PROFILE_ALL_TAB_LABELS = listOf("Tất cả", "All")
+        private val PROFILE_PHOTOS_TAB_LABELS = listOf("Ảnh", "Photos")
+        private val PROFILE_REELS_TAB_LABELS = listOf("Reels")
         private val HOME_FEED_BOTTOM_NAV_HINTS = listOf(
             "trang ch\u1ee7",
             "b\u1ea3ng \u0111i\u1ec1u khi\u1ec3n chuy\u00ean nghi\u1ec7p",
@@ -1377,46 +1276,6 @@ class ShopeeAccessibilityService : AccessibilityService() {
             "story_header_more",
             "post_header_more",
             "more_button",
-        )
-        private val REEL_MENU_LABEL_HINTS = listOf(
-            "lựa chọn khác",
-            "tùy chọn",
-            "more options",
-            "actions for this post",
-            "post options",
-            "feed_story_header_more",
-            "story_header_more",
-            "post_header_more",
-            "more_button",
-        )
-        private val REEL_SCREEN_LABEL_HINTS = listOf(
-            "tiếp theo:",
-            "up next:",
-            "lưu thước phim",
-            "save reel",
-            "remix thước phim",
-            "remix this reel",
-        )
-        private val VIDEO_PREVIEW_LABEL_HINTS = listOf(
-            "Phát video",
-            "Phát thước phim",
-            "Xem video",
-            "Xem thước phim",
-            "Play video",
-            "Play reel",
-            "Watch video",
-            "Watch reel",
-        )
-        private val VIDEO_URL_HINTS = listOf(
-            "/reel/",
-            "/reels/",
-            "/videos/",
-            "/watch/",
-            "watch?v=",
-            "video.php",
-            "fb.watch/",
-            "/share/r/",
-            "/share/v/",
         )
         private val REEL_OPTIONS_LABEL_HINTS = listOf(
             "Lưu thước phim",

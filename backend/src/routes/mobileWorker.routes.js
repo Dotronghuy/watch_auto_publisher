@@ -9,6 +9,7 @@ import {
   listMobileLinkJobs,
   retryMobileLinkJob,
 } from '../services/mobileLinkJob.service.js';
+import { getPostMetricById } from '../utils/history.js';
 
 const router = express.Router();
 
@@ -57,7 +58,13 @@ router.get('/jobs/next', verifyWorkerToken, async (req, res, next) => {
 
     const job = await claimNextMobileLinkJob({ deviceId });
     if (!job) return res.status(204).end();
-    res.json({ job });
+    const metric = await getPostMetricById(job.postId);
+    res.json({
+      job: {
+        ...job,
+        postText: String(metric?.content || ''),
+      },
+    });
   } catch (error) {
     next(error);
   }

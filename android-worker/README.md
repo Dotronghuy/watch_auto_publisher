@@ -3,17 +3,22 @@
 Ứng dụng Android nội bộ nhận tác vụ từ backend qua HTTPS và thực hiện chuỗi thao tác trong
 ứng dụng Facebook:
 
-1. Mở đúng bài Fanpage vừa đăng bằng permalink.
+1. Mở đúng bài Fanpage vừa đăng.
 2. Mở menu ba chấm.
 3. Chọn **Quản lý liên kết đến sản phẩm**.
 4. Nhập URL Shopee và tên liên kết.
 5. Bấm **Lưu** và trả kết quả về backend.
 
-Với bài video/Reels, ứng dụng tự đi qua nhánh giao diện riêng:
+Với bài video/Reels, ứng dụng không mở trình xem Reels toàn màn hình. Worker mở profile
+Fanpage, chọn tab **Tất cả**, ưu tiên thẻ bài có caption khớp nội dung backend vừa đăng,
+sau đó dùng thẻ bài mới nhất làm phương án dự phòng có giới hạn:
 
-1. **Quản lý sản phẩm**.
-2. **Thêm sản phẩm liên kết tiếp thị**.
-3. Nhập URL Shopee, tên liên kết và bấm **Lưu**.
+1. Bấm dấu ba chấm ở header của đúng thẻ bài Reels.
+2. Chọn **Quản lý sản phẩm**.
+3. Chọn **Thêm sản phẩm liên kết tiếp thị**.
+4. Nhập URL Shopee, tên liên kết và bấm **Lưu**.
+
+Bài viết/ảnh thường vẫn mở bằng permalink chính xác như trước.
 
 Điện thoại không cần USB hoặc kết nối chung Wi-Fi với máy tính.
 

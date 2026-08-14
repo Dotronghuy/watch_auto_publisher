@@ -8,6 +8,7 @@ data class MobileLinkJob(
     val postUrl: String,
     val shopeeUrl: String,
     val linkName: String,
+    val postText: String,
     val attempt: Int,
 ) {
     fun toJson(): JSONObject = JSONObject()
@@ -16,6 +17,7 @@ data class MobileLinkJob(
         .put("postUrl", postUrl)
         .put("shopeeUrl", shopeeUrl)
         .put("linkName", linkName)
+        .put("postText", postText)
         .put("attempt", attempt)
 
     companion object {
@@ -25,6 +27,7 @@ data class MobileLinkJob(
             postUrl = json.getString("postUrl"),
             shopeeUrl = json.getString("shopeeUrl"),
             linkName = json.optString("linkName", "Mua ở đây"),
+            postText = json.optString("postText", ""),
             attempt = json.optInt("attempt", 1),
         )
     }

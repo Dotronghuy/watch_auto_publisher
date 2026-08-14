@@ -168,6 +168,25 @@ export const addPostMetric = async (platform, postId, sku, content, metadata = {
   });
 };
 
+export const getPostMetricById = async (postId) => {
+  const normalizedPostId = String(postId || '').trim();
+  if (!normalizedPostId) return null;
+
+  try {
+    const rows = await runQuery(
+      `SELECT post_id, platform, sku, content, timestamp, account_id
+       FROM post_metrics
+       WHERE post_id = ?
+       LIMIT 1`,
+      [normalizedPostId],
+    );
+    return rows[0] || null;
+  } catch (error) {
+    console.error('Lỗi khi lấy nội dung bài đã đăng:', error.message);
+    return null;
+  }
+};
+
 // Lấy các lựa chọn gần nhất để Tone Engine tránh lặp tone/góc nhìn/CTA.
 export const getRecentContentSelections = async (limit = 5, accountId = null) => {
   try {

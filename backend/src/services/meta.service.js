@@ -347,8 +347,9 @@ export const publishFBReels = async (videoPath, content, options = {}) => {
     access_token: pageToken
   });
 
-  console.log(`✅ [FB Reels] Đăng thành công! Video ID: ${videoId}`);
-  return videoId;
+  const postId = `${pageId}_${videoId}`;
+  console.log(`✅ [FB Reels] Đăng thành công! Post ID: ${postId}`);
+  return postId;
 };
 
 /**

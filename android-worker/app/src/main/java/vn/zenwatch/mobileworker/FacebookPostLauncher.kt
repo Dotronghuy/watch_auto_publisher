@@ -5,11 +5,12 @@ import android.content.Intent
 import android.net.Uri
 
 /**
- * Opens the exact Facebook object described by a mobile-link job.
+ * Opens the Facebook surface required by a mobile-link job.
  *
- * Facebook's Android app sometimes treats a permalink as a generic feed route.
- * Reels therefore prefer /reel/{id}, which opens the full-screen viewer required
- * by the product-management flow. Photo posts still prefer the Graph permalink.
+ * Reel jobs deliberately open the owning Page profile. The worker selects the
+ * freshly published Reel card there and uses its post-header menu; it must never
+ * enter Facebook's full-screen Reels viewer. Non-Reel posts keep their exact
+ * permalink flow.
  */
 object FacebookPostLauncher {
     private val compositePostId = Regex("^(\\d+)_(\\d+)$")
@@ -41,21 +42,22 @@ object FacebookPostLauncher {
         val graphPermalink = httpsUri(job.postUrl)
         val reelJob = isReelJob(job)
         val composite = compositeParts(job.postId)
+        if (reelJob) {
+            val profileWeb = ReelProfilePolicy.profileWebUrl(job.postId)?.let(Uri::parse)
+            return if (profileWeb != null) {
+                listOf(profileWeb, faceWebModal(profileWeb))
+            } else {
+                // Backward compatibility for jobs created before pageId_videoId.
+                // Caption matching in the Accessibility layer still gates the card.
+                listOf(
+                    Uri.parse("fb://profile"),
+                    Uri.parse("https://www.facebook.com/me"),
+                )
+            }
+        }
+
         if (composite != null) {
             val (pageId, storyId) = composite
-            if (reelJob) {
-                val canonicalReel = buildReelPermalink(storyId)
-                val pageVideo = buildPageVideoPermalink(pageId, storyId)
-                return listOfNotNull(
-                    graphPermalink,
-                    graphPermalink?.let(::faceWebModal),
-                    canonicalReel,
-                    faceWebModal(canonicalReel),
-                    pageVideo,
-                    faceWebModal(pageVideo),
-                ).distinctBy(Uri::toString)
-            }
-
             val canonicalPermalink = buildStoryPermalink(pageId, storyId)
             return listOfNotNull(
                 graphPermalink,
@@ -72,21 +74,12 @@ object FacebookPostLauncher {
         }
 
         val canonicalReel = buildReelPermalink(job.postId.trim())
-        return if (reelJob) {
-            listOfNotNull(
-                graphPermalink,
-                graphPermalink?.let(::faceWebModal),
-                canonicalReel,
-                faceWebModal(canonicalReel),
-            ).distinctBy(Uri::toString)
-        } else {
-            listOfNotNull(
-                graphPermalink,
-                graphPermalink?.let(::faceWebModal),
-                canonicalReel,
-                faceWebModal(canonicalReel),
-            ).distinctBy(Uri::toString)
-        }
+        return listOfNotNull(
+            graphPermalink,
+            graphPermalink?.let(::faceWebModal),
+            canonicalReel,
+            faceWebModal(canonicalReel),
+        ).distinctBy(Uri::toString)
     }
 
     fun isReelJob(job: MobileLinkJob): Boolean =
@@ -113,15 +106,6 @@ object FacebookPostLauncher {
             .authority("www.facebook.com")
             .appendPath("reel")
             .appendPath(reelId)
-            .build()
-
-    private fun buildPageVideoPermalink(pageId: String, videoId: String): Uri =
-        Uri.Builder()
-            .scheme("https")
-            .authority("www.facebook.com")
-            .appendPath(pageId)
-            .appendPath("videos")
-            .appendPath(videoId)
             .build()
 
     private fun httpsUri(value: String): Uri? = runCatching {
