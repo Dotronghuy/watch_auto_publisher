@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ZenWatch Zalo Bridge</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <main>
+      <header>
+        <div class="logo">Z</div>
+        <div>
+          <h1>ZenWatch Zalo Bridge</h1>
+          <p>Dùng đúng tab Zalo Web đang mở</p>
+        </div>
+      </header>
+
+      <section id="statusCard" class="status-card disconnected">
+        <span id="statusDot" class="status-dot"></span>
+        <div>
+          <strong id="statusText">Chưa kết nối</strong>
+          <p id="targetText">Mở chat.zalo.me để bắt đầu</p>
+        </div>
+      </section>
+
+      <section id="pairSection">
+        <label for="backendUrl">Địa chỉ ZenWatch Tool</label>
+        <input id="backendUrl" value="http://127.0.0.1:3000" spellcheck="false">
+
+        <label for="pairCode">Mã kết nối 6 số</label>
+        <input id="pairCode" inputmode="numeric" maxlength="6" placeholder="123456" autocomplete="one-time-code">
+
+        <button id="connectButton" class="primary">Kết nối tab Zalo hiện tại</button>
+      </section>
+
+      <button id="disconnectButton" class="secondary" hidden>Ngắt kết nối</button>
+      <p id="message" class="message"></p>
+
+      <footer>
+        Tab phải có địa chỉ <strong>https://chat.zalo.me/</strong>. Trong lúc đăng bài, không mở DevTools trên tab này.
+      </footer>
+    </main>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

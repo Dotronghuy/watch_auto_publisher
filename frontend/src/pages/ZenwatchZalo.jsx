@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Play, Square, Send, Plus, X, Clock, BarChart3, CheckCircle2, MessageSquare, Settings, Terminal, History, Zap } from 'lucide-react';
+import { Play, Square, Plus, X, Clock, BarChart3, MessageSquare, Settings, Terminal, History, Zap, PlugZap, Copy, RefreshCw, Puzzle } from 'lucide-react';
 import Swal from 'sweetalert2';
 import { useAuth } from '../context/AuthContext';
 import './ZenwatchZalo.css';
@@ -8,7 +8,11 @@ import './ZenwatchZalo.css';
 
 export default function ZenwatchZalo() {
   const { hasPermission } = useAuth();
-  const [status, setStatus] = useState({ isRunning: false, logs: [] });
+  const [status, setStatus] = useState({
+    isRunning: false,
+    logs: [],
+    bridge: { connected: false, connectionState: 'disconnected' }
+  });
   const [config, setConfig] = useState({
     groups: [], phone: '', sheetUrl: '',
     postsPerSession: 7, delayMinutes: 2, cooldownDays: 2, contentTone: 'auto'
@@ -18,6 +22,8 @@ export default function ZenwatchZalo() {
   const [newGroup, setNewGroup] = useState('');
   const [configLoaded, setConfigLoaded] = useState(false);
   const [groupDropOpen, setGroupDropOpen] = useState(false);
+  const [pairingCode, setPairingCode] = useState(null);
+  const [pairingBusy, setPairingBusy] = useState(false);
   const groupDropRef = useRef(null);
   const logsEndRef = useRef(null);
   const saveTimerRef = useRef(null);
@@ -29,7 +35,10 @@ export default function ZenwatchZalo() {
       if (!res.ok) return;
       const data = await res.json();
       setStatus(data);
-    } catch (e) {}
+      if (data.bridge?.connected) setPairingCode(null);
+    } catch {
+      // Status polling is best-effort while the backend restarts.
+    }
   }, []);
 
   const fetchConfig = useCallback(async () => {
@@ -39,7 +48,9 @@ export default function ZenwatchZalo() {
       const data = await res.json();
       setConfig(data);
       setConfigLoaded(true);
-    } catch (e) {}
+    } catch {
+      // Keep the current form values if config is temporarily unavailable.
+    }
   }, []);
 
   const fetchHistory = useCallback(async () => {
@@ -48,16 +59,24 @@ export default function ZenwatchZalo() {
       if (!res.ok) return;
       const data = await res.json();
       setHistory(data);
-    } catch (e) {}
+    } catch {
+      // History will be retried by the polling interval.
+    }
   }, []);
 
   useEffect(() => {
-    fetchConfig();
-    fetchHistory();
-    fetchStatus();
+    const initialFetch = setTimeout(() => {
+      fetchConfig();
+      fetchHistory();
+      fetchStatus();
+    }, 0);
     const statusInterval = setInterval(fetchStatus, 2000);
     const historyInterval = setInterval(fetchHistory, 5000);
-    return () => { clearInterval(statusInterval); clearInterval(historyInterval); };
+    return () => {
+      clearTimeout(initialFetch);
+      clearInterval(statusInterval);
+      clearInterval(historyInterval);
+    };
   }, [fetchConfig, fetchHistory, fetchStatus]);
 
   useEffect(() => {
@@ -106,6 +125,20 @@ export default function ZenwatchZalo() {
       return;
     }
 
+    if (!status.bridge?.connected) {
+      Swal.fire({
+        title: 'Chưa kết nối tab Zalo Web',
+        html: `
+          <p style="margin-bottom:10px">Hãy mở <b>chat.zalo.me</b> bằng tài khoản Zalo công việc cần đăng.</p>
+          <p>Bấm <b>Tạo mã kết nối</b>, sau đó nhập mã đó trong extension <b>ZenWatch Zalo Tab Bridge</b>.</p>
+        `,
+        icon: 'warning',
+        background: 'var(--color-surface)',
+        color: 'white'
+      });
+      return;
+    }
+
     // Check Gemini login trước
     try {
       const checkRes = await fetch('/api/zenwatch/zalo/check-gemini');
@@ -131,7 +164,7 @@ export default function ZenwatchZalo() {
         });
         return;
       }
-    } catch (e) { /* skip check if API fails */ }
+    } catch { /* Skip the optional preflight if its API is temporarily unavailable. */ }
 
     try {
       const res = await fetch('/api/zenwatch/zalo/start', { method: 'POST' });
@@ -157,6 +190,31 @@ export default function ZenwatchZalo() {
     });
     if (!confirm.isConfirmed) return;
     await fetch('/api/zenwatch/zalo/stop', { method: 'POST' });
+  };
+
+  const createPairingCode = async () => {
+    setPairingBusy(true);
+    try {
+      const res = await fetch('/api/zenwatch/zalo/bridge/pairing-code', { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Không tạo được mã kết nối');
+      setPairingCode(data);
+      fetchStatus();
+    } catch (e) {
+      Swal.fire({ title: 'Lỗi kết nối extension', text: e.message, icon: 'error', background: 'var(--color-surface)', color: 'white' });
+    } finally {
+      setPairingBusy(false);
+    }
+  };
+
+  const copyPairingCode = async () => {
+    if (!pairingCode?.code) return;
+    try {
+      await navigator.clipboard.writeText(pairingCode.code);
+      Swal.fire({ toast: true, position: 'top-end', timer: 1400, showConfirmButton: false, icon: 'success', title: 'Đã sao chép mã' });
+    } catch {
+      Swal.fire({ title: 'Mã kết nối', text: pairingCode.code, icon: 'info', background: 'var(--color-surface)', color: 'white' });
+    }
   };
 
   const updateConfig = (key, value) => {
@@ -252,6 +310,48 @@ export default function ZenwatchZalo() {
         {/* CONFIG PANEL */}
         <div className="config-panel">
           <h2><Settings size={14} /> Cấu Hình</h2>
+
+          <div className={`zalo-bridge-card ${status.bridge?.connected ? 'connected' : ''}`}>
+            <div className="bridge-heading">
+              <div className="bridge-icon"><PlugZap size={17} /></div>
+              <div className="bridge-title">
+                <strong>Tab Zalo Web</strong>
+                <span>{status.bridge?.connected ? 'Đã kết nối extension' : 'Chưa kết nối'}</span>
+              </div>
+              <span className={`bridge-state ${status.bridge?.connected ? 'online' : ''}`}>
+                <span className="bridge-dot" />
+                {status.bridge?.connected ? 'ONLINE' : 'OFFLINE'}
+              </span>
+            </div>
+
+            {status.bridge?.connected ? (
+              <div className="bridge-target">
+                <span>{status.bridge?.target?.title || 'Zalo Web'}</span>
+                {status.bridge?.lastSeenAt && (
+                  <small>Phản hồi lúc {new Date(status.bridge.lastSeenAt).toLocaleTimeString('vi-VN')}</small>
+                )}
+              </div>
+            ) : (
+              <>
+                <p className="bridge-help">
+                  Cài extension trong thư mục <code>browser-extensions/zalo-tab-bridge</code>, mở đúng tab chat.zalo.me rồi nhập mã bên dưới.
+                </p>
+                {pairingCode?.code && (
+                  <div className="pairing-code-row">
+                    <button className="pairing-code" onClick={copyPairingCode} title="Sao chép mã">
+                      {pairingCode.code}
+                      <Copy size={14} />
+                    </button>
+                    <small>Hiệu lực 10 phút</small>
+                  </div>
+                )}
+                <button className="bridge-pair-button" onClick={createPairingCode} disabled={pairingBusy}>
+                  {pairingBusy ? <RefreshCw size={14} className="spin" /> : <Puzzle size={14} />}
+                  {pairingCode?.code ? 'Tạo mã mới' : 'Tạo mã kết nối'}
+                </button>
+              </>
+            )}
+          </div>
 
           {/* Groups — Custom Dropdown */}
           <div className="groups-dropdown-wrapper" ref={groupDropRef}>

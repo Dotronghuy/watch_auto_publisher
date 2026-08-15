@@ -209,6 +209,145 @@
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
 }
 
+/* ── Existing Zalo Web tab bridge ── */
+.zalo-bridge-card {
+  padding: 14px;
+  border: 1px solid rgba(245, 158, 11, 0.28);
+  border-radius: 12px;
+  background: rgba(120, 53, 15, 0.12);
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+}
+
+.zalo-bridge-card.connected {
+  border-color: rgba(16, 185, 129, 0.3);
+  background: rgba(6, 78, 59, 0.15);
+}
+
+.bridge-heading {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.bridge-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+  display: grid;
+  place-items: center;
+  color: #fbbf24;
+  background: rgba(245, 158, 11, 0.12);
+}
+
+.connected .bridge-icon {
+  color: #34d399;
+  background: rgba(16, 185, 129, 0.13);
+}
+
+.bridge-title {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.bridge-title strong { color: #f4f4f5; font-size: 13px; }
+.bridge-title span { color: rgba(255, 255, 255, 0.42); font-size: 11px; }
+
+.bridge-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: #fbbf24;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.45px;
+}
+
+.bridge-state.online { color: #34d399; }
+.bridge-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+
+.bridge-help {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.48);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.bridge-help code {
+  color: #93c5fd;
+  overflow-wrap: anywhere;
+}
+
+.bridge-target {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 9px 10px;
+  border-radius: 8px;
+  background: rgba(16, 185, 129, 0.08);
+}
+
+.bridge-target span {
+  color: #d1fae5;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.bridge-target small { color: rgba(167, 243, 208, 0.55); font-size: 10px; }
+
+.pairing-code-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.pairing-code {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid rgba(96, 165, 250, 0.3);
+  border-radius: 9px;
+  padding: 8px 11px;
+  color: #bfdbfe;
+  background: rgba(37, 99, 235, 0.12);
+  font-family: 'JetBrains Mono', Consolas, monospace;
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 4px;
+  cursor: pointer;
+}
+
+.pairing-code-row small { color: rgba(255, 255, 255, 0.32); font-size: 10px; }
+
+.bridge-pair-button {
+  width: 100%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 9px 12px;
+  border: 1px solid rgba(96, 165, 250, 0.28);
+  border-radius: 9px;
+  color: #bfdbfe;
+  background: rgba(37, 99, 235, 0.12);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.bridge-pair-button:hover { background: rgba(37, 99, 235, 0.2); }
+.bridge-pair-button:disabled { opacity: 0.55; cursor: wait; }
+
+.spin { animation: spin 0.9s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
 .config-field {
   display: flex;
   flex-direction: column;

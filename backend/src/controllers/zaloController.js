@@ -7,6 +7,10 @@ import { PrismaClient } from '@prisma/client';
 import { getFoldersInFolder, getImagesInFolder, downloadFileFromDrive } from '../services/drive.service.js';
 import { getProductInfoBySku } from '../services/sheet.service.js';
 import { readFromSheet } from '../services/sheets.service.js';
+import {
+  dispatchZaloTabJob,
+  getZaloTabBridgeStatus,
+} from '../services/zalo-tab-bridge.service.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -101,6 +105,13 @@ export const startZaloPost = async (req, res) => {
     return res.status(400).json({ error: 'Tool Zalo đang chạy rồi.' });
   }
 
+  if (!getZaloTabBridgeStatus().connected) {
+    return res.status(409).json({
+      error: 'Chưa kết nối tab Zalo Web. Hãy mở extension ZenWatch Zalo Tab Bridge trên tab chat.zalo.me và kết nối trước.',
+      code: 'ZALO_TAB_NOT_CONNECTED',
+    });
+  }
+
   isZaloRunning = true;
   zaloAbortController = new AbortController();
   zaloLogs = [];
@@ -125,13 +136,16 @@ export const stopZaloPost = (req, res) => {
 };
 
 export const getZaloStatus = (req, res) => {
-  res.json({ isRunning: isZaloRunning, logs: zaloLogs });
+  res.json({
+    isRunning: isZaloRunning,
+    logs: zaloLogs,
+    bridge: getZaloTabBridgeStatus(),
+  });
 };
 
 // =================== Core Logic =================== //
 
 async function runZaloTask(signal) {
-  let browser;
   const config = loadConfig();
   const { groups, phone, sheetUrl, postsPerSession, delayMinutes, cooldownDays, contentTone } = config;
 
@@ -323,54 +337,26 @@ async function runZaloTask(signal) {
       log('🤖 AI đang viết bài bán hàng... (gửi ảnh _01 cho Gemini)', 'info');
       const postContent = await generateZaloContentSmart(product, localPaths[0], phone, contentTone, skuFolder.name, product.priority);
 
-      // Mở Zalo browser (lazy init - chỉ mở 1 lần, SAU khi Gemini xong)
-      if (!browser) {
-        log('🤖 Khởi động trình duyệt Zalo...', 'info');
-        const userDataDir = path.join(__dirname, '../../zalo_profile');
-        if (!fs.existsSync(userDataDir)) fs.mkdirSync(userDataDir, { recursive: true });
-        browser = await chromium.launchPersistentContext(userDataDir, {
-          headless: false,
-          args: ['--disable-notifications'],
-          viewport: { width: 1280, height: 800 }
-        });
-      }
-
-      // Đăng lên tất cả các nhóm
-      const page = await browser.newPage();
+      // Đăng lên tất cả các nhóm bằng tab Zalo Web đã kết nối qua extension
+      let publishError = null;
       try {
-        await page.goto('https://chat.zalo.me/', { timeout: 60000 });
-        await page.waitForSelector('#contact-search-input', { timeout: 60000 });
-
         for (const groupName of groups) {
           if (signal.aborted) throw new Error('Đã dừng.');
           if (!groupName.trim()) continue;
 
           log(`   🎯 Nhóm: [${groupName}]`, 'info');
-
-          // Clear search và tìm nhóm
-          await page.fill('#contact-search-input', '');
-          await page.waitForTimeout(500);
-          await page.fill('#contact-search-input', groupName);
-          await page.waitForTimeout(2500);
-          await page.keyboard.press('Enter');
-          await page.waitForTimeout(2500);
-
-          // Upload ảnh
-          log(`   📤 Upload ${localPaths.length} ảnh...`, 'info');
-          const [fileChooser] = await Promise.all([
-            page.waitForEvent('filechooser'),
-            page.locator('div[title*="hình ảnh" i], div[title*="ảnh" i], .icon-photo, div[data-id="btn_Send_Photo"]').first().click()
-          ]);
-          await fileChooser.setFiles(localPaths);
-          await page.waitForTimeout(localPaths.length * 2500 + 2000);
-
-          // Nhập nội dung
-          await page.locator('#richInput').focus();
-          await page.keyboard.insertText(postContent);
-          await page.waitForTimeout(1500);
-          await page.keyboard.press('Enter');
+          log(`   📤 Gửi lệnh tới tab Zalo Web (${localPaths.length} ảnh)...`, 'info');
+          const result = await dispatchZaloTabJob({
+            productId: product.id,
+            groupName,
+            content: postContent,
+            filePaths: localPaths.map((filePath) => path.resolve(filePath)),
+          }, {
+            signal,
+            timeoutMs: 3 * 60 * 1000,
+          });
           log(`   ✅ Đã gửi vào: ${groupName}`, 'success');
-          await page.waitForTimeout(2000);
+          if (result.detail) log(`      ↳ ${result.detail}`, 'info');
         }
 
         // Lưu history vào DB
@@ -384,8 +370,7 @@ async function runZaloTask(signal) {
         log(`🎉 Hoàn tất mã: ${product.id} (${postsDone}/${postsPerSession})`, 'success');
       } catch (err) {
         log(`⚠️ Lỗi đăng bài ${product.id}: ${err.message}`, 'error');
-      } finally {
-        await page.close();
+        publishError = err;
       }
 
       // Dọn temp files
@@ -393,11 +378,8 @@ async function runZaloTask(signal) {
         try { if (fs.existsSync(p)) fs.unlinkSync(p); } catch (e) {}
       }
 
-      // Tắt hoàn toàn trình duyệt Zalo trong lúc nghỉ ngơi để giải phóng RAM
-      if (browser) {
-        try { await browser.close(); } catch (e) {}
-        browser = null;
-      }
+      // Không tự chuyển sang SKU khác sau lỗi bridge để tránh gửi trùng hoặc sai nhóm.
+      if (publishError) throw publishError;
 
       // Delay giữa các bài
       if (postsDone < postsPerSession && !signal.aborted) {
@@ -420,12 +402,7 @@ async function runZaloTask(signal) {
       log(`❌ Lỗi: ${error.message}`, 'error');
     }
   } finally {
-    if (browser) {
-      log('🔒 Đang tắt trình duyệt Zalo...', 'info');
-      try { await browser.close(); } catch (e) {}
-      browser = null;
-    }
-    log('✅ Chiến dịch đã kết thúc, tất cả trình duyệt đã đóng.', 'success');
+    log('✅ Chiến dịch đã kết thúc. Tab Zalo Web vẫn được giữ nguyên.', 'success');
     isZaloRunning = false;
   }
 }
