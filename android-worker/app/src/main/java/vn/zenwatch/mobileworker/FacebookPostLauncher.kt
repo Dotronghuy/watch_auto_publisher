@@ -7,10 +7,10 @@ import android.net.Uri
 /**
  * Opens the Facebook surface required by a mobile-link job.
  *
- * Reel jobs deliberately open the owning Page profile. The worker selects the
- * freshly published Reel card there and uses its post-header menu; it must never
- * enter Facebook's full-screen Reels viewer. Non-Reel posts keep their exact
- * permalink flow.
+ * Reel jobs have exactly one navigation route: the owning Page's native profile
+ * URI. The worker identifies the published card there and must never enter
+ * Facebook's generic full-screen Reels viewer. Non-Reel posts keep their exact
+ * permalink fallbacks.
  */
 object FacebookPostLauncher {
     private val compositePostId = Regex("^(\\d+)_(\\d+)$")
@@ -43,17 +43,13 @@ object FacebookPostLauncher {
         val reelJob = isReelJob(job)
         val composite = compositeParts(job.postId)
         if (reelJob) {
-            val profileWeb = ReelProfilePolicy.profileWebUrl(job.postId)?.let(Uri::parse)
-            return if (profileWeb != null) {
-                listOf(profileWeb, faceWebModal(profileWeb))
-            } else {
-                // Backward compatibility for jobs created before pageId_videoId.
-                // Caption matching in the Accessibility layer still gates the card.
-                listOf(
-                    Uri.parse("fb://profile"),
-                    Uri.parse("https://www.facebook.com/me"),
-                )
-            }
+            // Fail closed for legacy video-only IDs: without pageId there is no
+            // safe profile to open, and a generic Reel/profile route can select
+            // unrelated content.
+            return ReelProfilePolicy.profileAppUri(job.postId)
+                ?.let(Uri::parse)
+                ?.let { uri -> listOf(uri) }
+                .orEmpty()
         }
 
         if (composite != null) {
@@ -82,8 +78,7 @@ object FacebookPostLauncher {
         ).distinctBy(Uri::toString)
     }
 
-    fun isReelJob(job: MobileLinkJob): Boolean =
-        REEL_URL_HINTS.any { hint -> job.postUrl.contains(hint, ignoreCase = true) }
+    fun isReelJob(job: MobileLinkJob): Boolean = job.contentType == "reel"
 
     private fun compositeParts(postId: String): Pair<String, String>? {
         val match = compositePostId.matchEntire(postId.trim()) ?: return null
@@ -123,15 +118,4 @@ object FacebookPostLauncher {
             .build()
 
     private const val FACEBOOK_PACKAGE = "com.facebook.katana"
-    private val REEL_URL_HINTS = listOf(
-        "/reel/",
-        "/reels/",
-        "/videos/",
-        "/watch/",
-        "watch?v=",
-        "video.php",
-        "fb.watch/",
-        "/share/r/",
-        "/share/v/",
-    )
 }

@@ -8,16 +8,16 @@ import org.junit.Test
 
 class ReelProfilePolicyTest {
     @Test
-    fun `builds profile URL from a composite Facebook post ID`() {
+    fun `builds one native Page profile URI from a composite Facebook post ID`() {
         assertEquals(
-            "https://www.facebook.com/101788945134600",
-            ReelProfilePolicy.profileWebUrl("101788945134600_1498447018965401"),
+            "fb://page/101788945134600",
+            ReelProfilePolicy.profileAppUri("101788945134600_1498447018965401"),
         )
     }
 
     @Test
     fun `does not invent a page ID for a legacy video-only job`() {
-        assertNull(ReelProfilePolicy.profileWebUrl("1498447018965401"))
+        assertNull(ReelProfilePolicy.profileAppUri("1498447018965401"))
     }
 
     @Test
@@ -30,5 +30,33 @@ class ReelProfilePolicyTest {
             ),
         )
         assertFalse(ReelProfilePolicy.hasStrongCaptionMatch(postText, "Một sản phẩm hoàn toàn khác"))
+    }
+
+    @Test
+    fun `selects only the card whose caption strongly matches`() {
+        val postText = "Trước cuộc họp, chiếc đồng hồ có thể nói thay phong cách của bạn"
+        assertEquals(
+            1,
+            ReelProfilePolicy.strongCaptionMatchIndex(
+                postText,
+                listOf(
+                    "1 phút · Một mẫu đồng hồ hoàn toàn khác",
+                    "Vừa xong · TRUOC CUOC HOP CHIEC DONG HO CO THE NOI THAY PHONG CACH...",
+                ),
+            ),
+        )
+    }
+
+    @Test
+    fun `never falls back to the first card when caption does not match`() {
+        assertNull(
+            ReelProfilePolicy.strongCaptionMatchIndex(
+                "Bài vừa đăng của đúng sản phẩm",
+                listOf(
+                    "Vừa xong · Bài Reel mặc định khác",
+                    "2 phút · Nội dung cũ không liên quan",
+                ),
+            ),
+        )
     }
 }

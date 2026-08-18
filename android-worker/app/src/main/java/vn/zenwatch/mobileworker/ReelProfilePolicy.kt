@@ -14,8 +14,21 @@ object ReelProfilePolicy {
     fun pageIdFromPostId(postId: String): String? =
         compositePostId.matchEntire(postId.trim())?.groupValues?.get(1)
 
-    fun profileWebUrl(postId: String): String? = pageIdFromPostId(postId)?.let { pageId ->
-        "https://www.facebook.com/$pageId"
+    fun profileAppUri(postId: String): String? = pageIdFromPostId(postId)?.let { pageId ->
+        "fb://page/$pageId"
+    }
+
+    fun strongCaptionMatchIndex(postText: String, visibleTexts: List<String>): Int? {
+        var bestIndex: Int? = null
+        var bestScore = 0
+        visibleTexts.forEachIndexed { index, visibleText ->
+            val score = captionMatchScore(postText, visibleText)
+            if (score > bestScore && hasStrongCaptionMatch(postText, visibleText)) {
+                bestIndex = index
+                bestScore = score
+            }
+        }
+        return bestIndex
     }
 
     fun captionMatchScore(postText: String, visibleText: String): Int {

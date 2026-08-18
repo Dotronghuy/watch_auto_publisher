@@ -100,6 +100,6 @@ class MobileWorkerApi(private val settings: WorkerSettings) {
         URLEncoder.encode(value, StandardCharsets.UTF_8.name()).replace("+", "%20")
 
     companion object {
-        private const val WORKER_VERSION = "0.2.5"
+        private const val WORKER_VERSION = "0.3.5"
     }
 }

@@ -9,9 +9,10 @@
 4. Nhập URL Shopee và tên liên kết.
 5. Bấm **Lưu** và trả kết quả về backend.
 
-Với bài video/Reels, ứng dụng không mở trình xem Reels toàn màn hình. Worker mở profile
-Fanpage, chọn tab **Tất cả**, ưu tiên thẻ bài có caption khớp nội dung backend vừa đăng,
-sau đó dùng thẻ bài mới nhất làm phương án dự phòng có giới hạn:
+Với bài video/Reels, ứng dụng không mở trình xem Reels toàn màn hình. Worker chỉ dùng
+một deep link native để mở đúng profile Fanpage, chọn tab **Tất cả** và chỉ chấp nhận
+thẻ bài có caption khớp mạnh với nội dung backend vừa đăng. Không có phương án chọn
+Reel đầu tiên hoặc Reel mặc định khi caption không khớp:
 
 1. Bấm dấu ba chấm ở header của đúng thẻ bài Reels.
 2. Chọn **Quản lý sản phẩm**.

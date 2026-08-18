@@ -21,8 +21,11 @@ class ShopeeAccessibilityService : AccessibilityService() {
     private val saveFallbackAttempts = mutableSetOf<String>()
     private val exactPostReopenTargets = mutableMapOf<String, Int>()
     private val exactPostLastLaunchAt = mutableMapOf<String, Long>()
-    private val reelProfileAnchorY = mutableMapOf<String, Float>()
     private val reelProfileAllTabAttempts = mutableMapOf<String, Int>()
+    private val reelProfileRefreshAttempts = mutableMapOf<String, Int>()
+    private val reelProfileScrollAttempts = mutableMapOf<String, Int>()
+    private val reelProfileReopenAttempts = mutableMapOf<String, Int>()
+    private val reelProfileLastLaunchAt = mutableMapOf<String, Long>()
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event?.packageName?.toString() != FACEBOOK_PACKAGE) return
@@ -135,24 +138,25 @@ class ShopeeAccessibilityService : AccessibilityService() {
     /**
      * Reel-only navigation: stay on the Page profile, locate the newly published
      * card in the All tab, then hand its header position to OPEN_MENU. The caption
-     * from the backend is used when Facebook exposes it; otherwise the topmost
-     * visible post is the bounded fallback because publishing and enqueueing are
-     * part of the same routine.
+     * from the backend is mandatory identity evidence: there is no topmost-card or
+     * generic-Reels fallback.
      */
     private fun openLatestReelOnProfile(root: AccessibilityNodeInfo, active: ActiveJob) {
         val fallbackKey = "${active.job.id}:${active.job.attempt}"
         val staleProductUi = hasProductLinkSurface(root) || isReelOptionsMenuVisible(root)
-        val anchorY = if (!staleProductUi && looksLikeProfileTimeline(root)) {
+        val profileTimeline = !staleProductUi && looksLikeProfileTimeline(root)
+        val anchorY = if (profileTimeline) {
             findProfilePostAnchorY(root, active.job.postText)
         } else {
             null
         }
 
         if (anchorY != null) {
-            reelProfileAnchorY[fallbackKey] = anchorY
             reelProfileAllTabAttempts.remove(fallbackKey)
-            exactPostReopenTargets.remove(fallbackKey)
-            exactPostLastLaunchAt.remove(fallbackKey)
+            reelProfileRefreshAttempts.remove(fallbackKey)
+            reelProfileScrollAttempts.remove(fallbackKey)
+            reelProfileReopenAttempts.remove(fallbackKey)
+            reelProfileLastLaunchAt.remove(fallbackKey)
             menuSemanticTapAttempts.remove(fallbackKey)
             menuFallbackTapAttempts.remove(fallbackKey)
             menuTapDispatched.remove(fallbackKey)
@@ -162,14 +166,40 @@ class ShopeeAccessibilityService : AccessibilityService() {
             return
         }
 
-        if (!staleProductUi && looksLikeProfileTimeline(root)) {
+        if (profileTimeline) {
             val allTabAttempts = reelProfileAllTabAttempts[fallbackKey] ?: 0
-            val allTab = findProfileTab(root, PROFILE_ALL_TAB_LABELS)
-            if (allTab != null && allTabAttempts < PROFILE_ALL_TAB_TAP_LIMIT) {
+            if (allTabAttempts < PROFILE_ALL_TAB_TAP_LIMIT) {
                 reelProfileAllTabAttempts[fallbackKey] = allTabAttempts + 1
-                val gestureDispatched = tapNodeByGesture(allTab)
-                val clicked = if (!gestureDispatched) click(allTab) else false
-                if (gestureDispatched || clicked) {
+                val allTab = findProfileTab(root, PROFILE_ALL_TAB_LABELS)
+                if (allTab != null) {
+                    val gestureDispatched = tapNodeByGesture(allTab)
+                    val clicked = if (!gestureDispatched) click(allTab) else false
+                    if (gestureDispatched || clicked) {
+                        scheduleNext(1_200)
+                        return
+                    }
+                }
+            }
+
+            val refreshAttempts = reelProfileRefreshAttempts[fallbackKey] ?: 0
+            if (
+                elapsedInStep(active) >= PROFILE_REFRESH_START_MS
+                && refreshAttempts < PROFILE_REFRESH_LIMIT
+            ) {
+                reelProfileRefreshAttempts[fallbackKey] = refreshAttempts + 1
+                if (refreshProfileTimelineByGesture()) {
+                    scheduleNext(2_000)
+                    return
+                }
+            }
+
+            val scrollAttempts = reelProfileScrollAttempts[fallbackKey] ?: 0
+            if (
+                elapsedInStep(active) >= PROFILE_SCROLL_START_MS
+                && scrollAttempts < PROFILE_SEARCH_SCROLL_LIMIT
+            ) {
+                reelProfileScrollAttempts[fallbackKey] = scrollAttempts + 1
+                if (revealProfilePostsByGesture()) {
                     scheduleNext(1_200)
                     return
                 }
@@ -181,28 +211,38 @@ class ShopeeAccessibilityService : AccessibilityService() {
             return
         }
 
-        val sinceLastLaunch = System.currentTimeMillis() -
-            (exactPostLastLaunchAt[fallbackKey] ?: 0L)
-        if (sinceLastLaunch < PROFILE_REOPEN_SETTLE_MS) {
-            scheduleNext(PROFILE_REOPEN_SETTLE_MS - sinceLastLaunch)
-            return
-        }
-
-        val currentTarget = exactPostReopenTargets[fallbackKey] ?: 0
-        val nextTarget = currentTarget + 1
-        if (nextTarget < FacebookPostLauncher.targetCount(active.job)) {
-            exactPostReopenTargets[fallbackKey] = nextTarget
-            if (FacebookPostLauncher.launch(this, active.job, nextTarget)) {
-                exactPostLastLaunchAt[fallbackKey] = System.currentTimeMillis()
-                scheduleNext(PROFILE_REOPEN_SETTLE_MS)
+        val searchExhausted = !profileTimeline || (
+            (reelProfileAllTabAttempts[fallbackKey] ?: 0) >= PROFILE_ALL_TAB_TAP_LIMIT
+                && (reelProfileRefreshAttempts[fallbackKey] ?: 0) >= PROFILE_REFRESH_LIMIT
+                && (reelProfileScrollAttempts[fallbackKey] ?: 0) >= PROFILE_SEARCH_SCROLL_LIMIT
+            )
+        if (searchExhausted) {
+            val reopenAttempts = reelProfileReopenAttempts[fallbackKey] ?: 0
+            val sinceLastLaunch = System.currentTimeMillis() -
+                (reelProfileLastLaunchAt[fallbackKey] ?: 0L)
+            if (reopenAttempts < PROFILE_REOPEN_LIMIT && sinceLastLaunch < PROFILE_REOPEN_SETTLE_MS) {
+                scheduleNext(PROFILE_REOPEN_SETTLE_MS - sinceLastLaunch)
                 return
+            }
+
+            if (reopenAttempts < PROFILE_REOPEN_LIMIT) {
+                reelProfileReopenAttempts[fallbackKey] = reopenAttempts + 1
+                if (FacebookPostLauncher.launch(this, active.job)) {
+                    reelProfileLastLaunchAt[fallbackKey] = System.currentTimeMillis()
+                    reelProfileAllTabAttempts.remove(fallbackKey)
+                    reelProfileRefreshAttempts.remove(fallbackKey)
+                    reelProfileScrollAttempts.remove(fallbackKey)
+                    scheduleNext(PROFILE_REOPEN_SETTLE_MS)
+                    return
+                }
             }
         }
 
         val reason = when {
             staleProductUi -> "Facebook vẫn hiển thị menu/form của bài cũ"
             !looksLikeProfileTimeline(root) -> "Facebook chưa mở đúng profile/Page ở tab Tất cả"
-            else -> "Không tìm thấy thẻ bài Reels mới đăng trên profile"
+            active.job.postText.isBlank() -> "Job Reels không có caption để xác nhận đúng bài"
+            else -> "Không tìm thấy thẻ bài có caption khớp đúng Reels vừa đăng"
         }
         failStepAfter(
             active,
@@ -331,15 +371,12 @@ class ShopeeAccessibilityService : AccessibilityService() {
         }
 
         val anchorY = findProfilePostAnchorY(root, active.job.postText)
-            ?: reelProfileAnchorY[fallbackKey]
         if (anchorY == null) {
             JobStore.restartNavigation(this)
             FacebookPostLauncher.launch(this, active.job)
             scheduleNext(PROFILE_REOPEN_SETTLE_MS)
             return
         }
-        reelProfileAnchorY[fallbackKey] = anchorY
-
         val semanticAttempts = menuSemanticTapAttempts[fallbackKey] ?: 0
         val fallbackAttempts = menuFallbackTapAttempts[fallbackKey] ?: 0
         val button = findProfilePostMenuButton(root, anchorY)
@@ -367,7 +404,7 @@ class ShopeeAccessibilityService : AccessibilityService() {
         failStepAfter(
             active,
             PROFILE_MENU_FAIL_TIMEOUT_MS,
-            "Không tìm thấy dấu ba chấm của bài Reels mới nhất trên profile. ${postMenuDiagnostics(root)}",
+            "Không tìm thấy dấu ba chấm của đúng bài Reels khớp caption trên profile. ${postMenuDiagnostics(root)}",
         )
     }
 
@@ -828,16 +865,11 @@ class ShopeeAccessibilityService : AccessibilityService() {
             .toList()
         if (anchors.isEmpty()) return null
 
-        val captionMatch = anchors
-            .map { anchor ->
-                anchor to ReelProfilePolicy.captionMatchScore(postText, anchor.nearbyText)
-            }
-            .maxByOrNull { it.second }
-            ?.takeIf { (anchor, score) ->
-                score > 0 && ReelProfilePolicy.hasStrongCaptionMatch(postText, anchor.nearbyText)
-            }
-            ?.first
-        return (captionMatch ?: anchors.first()).yFraction
+        val matchIndex = ReelProfilePolicy.strongCaptionMatchIndex(
+            postText,
+            anchors.map(ProfilePostAnchor::nearbyText),
+        ) ?: return null
+        return anchors[matchIndex].yFraction
     }
 
     private fun findProfilePostMenuButton(
@@ -1115,6 +1147,47 @@ class ShopeeAccessibilityService : AccessibilityService() {
         return tapScreenPoint(width * POST_MENU_X_FRACTION, height * yFraction)
     }
 
+    private fun refreshProfileTimelineByGesture(): Boolean {
+        val width = resources.displayMetrics.widthPixels.toFloat()
+        val height = resources.displayMetrics.heightPixels.toFloat()
+        return swipeScreen(
+            startX = width * 0.50f,
+            startY = height * 0.30f,
+            endX = width * 0.50f,
+            endY = height * 0.72f,
+            durationMs = 450L,
+        )
+    }
+
+    private fun revealProfilePostsByGesture(): Boolean {
+        val width = resources.displayMetrics.widthPixels.toFloat()
+        val height = resources.displayMetrics.heightPixels.toFloat()
+        return swipeScreen(
+            startX = width * 0.50f,
+            startY = height * 0.78f,
+            endX = width * 0.50f,
+            endY = height * 0.42f,
+            durationMs = 360L,
+        )
+    }
+
+    private fun swipeScreen(
+        startX: Float,
+        startY: Float,
+        endX: Float,
+        endY: Float,
+        durationMs: Long,
+    ): Boolean {
+        val path = Path().apply {
+            moveTo(startX, startY)
+            lineTo(endX, endY)
+        }
+        val gesture = GestureDescription.Builder()
+            .addStroke(GestureDescription.StrokeDescription(path, 0, durationMs))
+            .build()
+        return dispatchGesture(gesture, null, null)
+    }
+
     private fun tapScreenPoint(x: Float, y: Float): Boolean {
         val path = Path().apply { moveTo(x, y) }
         val gesture = GestureDescription.Builder()
@@ -1223,12 +1296,17 @@ class ShopeeAccessibilityService : AccessibilityService() {
         private const val POST_MENU_SEMANTIC_TAP_LIMIT = 3
         private const val PROFILE_MENU_SEMANTIC_TAP_LIMIT = 3
         private const val PROFILE_MENU_FALLBACK_LIMIT = 2
-        private const val PROFILE_ALL_TAB_TAP_LIMIT = 2
+        private const val PROFILE_ALL_TAB_TAP_LIMIT = 1
+        private const val PROFILE_REFRESH_LIMIT = 1
+        private const val PROFILE_SEARCH_SCROLL_LIMIT = 2
+        private const val PROFILE_REOPEN_LIMIT = 2
         private const val AFFILIATE_PRODUCT_TAP_LIMIT = 3
         private const val EXACT_POST_FIRST_RETRY_MS = 1_200L
         private const val EXACT_POST_REOPEN_SETTLE_MS = 2_000L
         private const val EXACT_POST_FAIL_TIMEOUT_MS = 65_000L
         private const val PROFILE_FIRST_RETRY_MS = 1_200L
+        private const val PROFILE_REFRESH_START_MS = 2_500L
+        private const val PROFILE_SCROLL_START_MS = 4_500L
         private const val PROFILE_REOPEN_SETTLE_MS = 2_500L
         private const val PROFILE_POST_FAIL_TIMEOUT_MS = 65_000L
         private const val PROFILE_MENU_FAIL_TIMEOUT_MS = 35_000L
