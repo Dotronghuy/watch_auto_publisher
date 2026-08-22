@@ -59,4 +59,38 @@ class ReelProfilePolicyTest {
             ),
         )
     }
+
+    @Test
+    fun `three shared marketing words are not enough to identify a post`() {
+        assertFalse(
+            ReelProfilePolicy.hasStrongCaptionMatch(
+                "Trước cuộc họp chiếc đồng hồ có thể nói thay phong cách của bạn",
+                "1 phút · Chiếc đồng hồ phong cách hoàn toàn khác",
+            ),
+        )
+    }
+
+    @Test
+    fun `rejects another caption that only shares a generic opening`() {
+        assertFalse(
+            ReelProfilePolicy.hasStrongCaptionMatch(
+                "Một chiếc đồng hồ không chỉ để xem giờ mà còn thể hiện phong cách riêng",
+                "Một chiếc đồng hồ không chỉ để xem giờ nhưng đây là bài cũ khác",
+            ),
+        )
+    }
+
+    @Test
+    fun `rejects ambiguous duplicate captions instead of selecting the first card`() {
+        val postText = "Trước cuộc họp chiếc đồng hồ có thể nói thay phong cách của bạn"
+        assertNull(
+            ReelProfilePolicy.strongCaptionMatchIndex(
+                postText,
+                listOf(
+                    "Vừa xong · TRƯỚC CUỘC HỌP CHIẾC ĐỒNG HỒ CÓ THỂ NÓI THAY...",
+                    "1 ngày · TRƯỚC CUỘC HỌP CHIẾC ĐỒNG HỒ CÓ THỂ NÓI THAY...",
+                ),
+            ),
+        )
+    }
 }

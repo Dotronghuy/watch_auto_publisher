@@ -87,9 +87,10 @@ class ShopeeAccessibilityService : AccessibilityService() {
         val fallbackKey = "${active.job.id}:${active.job.attempt}"
         val staleProductUi = hasProductLinkSurface(root) || isReelOptionsMenuVisible(root)
         val homeFeed = looksLikeFacebookHomeFeed(root)
+        val boostPostUi = looksLikeBoostPostScreen(root)
         val currentTarget = exactPostReopenTargets[fallbackKey] ?: 0
 
-        if (!staleProductUi && !homeFeed && looksLikeExactPostDetail(root, active)) {
+        if (!staleProductUi && !homeFeed && !boostPostUi && looksLikeExactPostDetail(root, active)) {
             exactPostReopenTargets.remove(fallbackKey)
             exactPostLastLaunchAt.remove(fallbackKey)
             menuSemanticTapAttempts.remove(fallbackKey)
@@ -126,7 +127,9 @@ class ShopeeAccessibilityService : AccessibilityService() {
         val reason = when {
             staleProductUi -> "Facebook vẫn hiển thị menu/form của bài cũ"
             homeFeed -> "Facebook vẫn đang ở News Feed"
-            else -> "Facebook chưa hiển thị màn hình chi tiết đúng bài/Reel"
+            boostPostUi -> "Facebook mở nhầm màn Quảng bá bài viết"
+            active.job.postText.isBlank() -> "Job bài viết không có caption để xác minh"
+            else -> "Facebook chưa hiển thị bài có caption khớp chính xác"
         }
         failStepAfter(
             active,
@@ -255,6 +258,13 @@ class ShopeeAccessibilityService : AccessibilityService() {
         // OPEN_MENU is reachable only after OPEN_POST has verified the detail
         // screen. If Facebook jumps elsewhere, fail closed instead of reusing a
         // product surface that may belong to an older post.
+        if (looksLikeBoostPostScreen(root)) {
+            JobStore.restartNavigation(this)
+            performGlobalAction(GLOBAL_ACTION_BACK)
+            FacebookPostLauncher.launch(this, active.job)
+            scheduleNext(EXACT_POST_REOPEN_SETTLE_MS)
+            return
+        }
         if (hasProductLinkForm(root)) {
             JobStore.restartNavigation(this)
             FacebookPostLauncher.launch(this, active.job)
@@ -303,12 +313,23 @@ class ShopeeAccessibilityService : AccessibilityService() {
             return
         }
 
+        // Facebook may silently redirect an exact permalink to another post.
+        // Re-check identity immediately before every menu tap instead of trusting
+        // the detail screen that OPEN_POST saw a moment earlier.
+        if (!looksLikeExactPostDetail(root, active)) {
+            JobStore.restartNavigation(this)
+            FacebookPostLauncher.launch(this, active.job)
+            scheduleNext(EXACT_POST_REOPEN_SETTLE_MS)
+            return
+        }
+
         val semanticTapAttempts = menuSemanticTapAttempts[fallbackKey] ?: 0
         val fallbackTapAttempts = menuFallbackTapAttempts[fallbackKey] ?: 0
         val anchorYFraction = findPostHeaderAnchorYFraction(root)
         val tapTargets = postMenuTapTargets(anchorYFraction)
 
-        val button = findBestNode(root, POST_MENU_BUTTON_KEYWORDS)
+        val button = findPostMenuByGeometry(root, anchorYFraction)
+            ?: findBestNode(root, POST_MENU_BUTTON_KEYWORDS)
         if (button != null && semanticTapAttempts < POST_MENU_SEMANTIC_TAP_LIMIT) {
             // Facebook can report ACTION_CLICK as accepted without actually opening
             // the menu. Dispatch a real accessibility gesture at the detected node
@@ -807,7 +828,7 @@ class ShopeeAccessibilityService : AccessibilityService() {
         val height = resources.displayMetrics.heightPixels
         if (width <= 0 || height <= 0) return null
 
-        val anchors = nodes
+        val ageAnchors = nodes
             .asSequence()
             .filter { it.isVisibleToUser }
             .mapNotNull { node ->
@@ -830,46 +851,116 @@ class ShopeeAccessibilityService : AccessibilityService() {
                     return@mapNotNull null
                 }
 
-                val localTop = bounds.centerY() - height * 0.10f
-                val localBottom = bounds.centerY() + height * 0.25f
-                val nearbyText = nodes
-                    .asSequence()
-                    .filter { it.isVisibleToUser }
-                    .mapNotNull { nearby ->
-                        val nearbyBounds = Rect()
-                        nearby.getBoundsInScreen(nearbyBounds)
-                        val nearbyLabel = nodeLabel(nearby).trim()
-                        if (
-                            nearbyBounds.isEmpty
-                            || nearbyBounds.centerY().toFloat() !in localTop..localBottom
-                            || nearbyBounds.centerX() > width * 0.96f
-                            || nearbyLabel.isBlank()
-                            || nearbyLabel.length > 500
-                        ) {
-                            null
-                        } else {
-                            nearbyLabel
-                        }
-                    }
-                    .distinct()
-                    .take(24)
-                    .joinToString(" ")
-
-                ProfilePostAnchor(
-                    yFraction = bounds.centerY().toFloat() / height,
-                    nearbyText = nearbyText,
-                )
+                node to bounds.centerY().toFloat()
             }
-            .distinctBy { (it.yFraction * 100).toInt() }
-            .sortedBy(ProfilePostAnchor::yFraction)
+            .distinctBy { (_, centerY) -> (centerY / height * 100).toInt() }
+            .sortedBy { (_, centerY) -> centerY }
             .toList()
-        if (anchors.isEmpty()) return null
+        if (ageAnchors.isEmpty()) return null
+
+        val anchors = ageAnchors.mapIndexed { index, (ageNode, centerY) ->
+            // A caption above this header belongs to the preceding card. Reading
+            // above centerY paired one post's text with the next post's menu.
+            val bandTop = centerY - height * 0.01f
+            val nextHeaderY = ageAnchors.getOrNull(index + 1)?.second
+            val bandBottom = minOf(
+                nextHeaderY?.minus(height * 0.035f) ?: height * 0.98f,
+                height * 0.98f,
+            )
+            val bandText = nodes
+                .asSequence()
+                .filter { it.isVisibleToUser }
+                .mapNotNull { nearby ->
+                    val nearbyBounds = Rect()
+                    nearby.getBoundsInScreen(nearbyBounds)
+                    val nearbyLabel = nodeLabel(nearby).trim()
+                    if (
+                        nearbyBounds.isEmpty
+                        || nearbyBounds.centerY().toFloat() !in bandTop..bandBottom
+                        || nearbyBounds.centerX() > width * 0.96f
+                        || nearbyLabel.isBlank()
+                        || nearbyLabel.length > 500
+                    ) {
+                        null
+                    } else {
+                        nearbyLabel
+                    }
+                }
+                .distinct()
+                .take(24)
+                .joinToString(" ")
+            val cardText = isolatedProfileCardText(ageNode, centerY, width, height)
+
+            ProfilePostAnchor(
+                yFraction = centerY / height,
+                nearbyText = listOf(cardText, bandText)
+                    .filter { it.isNotBlank() }
+                    .distinct()
+                    .joinToString(" "),
+            )
+        }
 
         val matchIndex = ReelProfilePolicy.strongCaptionMatchIndex(
             postText,
             anchors.map(ProfilePostAnchor::nearbyText),
         ) ?: return null
         return anchors[matchIndex].yFraction
+    }
+
+    /**
+     * Finds the largest visible ancestor that still contains one post header.
+     * An ancestor containing two age labels spans multiple feed cards and cannot
+     * be used as identity evidence.
+     */
+    private fun isolatedProfileCardText(
+        ageNode: AccessibilityNodeInfo,
+        anchorY: Float,
+        width: Int,
+        height: Int,
+    ): String {
+        var current = ageNode.parent
+        var bestText = ""
+        repeat(PROFILE_CARD_ANCESTOR_LIMIT) {
+            val ancestor = current ?: return@repeat
+            val bounds = Rect()
+            ancestor.getBoundsInScreen(bounds)
+            val descendants = mutableListOf<AccessibilityNodeInfo>()
+            collectNodes(ancestor, descendants)
+            val agePositions = descendants
+                .asSequence()
+                .filter { it.isVisibleToUser }
+                .mapNotNull { node ->
+                    val label = nodeLabel(node).trim()
+                    if (label.length > 140 || !POST_AGE_PATTERN.containsMatchIn(label)) {
+                        return@mapNotNull null
+                    }
+                    val nodeBounds = Rect()
+                    node.getBoundsInScreen(nodeBounds)
+                    nodeBounds.centerY().takeUnless { nodeBounds.isEmpty }
+                }
+                .distinctBy { (it.toFloat() / height * 100).toInt() }
+                .toList()
+            if (agePositions.size != 1 || kotlin.math.abs(agePositions.first() - anchorY) > height * 0.04f) {
+                return@repeat
+            }
+
+            if (
+                !bounds.isEmpty
+                && bounds.width() >= width * 0.65f
+                && bounds.height() <= height * 0.85f
+            ) {
+                bestText = descendants
+                    .asSequence()
+                    .filter { it.isVisibleToUser }
+                    .map { nodeLabel(it).trim() }
+                    .filter { it.isNotBlank() && it.length <= 500 }
+                    .distinct()
+                    .take(40)
+                    .joinToString(" ")
+            }
+            current = ancestor.parent
+        }
+        return bestText
     }
 
     private fun findProfilePostMenuButton(
@@ -964,10 +1055,28 @@ class ShopeeAccessibilityService : AccessibilityService() {
         root: AccessibilityNodeInfo,
         active: ActiveJob,
     ): Boolean {
-        return looksLikeRegularPostDetail(root)
+        if (!looksLikeRegularPostDetail(root) || active.job.postText.isBlank()) return false
+        return ReelProfilePolicy.hasStrongCaptionMatch(
+            active.job.postText,
+            collectVisibleScreenText(root),
+        )
+    }
+
+    private fun collectVisibleScreenText(root: AccessibilityNodeInfo): String {
+        val nodes = mutableListOf<AccessibilityNodeInfo>()
+        collectNodes(root, nodes)
+        return nodes
+            .asSequence()
+            .filter { it.isVisibleToUser }
+            .map { nodeLabel(it).trim() }
+            .filter { it.isNotBlank() && it.length <= 1_000 }
+            .distinct()
+            .take(120)
+            .joinToString(" ")
     }
 
     private fun looksLikeRegularPostDetail(root: AccessibilityNodeInfo): Boolean {
+        if (looksLikeBoostPostScreen(root)) return false
 
         val hasPostAge = findPostHeaderAnchorYFraction(root) != null
         if (!hasPostAge) return false
@@ -983,6 +1092,12 @@ class ShopeeAccessibilityService : AccessibilityService() {
             visibleOnly = true,
         ) != null
         return hasCommentComposer || hasPostMenu
+    }
+
+    private fun looksLikeBoostPostScreen(root: AccessibilityNodeInfo): Boolean {
+        val title = findBestNode(root, BOOST_POST_SCREEN_TITLES, visibleOnly = true)
+        val action = findBestNode(root, BOOST_POST_SCREEN_ACTIONS, visibleOnly = true)
+        return title != null && action != null
     }
 
     private fun looksLikeFacebookHomeFeed(root: AccessibilityNodeInfo): Boolean {
@@ -1025,14 +1140,10 @@ class ShopeeAccessibilityService : AccessibilityService() {
     }
 
     private fun postMenuTapTargets(anchorYFraction: Float?): List<Float> {
-        val targets = mutableListOf<Float>()
-        if (anchorYFraction != null) {
-            listOf(-0.035f, 0f, 0.035f, 0.07f).forEach { offset ->
-                targets += (anchorYFraction + offset).coerceIn(0.12f, 0.48f)
-            }
-        }
-        targets += MENU_TAP_Y_FRACTIONS.toList()
-        return targets.distinctBy { (it * 1000).toInt() }
+        if (anchorYFraction == null) return emptyList()
+        return listOf(-0.025f, 0f, 0.025f)
+            .map { offset -> (anchorYFraction + offset).coerceIn(0.12f, 0.48f) }
+            .distinctBy { (it * 1000).toInt() }
     }
 
     private fun findPostMenuByGeometry(
@@ -1296,6 +1407,7 @@ class ShopeeAccessibilityService : AccessibilityService() {
         private const val POST_MENU_SEMANTIC_TAP_LIMIT = 3
         private const val PROFILE_MENU_SEMANTIC_TAP_LIMIT = 3
         private const val PROFILE_MENU_FALLBACK_LIMIT = 2
+        private const val PROFILE_CARD_ANCESTOR_LIMIT = 8
         private const val PROFILE_ALL_TAB_TAP_LIMIT = 1
         private const val PROFILE_REFRESH_LIMIT = 1
         private const val PROFILE_SEARCH_SCROLL_LIMIT = 2
@@ -1315,8 +1427,6 @@ class ShopeeAccessibilityService : AccessibilityService() {
         private const val EVENT_SETTLE_MS = 600L
         private const val ROOT_RETRY_MS = 500L
         private const val POST_MENU_X_FRACTION = 0.936f
-        private val MENU_TAP_Y_FRACTIONS =
-            floatArrayOf(0.16f, 0.20f, 0.24f, 0.28f, 0.32f, 0.36f, 0.40f)
         private val PROFILE_ALL_TAB_LABELS = listOf("Tất cả", "All")
         private val PROFILE_PHOTOS_TAB_LABELS = listOf("Ảnh", "Photos")
         private val PROFILE_REELS_TAB_LABELS = listOf("Reels")
@@ -1384,6 +1494,10 @@ class ShopeeAccessibilityService : AccessibilityService() {
         private val POST_MENU_EXCLUDED_LABELS = listOf(
             "tìm kiếm",
             "search",
+            "quảng cáo",
+            "quảng bá",
+            "boost post",
+            "promote post",
             "quay lại",
             "back",
             "đóng",
@@ -1393,6 +1507,17 @@ class ShopeeAccessibilityService : AccessibilityService() {
             "notification",
             "chia sẻ",
             "share",
+        )
+        private val BOOST_POST_SCREEN_TITLES = listOf(
+            "Quảng bá bài viết",
+            "Boost post",
+            "Promote post",
+        )
+        private val BOOST_POST_SCREEN_ACTIONS = listOf(
+            "Quảng cáo bài viết ngay",
+            "Bắt đầu xác thực",
+            "Boost post now",
+            "Start verification",
         )
     }
 }
