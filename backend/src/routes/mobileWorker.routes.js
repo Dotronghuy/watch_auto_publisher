@@ -14,12 +14,18 @@ import { getPostMetricById } from '../utils/history.js';
 const router = express.Router();
 
 export const mobileJobContentType = (job, metric) => {
+  const storedType = String(job?.contentType || '').trim().toLowerCase();
+  if (['reel', 'reels', 'video'].includes(storedType)) return 'reel';
   const platform = String(metric?.platform || '').trim().toLowerCase();
   if (platform.includes('reel')) return 'reel';
   return /\/(?:reel|reels|videos|watch)\/|watch\?v=|video\.php|fb\.watch\//i.test(
     String(job?.postUrl || ''),
   ) ? 'reel' : 'post';
 };
+
+export const mobileJobPostText = (job, metric) => (
+  String(job?.postText || '').trim() || String(metric?.content || '').trim()
+);
 
 const safeEqual = (left, right) => {
   const leftBuffer = Buffer.from(String(left || ''));
@@ -70,7 +76,7 @@ router.get('/jobs/next', verifyWorkerToken, async (req, res, next) => {
     res.json({
       job: {
         ...job,
-        postText: String(metric?.content || ''),
+        postText: mobileJobPostText(job, metric),
         contentType: mobileJobContentType(job, metric),
       },
     });

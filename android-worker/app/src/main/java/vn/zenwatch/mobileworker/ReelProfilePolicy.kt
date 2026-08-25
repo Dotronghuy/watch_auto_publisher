@@ -14,8 +14,14 @@ object ReelProfilePolicy {
     fun pageIdFromPostId(postId: String): String? =
         compositePostId.matchEntire(postId.trim())?.groupValues?.get(1)
 
-    fun profileAppUri(postId: String): String? = pageIdFromPostId(postId)?.let { pageId ->
-        "fb://page/$pageId"
+    /**
+     * Opens the Page's post timeline, not Facebook's resumable native Reel surface.
+     * Facebook can restore the last selected Reel when launched with fb://page/...
+     * whereas sk=posts explicitly requests the Page feed where uploaded videos are
+     * rendered as ordinary Page cards with their caption and three-dot menu.
+     */
+    fun pagePostsUrl(postId: String): String? = pageIdFromPostId(postId)?.let { pageId ->
+        "https://www.facebook.com/profile.php?id=$pageId&sk=posts"
     }
 
     /**

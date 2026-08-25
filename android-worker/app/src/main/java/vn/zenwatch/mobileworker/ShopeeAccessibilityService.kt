@@ -80,7 +80,7 @@ class ShopeeAccessibilityService : AccessibilityService() {
     /** Safety gate before any post menu or product form is touched. */
     private fun openExactPost(root: AccessibilityNodeInfo, active: ActiveJob) {
         if (isVideoJob(active)) {
-            openLatestReelOnProfile(root, active)
+            openLatestVideoOnPage(root, active)
             return
         }
 
@@ -139,19 +139,20 @@ class ShopeeAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * Reel-only navigation: stay on the Page profile, locate the newly published
-     * card in the All tab, then hand its header position to OPEN_MENU. The caption
+     * Video-only navigation: stay on the Page Posts timeline, locate the newly
+     * published video card, then hand its header position to OPEN_MENU. The caption
      * from the backend is mandatory identity evidence: there is no topmost-card or
      * generic-Reels fallback.
      */
-    private fun openLatestReelOnProfile(root: AccessibilityNodeInfo, active: ActiveJob) {
+    private fun openLatestVideoOnPage(root: AccessibilityNodeInfo, active: ActiveJob) {
         val fallbackKey = "${active.job.id}:${active.job.attempt}"
         val staleProductUi = hasProductLinkSurface(root) || isReelOptionsMenuVisible(root)
         val profileTimeline = !staleProductUi && looksLikeProfileTimeline(root)
-        val anchorY = if (profileTimeline) {
-            findProfilePostAnchorY(root, active.job.postText)
-        } else {
-            null
+        val anchorY = when {
+            staleProductUi -> null
+            profileTimeline -> findProfilePostAnchorY(root, active.job.postText)
+                ?: findVerifiedSinglePostAnchorY(root, active.job.postText)
+            else -> findVerifiedSinglePostAnchorY(root, active.job.postText)
         }
 
         if (anchorY != null) {
@@ -244,8 +245,8 @@ class ShopeeAccessibilityService : AccessibilityService() {
         val reason = when {
             staleProductUi -> "Facebook vẫn hiển thị menu/form của bài cũ"
             !looksLikeProfileTimeline(root) -> "Facebook chưa mở đúng profile/Page ở tab Tất cả"
-            active.job.postText.isBlank() -> "Job Reels không có caption để xác nhận đúng bài"
-            else -> "Không tìm thấy thẻ bài có caption khớp đúng Reels vừa đăng"
+            active.job.postText.isBlank() -> "Job video không có caption để xác nhận đúng bài"
+            else -> "Không tìm thấy thẻ bài video có caption khớp đúng bài vừa đăng trên Page"
         }
         failStepAfter(
             active,
@@ -309,7 +310,7 @@ class ShopeeAccessibilityService : AccessibilityService() {
         }
 
         if (isVideoJob(active)) {
-            openReelProfilePostMenu(root, active, fallbackKey)
+            openPageVideoPostMenu(root, active, fallbackKey)
             return
         }
 
@@ -379,19 +380,17 @@ class ShopeeAccessibilityService : AccessibilityService() {
         )
     }
 
-    private fun openReelProfilePostMenu(
+    private fun openPageVideoPostMenu(
         root: AccessibilityNodeInfo,
         active: ActiveJob,
         fallbackKey: String,
     ) {
-        if (!looksLikeProfileTimeline(root)) {
-            JobStore.restartNavigation(this)
-            FacebookPostLauncher.launch(this, active.job)
-            scheduleNext(PROFILE_REOPEN_SETTLE_MS)
-            return
+        val anchorY = if (looksLikeProfileTimeline(root)) {
+            findProfilePostAnchorY(root, active.job.postText)
+                ?: findVerifiedSinglePostAnchorY(root, active.job.postText)
+        } else {
+            findVerifiedSinglePostAnchorY(root, active.job.postText)
         }
-
-        val anchorY = findProfilePostAnchorY(root, active.job.postText)
         if (anchorY == null) {
             JobStore.restartNavigation(this)
             FacebookPostLauncher.launch(this, active.job)
@@ -425,7 +424,7 @@ class ShopeeAccessibilityService : AccessibilityService() {
         failStepAfter(
             active,
             PROFILE_MENU_FAIL_TIMEOUT_MS,
-            "Không tìm thấy dấu ba chấm của đúng bài Reels khớp caption trên profile. ${postMenuDiagnostics(root)}",
+            "Không tìm thấy dấu ba chấm của đúng bài video khớp caption trên Page. ${postMenuDiagnostics(root)}",
         )
     }
 
@@ -725,13 +724,13 @@ class ShopeeAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun findPostHeaderAnchorYFraction(root: AccessibilityNodeInfo): Float? {
+    private fun visiblePostHeaderAnchorYFractions(root: AccessibilityNodeInfo): List<Float> {
         val nodes = mutableListOf<AccessibilityNodeInfo>()
         collectNodes(root, nodes)
 
         val width = resources.displayMetrics.widthPixels
         val height = resources.displayMetrics.heightPixels
-        if (width <= 0 || height <= 0) return null
+        if (width <= 0 || height <= 0) return emptyList()
 
         return nodes
             .asSequence()
@@ -762,7 +761,28 @@ class ShopeeAccessibilityService : AccessibilityService() {
                     bounds.centerY().toFloat() / height
                 }
             }
-            .minOrNull()
+            .distinctBy { (it * 1_000).toInt() }
+            .sorted()
+            .toList()
+    }
+
+    private fun findPostHeaderAnchorYFraction(root: AccessibilityNodeInfo): Float? =
+        visiblePostHeaderAnchorYFractions(root).firstOrNull()
+
+    /**
+     * Facebook can open a Page directly at its newest post with the profile tabs
+     * scrolled off-screen. Accept that surface only when one post header is visible
+     * and the screen contains the deterministic caption fingerprint for this job.
+     */
+    private fun findVerifiedSinglePostAnchorY(
+        root: AccessibilityNodeInfo,
+        postText: String,
+    ): Float? {
+        if (postText.isBlank()) return null
+        val anchorY = visiblePostHeaderAnchorYFractions(root).singleOrNull() ?: return null
+        return anchorY.takeIf {
+            ReelProfilePolicy.hasStrongCaptionMatch(postText, collectVisibleScreenText(root))
+        }
     }
 
     private data class ProfilePostAnchor(
@@ -1013,7 +1033,7 @@ class ShopeeAccessibilityService : AccessibilityService() {
     }
 
     private fun isVideoJob(active: ActiveJob): Boolean =
-        FacebookPostLauncher.isReelJob(active.job)
+        FacebookPostLauncher.isPageVideoJob(active.job)
 
     private fun hasProductLinkForm(root: AccessibilityNodeInfo): Boolean {
         val inputs = findEditableNodes(root)

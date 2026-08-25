@@ -7,9 +7,9 @@ import android.net.Uri
 /**
  * Opens the Facebook surface required by a mobile-link job.
  *
- * Reel jobs have exactly one navigation route: the owning Page's native profile
- * URI. The worker identifies the published card there and must never enter
- * Facebook's generic full-screen Reels viewer. Non-Reel posts keep their exact
+ * Video jobs have exactly one navigation route: the owning Page's Posts timeline.
+ * The worker identifies the published video card there and must never enter
+ * Facebook's generic full-screen Reels viewer. Non-video posts keep their exact
  * permalink fallbacks.
  */
 object FacebookPostLauncher {
@@ -40,13 +40,13 @@ object FacebookPostLauncher {
 
     private fun targetUris(job: MobileLinkJob): List<Uri> {
         val graphPermalink = httpsUri(job.postUrl)
-        val reelJob = isReelJob(job)
+        val videoJob = isPageVideoJob(job)
         val composite = compositeParts(job.postId)
-        if (reelJob) {
+        if (videoJob) {
             // Fail closed for legacy video-only IDs: without pageId there is no
-            // safe profile to open, and a generic Reel/profile route can select
-            // unrelated content.
-            return ReelProfilePolicy.profileAppUri(job.postId)
+            // safe Page timeline to open. Never fall back to /reel, /videos or
+            // /watch because those routes can expose unrelated creator videos.
+            return ReelProfilePolicy.pagePostsUrl(job.postId)
                 ?.let(Uri::parse)
                 ?.let { uri -> listOf(uri) }
                 .orEmpty()
@@ -78,7 +78,7 @@ object FacebookPostLauncher {
         ).distinctBy(Uri::toString)
     }
 
-    fun isReelJob(job: MobileLinkJob): Boolean = job.contentType == "reel"
+    fun isPageVideoJob(job: MobileLinkJob): Boolean = job.contentType == "reel"
 
     private fun compositeParts(postId: String): Pair<String, String>? {
         val match = compositePostId.matchEntire(postId.trim()) ?: return null

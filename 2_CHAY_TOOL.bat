@@ -64,6 +64,25 @@ echo [2/6] Dang kiem tra thu vien...
 if not exist "node_modules\concurrently\package.json" call npm install
 if not exist "backend\node_modules\playwright\package.json" call npm --prefix backend install
 if not exist "frontend\node_modules\vite\package.json" call npm --prefix frontend install
+
+:: Code moi co the bo sung cot SQLite/Prisma. Luon dong bo schema sau git pull
+:: de Backend va Mobile Gateway cung doc dung caption da luu trong job.
+pushd backend
+call npx prisma generate
+if errorlevel 1 (
+    popd
+    echo    [LOI] Khong the tao Prisma Client theo schema moi.
+    pause
+    exit /b 1
+)
+call npx prisma db push --skip-generate
+if errorlevel 1 (
+    popd
+    echo    [LOI] Khong the dong bo database cho Mobile Worker.
+    pause
+    exit /b 1
+)
+popd
 echo    [OK] Thu vien da san sang.
 
 :: ============================================

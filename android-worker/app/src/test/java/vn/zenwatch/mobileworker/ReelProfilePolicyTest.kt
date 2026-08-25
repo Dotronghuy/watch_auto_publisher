@@ -8,16 +8,27 @@ import org.junit.Test
 
 class ReelProfilePolicyTest {
     @Test
-    fun `builds one native Page profile URI from a composite Facebook post ID`() {
+    fun `builds the Page Posts timeline URL from a composite Facebook post ID`() {
         assertEquals(
-            "fb://page/101788945134600",
-            ReelProfilePolicy.profileAppUri("101788945134600_1498447018965401"),
+            "https://www.facebook.com/profile.php?id=101788945134600&sk=posts",
+            ReelProfilePolicy.pagePostsUrl("101788945134600_1498447018965401"),
         )
     }
 
     @Test
+    fun `video navigation URL never points at a generic Facebook video surface`() {
+        val target = ReelProfilePolicy.pagePostsUrl("101788945134600_1498447018965401")
+            .orEmpty()
+            .lowercase()
+        assertFalse(target.contains("/reel"))
+        assertFalse(target.contains("/videos"))
+        assertFalse(target.contains("/watch"))
+        assertTrue(target.contains("sk=posts"))
+    }
+
+    @Test
     fun `does not invent a page ID for a legacy video-only job`() {
-        assertNull(ReelProfilePolicy.profileAppUri("1498447018965401"))
+        assertNull(ReelProfilePolicy.pagePostsUrl("1498447018965401"))
     }
 
     @Test

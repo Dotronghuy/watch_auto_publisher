@@ -172,13 +172,24 @@ export const getPostMetricById = async (postId) => {
   const normalizedPostId = String(postId || '').trim();
   if (!normalizedPostId) return null;
 
+  const numericMatch = normalizedPostId.match(/^(?:\d+_)?(\d+)$/);
+  const objectId = numericMatch?.[1] || normalizedPostId;
+  const compositeSuffix = numericMatch ? `%\\_${objectId}` : normalizedPostId;
+
   try {
     const rows = await runQuery(
       `SELECT post_id, platform, sku, content, timestamp, account_id
        FROM post_metrics
        WHERE post_id = ?
+          OR post_id = ?
+          OR post_id LIKE ? ESCAPE '\\'
+       ORDER BY CASE
+         WHEN post_id = ? THEN 0
+         WHEN post_id = ? THEN 1
+         ELSE 2
+       END, timestamp DESC
        LIMIT 1`,
-      [normalizedPostId],
+      [normalizedPostId, objectId, compositeSuffix, normalizedPostId, objectId],
     );
     return rows[0] || null;
   } catch (error) {

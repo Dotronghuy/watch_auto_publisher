@@ -107,14 +107,19 @@ export const enqueueMobileLinkJob = async ({
   postUrl,
   shopeeUrl,
   linkName = 'Mua ở đây',
+  postText = '',
   force = false,
   contentType = 'post',
 }) => {
   const normalizedPostId = normalizeText(postId);
   const normalizedShopeeUrl = normalizeText(shopeeUrl);
+  const normalizedPostText = normalizeText(postText);
+  const normalizedContentType = normalizeContentType(contentType);
 
   if (!normalizedPostId) throw new Error('postId is required');
-  const normalizedPostUrl = normalizeFacebookPostUrl(postUrl, normalizedPostId, { contentType });
+  const normalizedPostUrl = normalizeFacebookPostUrl(postUrl, normalizedPostId, {
+    contentType: normalizedContentType,
+  });
   if (!normalizedPostUrl) throw new Error('postUrl is required');
   if (!/^https:\/\//i.test(normalizedPostUrl)) throw new Error('postUrl must use HTTPS');
   if (!isAllowedShopeeUrl(normalizedShopeeUrl)) {
@@ -126,7 +131,18 @@ export const enqueueMobileLinkJob = async ({
   });
 
   if (!force && existing && ['PENDING', 'PROCESSING', 'SUCCEEDED'].includes(existing.status)) {
-    return existing;
+    const shouldRepairContext = (
+      (normalizedPostText && !normalizeText(existing.postText))
+      || existing.contentType !== normalizedContentType
+    );
+    if (!shouldRepairContext) return existing;
+    return prisma.mobileLinkJob.update({
+      where: { id: existing.id },
+      data: {
+        postText: normalizedPostText || existing.postText,
+        contentType: normalizedContentType,
+      },
+    });
   }
 
   if (existing) {
@@ -136,6 +152,8 @@ export const enqueueMobileLinkJob = async ({
         postUrl: normalizedPostUrl,
         shopeeUrl: normalizedShopeeUrl,
         linkName: normalizeText(linkName) || 'Mua ở đây',
+        postText: normalizedPostText || existing.postText,
+        contentType: normalizedContentType,
         status: 'PENDING',
         deviceId: null,
         claimedAt: null,
@@ -153,6 +171,8 @@ export const enqueueMobileLinkJob = async ({
       postUrl: normalizedPostUrl,
       shopeeUrl: normalizedShopeeUrl,
       linkName: normalizeText(linkName) || 'Mua ở đây',
+      postText: normalizedPostText || null,
+      contentType: normalizedContentType,
     },
   });
 };

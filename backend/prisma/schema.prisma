@@ -102,6 +102,8 @@ model MobileLinkJob {
   postUrl        String
   shopeeUrl      String
   linkName       String    @default("Mua ở đây")
+  postText       String?
+  contentType    String    @default("post")
   status         String    @default("PENDING")
   deviceId       String?
   attempt        Int       @default(0)

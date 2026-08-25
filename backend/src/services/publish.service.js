@@ -1990,6 +1990,7 @@ export const autoPublishRoutine = async (retryContext = null, runOptions = {}) =
                       sku: selectedSku.name,
                       productInfo,
                       contentType: 'reel',
+                      postText: postContent,
                     });
                   } catch (linkError) {
                     console.error('Lỗi khi xếp hàng tác vụ Android Worker cho video/Reels:', linkError);
@@ -2070,6 +2071,7 @@ export const autoPublishRoutine = async (retryContext = null, runOptions = {}) =
                       pageToken,
                       sku: selectedSku.name,
                       productInfo,
+                      postText: postContent,
                     });
                   } catch (e) {
                     console.error('Lỗi khi xếp hàng tác vụ Android Worker:', e);
@@ -2164,6 +2166,7 @@ export const autoPublishRoutine = async (retryContext = null, runOptions = {}) =
                       pageToken,
                       sku: selectedSku.name,
                       productInfo,
+                      postText: postContent,
                     });
                   } catch (e) {
                     console.error('Lỗi khi xếp hàng tác vụ Android Worker:', e);
@@ -2345,7 +2348,7 @@ export async function dispatchShopeeLinkMobile(
   postId,
   shopeeLinkToAttach,
   pageToken,
-  { contentType = 'post' } = {},
+  { contentType = 'post', postText = '' } = {},
 ) {
   const mode = String(process.env.MOBILE_SHOPEE_LINK_MODE || 'android_worker')
     .trim()
@@ -2362,6 +2365,7 @@ export async function dispatchShopeeLinkMobile(
     postUrl,
     shopeeUrl: shopeeLinkToAttach,
     linkName: process.env.MOBILE_SHOPEE_LINK_NAME || 'Mua ở đây',
+    postText,
     contentType,
   });
 
@@ -2379,6 +2383,7 @@ async function dispatchShopeeLinkForProduct({
   sku,
   productInfo,
   contentType = 'post',
+  postText = '',
 }) {
   const normalizedSku = String(sku || '').trim();
   // The Shopee URL is commonly edited after the product cache has already been
@@ -2412,5 +2417,8 @@ async function dispatchShopeeLinkForProduct({
     'typing',
     'Facebook',
   );
-  return dispatchShopeeLinkMobile(postId, shopeeLinkToAttach, pageToken, { contentType });
+  return dispatchShopeeLinkMobile(postId, shopeeLinkToAttach, pageToken, {
+    contentType,
+    postText,
+  });
 }
