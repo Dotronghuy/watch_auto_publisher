@@ -25,18 +25,16 @@ Bài viết/ảnh thường vẫn mở bằng permalink chính xác như trướ
 
 ## Kết nối HTTPS ổn định bằng Tailscale Funnel
 
-Tailscale được cài trên máy Windows chạy backend. Sau khi đăng nhập một lần, mở PowerShell
-bằng quyền Administrator và chạy:
+Tailscale được cài và đăng nhập một lần trên máy Windows chạy backend. Khi vận hành bình
+thường, chỉ mở file sau ở thư mục gốc dự án:
 
 ```powershell
-cd backend
-npm.cmd run start:mobile-worker-stack
-npm.cmd run start:mobile-worker-funnel
+2_CHAY_TOOL.bat
 ```
 
-Funnel chuyển tiếp địa chỉ HTTPS cố định `https://<máy>.<tailnet>.ts.net` tới cổng gateway
-chỉ dành cho Mobile Worker tại `http://127.0.0.1:3100`. Tùy chọn `--bg` được lưu trong
-dịch vụ Tailscale và tự hoạt động lại sau khi Windows khởi động.
+File này khởi động đúng một bộ Redis, Mobile Worker Gateway, Tailscale Funnel, backend và
+frontend. Funnel chuyển tiếp địa chỉ HTTPS cố định `https://<máy>.<tailnet>.ts.net` tới
+gateway tại `http://127.0.0.1:3100`.
 
 Ghi URL cố định vào `MOBILE_WORKER_BASE_URL` trong `backend/.env`, sau đó chạy:
 
@@ -85,6 +83,15 @@ APK debug được tạo tại:
 ```text
 app/build/outputs/apk/debug/app-debug.apk
 ```
+
+Bản đã kiểm thử để cài lên điện thoại hiện nằm tại:
+
+```text
+dist/ZenWatch-Link-Worker-v0.4.0-canonical-flow-debug.apk
+```
+
+Chỉ dùng bản `0.4.0`; các APK cũ không còn tương thích với hợp đồng `jobId + attempt`
+và bằng chứng xác nhận lưu link của backend hiện tại.
 
 ## Cấu hình backend
 

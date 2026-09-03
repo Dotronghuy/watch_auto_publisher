@@ -16,9 +16,9 @@ class ShopeeAccessibilityService : AccessibilityService() {
     private val menuSemanticTapAttempts = mutableMapOf<String, Int>()
     private val menuFallbackTapAttempts = mutableMapOf<String, Int>()
     private val menuTapDispatched = mutableSetOf<String>()
-    private val linkManagerTapAttempts = mutableMapOf<String, Int>()
+    private val linkManagerNavigationProof = mutableSetOf<String>()
     private val affiliateProductTapAttempts = mutableMapOf<String, Int>()
-    private val saveFallbackAttempts = mutableSetOf<String>()
+    private val saveRetryAttempts = mutableSetOf<String>()
     private val exactPostReopenTargets = mutableMapOf<String, Int>()
     private val exactPostLastLaunchAt = mutableMapOf<String, Long>()
     private val reelProfileAllTabAttempts = mutableMapOf<String, Int>()
@@ -38,12 +38,36 @@ class ShopeeAccessibilityService : AccessibilityService() {
 
     override fun onServiceConnected() {
         super.onServiceConnected()
+        clearAttemptState()
+        JobStore.load(this)?.let { active ->
+            if (active.step != AutomationStep.REPORTING) {
+                JobStore.restartNavigation(this)
+                FacebookPostLauncher.launch(this, active.job)
+            }
+        }
         handler.postDelayed(processRunnable, EVENT_SETTLE_MS)
     }
 
     override fun onDestroy() {
         handler.removeCallbacks(processRunnable)
+        clearAttemptState()
         super.onDestroy()
+    }
+
+    private fun clearAttemptState() {
+        menuSemanticTapAttempts.clear()
+        menuFallbackTapAttempts.clear()
+        menuTapDispatched.clear()
+        linkManagerNavigationProof.clear()
+        affiliateProductTapAttempts.clear()
+        saveRetryAttempts.clear()
+        exactPostReopenTargets.clear()
+        exactPostLastLaunchAt.clear()
+        reelProfileAllTabAttempts.clear()
+        reelProfileRefreshAttempts.clear()
+        reelProfileScrollAttempts.clear()
+        reelProfileReopenAttempts.clear()
+        reelProfileLastLaunchAt.clear()
     }
 
     private fun processCurrentStep() {
@@ -96,7 +120,9 @@ class ShopeeAccessibilityService : AccessibilityService() {
             menuSemanticTapAttempts.remove(fallbackKey)
             menuFallbackTapAttempts.remove(fallbackKey)
             menuTapDispatched.remove(fallbackKey)
-            linkManagerTapAttempts.remove(fallbackKey)
+            linkManagerNavigationProof.remove(fallbackKey)
+            affiliateProductTapAttempts.remove("$fallbackKey:affiliate-product")
+            saveRetryAttempts.remove("$fallbackKey:verify-save")
             JobStore.setStep(this, AutomationStep.OPEN_MENU)
             scheduleNext(350)
             return
@@ -148,11 +174,10 @@ class ShopeeAccessibilityService : AccessibilityService() {
         val fallbackKey = "${active.job.id}:${active.job.attempt}"
         val staleProductUi = hasProductLinkSurface(root) || isReelOptionsMenuVisible(root)
         val profileTimeline = !staleProductUi && looksLikeProfileTimeline(root)
-        val anchorY = when {
-            staleProductUi -> null
-            profileTimeline -> findProfilePostAnchorY(root, active.job.postText)
-                ?: findVerifiedSinglePostAnchorY(root, active.job.postText)
-            else -> findVerifiedSinglePostAnchorY(root, active.job.postText)
+        val anchorY = if (profileTimeline) {
+            findProfilePostAnchorY(root, active.job.postText)
+        } else {
+            null
         }
 
         if (anchorY != null) {
@@ -164,7 +189,9 @@ class ShopeeAccessibilityService : AccessibilityService() {
             menuSemanticTapAttempts.remove(fallbackKey)
             menuFallbackTapAttempts.remove(fallbackKey)
             menuTapDispatched.remove(fallbackKey)
-            linkManagerTapAttempts.remove(fallbackKey)
+            linkManagerNavigationProof.remove(fallbackKey)
+            affiliateProductTapAttempts.remove("$fallbackKey:affiliate-product")
+            saveRetryAttempts.remove("$fallbackKey:verify-save")
             JobStore.setStep(this, AutomationStep.OPEN_MENU)
             scheduleNext(350)
             return
@@ -387,9 +414,8 @@ class ShopeeAccessibilityService : AccessibilityService() {
     ) {
         val anchorY = if (looksLikeProfileTimeline(root)) {
             findProfilePostAnchorY(root, active.job.postText)
-                ?: findVerifiedSinglePostAnchorY(root, active.job.postText)
         } else {
-            findVerifiedSinglePostAnchorY(root, active.job.postText)
+            null
         }
         if (anchorY == null) {
             JobStore.restartNavigation(this)
@@ -430,13 +456,11 @@ class ShopeeAccessibilityService : AccessibilityService() {
 
     private fun openLinkManager(root: AccessibilityNodeInfo, active: ActiveJob) {
         val navigationKey = "${active.job.id}:${active.job.attempt}"
-        val urlFormAlreadyVisible = findEditableNodes(root).any {
-            nodeLabel(it).contains("url", ignoreCase = true)
-        }
+        val urlFormAlreadyVisible = hasProductLinkForm(root)
         if (urlFormAlreadyVisible) {
             // A URL form left open by an older job is not evidence that this job
             // opened its own product manager. Never paste a new SKU into it.
-            if ((linkManagerTapAttempts[navigationKey] ?: 0) <= 0) {
+            if (navigationKey !in linkManagerNavigationProof) {
                 JobStore.restartNavigation(this)
                 FacebookPostLauncher.launch(this, active.job)
                 scheduleNext(EXACT_POST_REOPEN_SETTLE_MS)
@@ -463,6 +487,7 @@ class ShopeeAccessibilityService : AccessibilityService() {
             val gestureDispatched = tapNodeByGesture(affiliateProductButton)
             val clicked = if (!gestureDispatched) click(affiliateProductButton) else false
             if (gestureDispatched || clicked) {
+                linkManagerNavigationProof.add(navigationKey)
                 scheduleNext(1_200)
                 return
             }
@@ -485,11 +510,16 @@ class ShopeeAccessibilityService : AccessibilityService() {
             if (elapsedInStep(active) >= 1_500 && attempts < AFFILIATE_PRODUCT_TAP_LIMIT) {
                 affiliateProductTapAttempts[fallbackKey] = attempts + 1
                 if (tapAffiliateProductRowByGesture()) {
+                    linkManagerNavigationProof.add(navigationKey)
                     scheduleNext(1_500)
                     return
                 }
             }
-            scheduleNext(1_200)
+            failStepAfter(
+                active,
+                40_000,
+                "Không mở được mục Thêm sản phẩm liên kết tiếp thị",
+            )
             return
         }
 
@@ -510,8 +540,7 @@ class ShopeeAccessibilityService : AccessibilityService() {
             val gestureDispatched = tapNodeByGesture(linkManagerButton)
             val clicked = if (!gestureDispatched) click(linkManagerButton) else false
             if (gestureDispatched || clicked) {
-                linkManagerTapAttempts[navigationKey] =
-                    (linkManagerTapAttempts[navigationKey] ?: 0) + 1
+                linkManagerNavigationProof.add(navigationKey)
                 scheduleNext(1_200)
                 return
             }
@@ -527,13 +556,20 @@ class ShopeeAccessibilityService : AccessibilityService() {
     private fun fillUrl(root: AccessibilityNodeInfo, active: ActiveJob) {
         val inputs = findEditableNodes(root)
         val urlInput = inputs.firstOrNull { nodeLabel(it).contains("url", ignoreCase = true) }
-            ?: inputs.firstOrNull()
-        if (urlInput != null && setText(urlInput, active.job.shopeeUrl)) {
-            JobStore.setStep(this, AutomationStep.FILL_NAME)
-            scheduleNext(800)
+        if (urlInput == null) {
+            failStepAfter(active, 20_000, "Không tìm thấy đúng ô URL")
             return
         }
-        failStepAfter(active, 20_000, "Không tìm thấy ô URL")
+        if (fieldContainsExpectedValue(urlInput, active.job.shopeeUrl)) {
+            JobStore.setStep(this, AutomationStep.FILL_NAME)
+            scheduleNext(350)
+            return
+        }
+        if (setText(urlInput, active.job.shopeeUrl)) {
+            scheduleNext(600)
+            return
+        }
+        failStepAfter(active, 20_000, "Không nhập hoặc xác nhận được URL Shopee")
     }
 
     private fun fillName(root: AccessibilityNodeInfo, active: ActiveJob) {
@@ -542,32 +578,34 @@ class ShopeeAccessibilityService : AccessibilityService() {
             val label = nodeLabel(it)
             label.contains("Tên liên kết", ignoreCase = true)
                 || label.contains("Link name", ignoreCase = true)
-        } ?: inputs.firstOrNull {
-            it.text?.toString() != active.job.shopeeUrl
-                && !nodeLabel(it).contains("url", ignoreCase = true)
         }
 
-        if (nameInput == null || setText(nameInput, active.job.linkName)) {
+        if (nameInput == null) {
+            failStepAfter(active, 15_000, "Không tìm thấy đúng ô Tên liên kết")
+            return
+        }
+        if (fieldContainsExpectedValue(nameInput, active.job.linkName)) {
             JobStore.setStep(this, AutomationStep.SAVE)
-            scheduleNext(800)
+            scheduleNext(350)
+            return
+        }
+        if (setText(nameInput, active.job.linkName)) {
+            scheduleNext(600)
             return
         }
         failStepAfter(active, 15_000, "Không nhập được tên liên kết")
     }
 
     private fun saveLink(root: AccessibilityNodeInfo, active: ActiveJob) {
-        val saveButton = findBestNode(root, listOf("Lưu", "Save"), exactFirst = true)
-        if (saveButton != null && click(saveButton)) {
-            JobStore.setStep(this, AutomationStep.VERIFY)
-            scheduleNext(2_000)
-            return
-        }
-
-        val fallbackKey = "${active.job.id}:${active.job.attempt}"
-        if (elapsedInStep(active) >= 2_000 && saveFallbackAttempts.add(fallbackKey)) {
-            val gestureDispatched = saveButton?.let { tapNodeByGesture(it) }
-                ?: tapSaveByGesture()
-            if (gestureDispatched) {
+        val saveButton = findExactNode(
+            root,
+            listOf("Lưu", "Save"),
+            visibleOnly = true,
+        )
+        if (saveButton != null) {
+            val clicked = click(saveButton)
+            val gestureDispatched = if (!clicked) tapNodeByGesture(saveButton) else false
+            if (clicked || gestureDispatched) {
                 JobStore.setStep(this, AutomationStep.VERIFY)
                 scheduleNext(2_000)
                 return
@@ -588,6 +626,7 @@ class ShopeeAccessibilityService : AccessibilityService() {
                 "Invalid link",
                 "Something went wrong",
             ),
+            visibleOnly = true,
         )
         if (error != null) {
             JobStore.markForReport(this, false, "Facebook báo lỗi: ${nodeLabel(error)}")
@@ -602,8 +641,7 @@ class ShopeeAccessibilityService : AccessibilityService() {
             listOf("Lưu", "Save"),
             visibleOnly = true,
         ) != null
-        val saveStillVisible = exactSaveButtonVisible
-        val formStillVisible = saveStillVisible || findEditableNodes(root).any { node ->
+        val formStillVisible = exactSaveButtonVisible || findEditableNodes(root).any { node ->
             val label = nodeLabel(node)
             label.contains("url", ignoreCase = true)
                 || label.contains("Tên liên kết", ignoreCase = true)
@@ -619,22 +657,46 @@ class ShopeeAccessibilityService : AccessibilityService() {
                 "Manage products",
             ),
             exactFirst = true,
+            visibleOnly = true,
         ) != null
+        val successConfirmationVisible = findBestNode(
+            root,
+            PRODUCT_LINK_SUCCESS_HINTS,
+            visibleOnly = true,
+        ) != null
+        val productLinkSurfaceVisible = hasProductLinkSurface(root)
+        val savedLinkEvidenceVisible = productLinkSurfaceVisible &&
+            listOf(active.job.linkName, active.job.shopeeUrl)
+            .filter { it.isNotBlank() }
+            .let { evidence ->
+                evidence.isNotEmpty() && findBestNode(
+                    root,
+                    evidence,
+                    visibleOnly = true,
+                ) != null
+            }
+        val positiveSaveEvidence = returnedToProductPage
+            || successConfirmationVisible
+            || savedLinkEvidenceVisible
 
         val verifyFallbackKey = "${active.job.id}:${active.job.attempt}:verify-save"
         if (
             formStillVisible
             && elapsedInStep(active) >= 3_000
-            && saveFallbackAttempts.add(verifyFallbackKey)
+            && saveRetryAttempts.add(verifyFallbackKey)
         ) {
             val saveButton = findExactNode(
                 root,
                 listOf("Lưu", "Save"),
                 visibleOnly = true,
             )
-            val gestureDispatched = saveButton?.let { tapNodeByGesture(it) }
-                ?: tapSaveByGesture()
-            if (gestureDispatched) {
+            val clicked = saveButton?.let { click(it) } == true
+            val gestureDispatched = if (!clicked) {
+                saveButton?.let { tapNodeByGesture(it) } == true
+            } else {
+                false
+            }
+            if (clicked || gestureDispatched) {
                 scheduleNext(2_000)
                 return
             }
@@ -642,15 +704,18 @@ class ShopeeAccessibilityService : AccessibilityService() {
 
         if (
             !formStillVisible
+            && positiveSaveEvidence
             && elapsedInStep(active) >= VERIFY_FORM_CLOSED_SUCCESS_MS
         ) {
             JobStore.markForReport(
                 this,
                 success = true,
                 message = if (returnedToProductPage) {
-                    "Đã gắn link Shopee và lưu cho bài video trên Facebook"
+                    "Đã gắn link Shopee và quay lại trang quản lý sản phẩm"
+                } else if (successConfirmationVisible) {
+                    "Facebook xác nhận đã lưu link Shopee"
                 } else {
-                    "Đã gắn link Shopee và lưu trên Facebook"
+                    "Đã thấy link Shopee vừa lưu trên Facebook"
                 },
             )
             return
@@ -663,7 +728,7 @@ class ShopeeAccessibilityService : AccessibilityService() {
                 message = if (formStillVisible) {
                     "Facebook vẫn hiển thị form sau khi bấm Lưu"
                 } else {
-                    "Facebook đã đóng form nhưng chưa xác nhận liên kết được lưu"
+                    "Facebook đã đóng form nhưng không có bằng chứng liên kết được lưu"
                 },
             )
         } else {
@@ -724,6 +789,12 @@ class ShopeeAccessibilityService : AccessibilityService() {
         }
     }
 
+    private fun fieldContainsExpectedValue(
+        node: AccessibilityNodeInfo,
+        expected: String,
+    ): Boolean = expected.isNotBlank() &&
+        node.text?.toString()?.trim() == expected.trim()
+
     private fun visiblePostHeaderAnchorYFractions(root: AccessibilityNodeInfo): List<Float> {
         val nodes = mutableListOf<AccessibilityNodeInfo>()
         collectNodes(root, nodes)
@@ -768,22 +839,6 @@ class ShopeeAccessibilityService : AccessibilityService() {
 
     private fun findPostHeaderAnchorYFraction(root: AccessibilityNodeInfo): Float? =
         visiblePostHeaderAnchorYFractions(root).firstOrNull()
-
-    /**
-     * Facebook can open a Page directly at its newest post with the profile tabs
-     * scrolled off-screen. Accept that surface only when one post header is visible
-     * and the screen contains the deterministic caption fingerprint for this job.
-     */
-    private fun findVerifiedSinglePostAnchorY(
-        root: AccessibilityNodeInfo,
-        postText: String,
-    ): Float? {
-        if (postText.isBlank()) return null
-        val anchorY = visiblePostHeaderAnchorYFractions(root).singleOrNull() ?: return null
-        return anchorY.takeIf {
-            ReelProfilePolicy.hasStrongCaptionMatch(postText, collectVisibleScreenText(root))
-        }
-    }
 
     private data class ProfilePostAnchor(
         val yFraction: Float,
@@ -879,8 +934,11 @@ class ShopeeAccessibilityService : AccessibilityService() {
         if (ageAnchors.isEmpty()) return null
 
         val anchors = ageAnchors.mapIndexed { index, (ageNode, centerY) ->
-            // A caption above this header belongs to the preceding card. Reading
-            // above centerY paired one post's text with the next post's menu.
+            // A caption rendered above this header belongs to the previous card.
+            // The old implementation included 10% of the screen above centerY,
+            // which is exactly how it paired one post's caption with the next
+            // post's three-dot menu. Only read the isolated accessibility subtree
+            // and the band from this header down to the next post header.
             val bandTop = centerY - height * 0.01f
             val nextHeaderY = ageAnchors.getOrNull(index + 1)?.second
             val bandBottom = minOf(
@@ -929,8 +987,8 @@ class ShopeeAccessibilityService : AccessibilityService() {
 
     /**
      * Finds the largest visible ancestor that still contains one post header.
-     * An ancestor containing two age labels spans multiple feed cards and cannot
-     * be used as identity evidence.
+     * Once an ancestor contains two age labels it spans multiple feed cards and
+     * must not be used as identity evidence.
      */
     private fun isolatedProfileCardText(
         ageNode: AccessibilityNodeInfo,
@@ -1327,18 +1385,6 @@ class ShopeeAccessibilityService : AccessibilityService() {
         return dispatchGesture(gesture, null, null)
     }
 
-    private fun tapSaveByGesture(): Boolean {
-        val width = resources.displayMetrics.widthPixels.toFloat()
-        val height = resources.displayMetrics.heightPixels.toFloat()
-        val path = Path().apply {
-            moveTo(width * 0.93f, height * 0.09f)
-        }
-        val gesture = GestureDescription.Builder()
-            .addStroke(GestureDescription.StrokeDescription(path, 0, 120))
-            .build()
-        return dispatchGesture(gesture, null, null)
-    }
-
     private fun tapAffiliateProductRowByGesture(): Boolean {
         val width = resources.displayMetrics.widthPixels.toFloat()
         val height = resources.displayMetrics.heightPixels.toFloat()
@@ -1364,9 +1410,6 @@ class ShopeeAccessibilityService : AccessibilityService() {
             .build()
         return dispatchGesture(gesture, null, null)
     }
-
-    private fun activate(node: AccessibilityNodeInfo): Boolean =
-        click(node) || tapNodeByGesture(node)
 
     private fun collectNodes(
         node: AccessibilityNodeInfo,
@@ -1538,6 +1581,14 @@ class ShopeeAccessibilityService : AccessibilityService() {
             "Bắt đầu xác thực",
             "Boost post now",
             "Start verification",
+        )
+        private val PRODUCT_LINK_SUCCESS_HINTS = listOf(
+            "Đã lưu liên kết",
+            "Đã thêm liên kết sản phẩm",
+            "Liên kết sản phẩm đã được lưu",
+            "Product link saved",
+            "Product link added",
+            "Link saved",
         )
     }
 }

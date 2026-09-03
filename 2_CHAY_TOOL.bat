@@ -22,7 +22,7 @@ if %errorlevel% neq 0 (
 )
 
 :: Khong cho mo hai ban Tool cung luc (gay tranh cong va backend restart lien tuc)
-netstat -ano | findstr /R /C:":3000 .*LISTENING" /C:":5173 .*LISTENING" >nul 2>&1
+netstat -ano | findstr /R /C:":3000 .*LISTENING" /C:":3100 .*LISTENING" /C:":5173 .*LISTENING" >nul 2>&1
 if %errorlevel% equ 0 (
     echo [LOI] Phat hien Tool cu van dang chay hoac bi ket.
     echo Hay chay "3_TAT_TOOL_KHI_BI_LOI.bat" truoc, sau do mo lai file nay.
@@ -109,23 +109,11 @@ if errorlevel 1 (
 echo    [OK] Redis local san sang tai 127.0.0.1:6379.
 
 :: ============================================
-:: BUOC 4: Khoi dong Mobile Worker Gateway
+:: BUOC 4: Chuan bi Mobile Worker Gateway
 :: ============================================
 echo.
-echo [4/6] Dang khoi dong Mobile Worker Gateway...
-netstat -ano | findstr /R /C:":3100 .*LISTENING" >nul 2>&1
-if errorlevel 1 (
-    start "ZenWatch Mobile Worker Gateway" /MIN cmd /k "cd /d ""%~dp0backend"" && npm.cmd run start:mobile-worker-gateway"
-    timeout /t 2 /nobreak >nul
-)
-
-netstat -ano | findstr /R /C:":3100 .*LISTENING" >nul 2>&1
-if errorlevel 1 (
-    echo    [CANH BAO] Mobile Worker Gateway chua mo duoc cong 3100.
-    echo    Tool chinh van se khoi dong, nhung dien thoai chua the nhan tac vu.
-) else (
-    echo    [OK] Mobile Worker Gateway san sang tai 127.0.0.1:3100.
-)
+echo [4/6] Mobile Worker Gateway se duoc quan ly cung Backend va Frontend.
+echo    [OK] Khong con tien trinh Gateway rieng co the bi cu hoac sot lai.
 
 :: ============================================
 :: BUOC 5: Khoi dong Tailscale Funnel
@@ -142,7 +130,7 @@ if errorlevel 1 (
 )
 
 :: ============================================
-:: BUOC 6: Khoi dong Tool (Backend + Frontend)
+:: BUOC 6: Khoi dong Tool (Gateway + Backend + Frontend)
 :: ============================================
 echo.
 echo [6/6] Dang khoi dong Tool...
@@ -158,6 +146,10 @@ echo  !                                                       !
 echo  +======================================================+
 echo.
 
+:: Redis da duoc khoi dong va kiem tra dung mot lan o BUOC 3.
+:: Lenh nay quan ly Gateway + Backend + Frontend de tat/mo cung mot luong.
+:: Redis khong bi mo trung cong
+:: roi lam concurrently tat ca tien trinh con lai.
 call npm run start:no-ngrok
 
 echo.

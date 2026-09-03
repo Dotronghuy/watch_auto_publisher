@@ -1,17 +1,17 @@
-import { PrismaClient } from '@prisma/client';
+import {
+  getLatestFailedMobileLinkJob,
+  getMobileLinkJob,
+  retryMobileLinkJob,
+} from '../services/mobileLinkJob.service.js';
 
-const prisma = new PrismaClient();
 const args = process.argv.slice(2);
-
 const hasFlag = (name) => args.includes(name);
 
 const flagValue = (name) => {
   const index = args.indexOf(name);
   if (index < 0) return '';
   const value = String(args[index + 1] || '').trim();
-  if (!value || value.startsWith('--')) {
-    throw new Error(`${name} requires a value`);
-  }
+  if (!value || value.startsWith('--')) throw new Error(`${name} requires a value`);
   return value;
 };
 
@@ -29,84 +29,78 @@ const canonicalReelUrl = (postId) => {
   return `https://www.facebook.com/reel/${encodeURIComponent(reelId)}`;
 };
 
-const validateFacebookUrl = (value) => {
+const validatedFacebookUrl = (value) => {
   const parsed = new URL(value);
   const hostname = parsed.hostname.toLowerCase();
-  const facebookHost = hostname === 'facebook.com' || hostname.endsWith('.facebook.com');
+  const facebookHost = hostname === 'facebook.com'
+    || hostname.endsWith('.facebook.com')
+    || hostname === 'fb.watch';
   if (parsed.protocol !== 'https:' || !facebookHost) {
-    throw new Error('--post-url must be an HTTPS facebook.com URL');
-  }
-  return parsed.toString();
-};
-
-const validateShopeeUrl = (value) => {
-  const parsed = new URL(value);
-  const hostname = parsed.hostname.toLowerCase();
-  const shopeeHost = hostname === 'shopee.vn'
-    || hostname.endsWith('.shopee.vn')
-    || hostname === 'vn.shp.ee';
-  if (parsed.protocol !== 'https:' || !shopeeHost) {
-    throw new Error('--shopee-url must be a Shopee Vietnam HTTPS URL');
+    throw new Error('--post-url must be an HTTPS Facebook URL');
   }
   return parsed.toString();
 };
 
 try {
   const jobId = flagValue('--job-id');
-  const explicitPostUrl = flagValue('--post-url');
-  const explicitShopeeUrl = flagValue('--shopee-url');
-  const forceReel = hasFlag('--reel');
-
   const selectedJob = jobId
-    ? await prisma.mobileLinkJob.findUnique({ where: { id: jobId } })
-    : await prisma.mobileLinkJob.findFirst({
-      where: { status: 'FAILED' },
-      orderBy: [
-        { completedAt: 'desc' },
-        { createdAt: 'desc' },
-      ],
-    });
+    ? await getMobileLinkJob(jobId)
+    : await getLatestFailedMobileLinkJob();
 
   if (!selectedJob) {
     console.log(jobId
       ? `Không tìm thấy tác vụ gắn link có Job ID ${jobId}.`
       : 'Không có tác vụ gắn link thất bại nào để thử lại.');
     process.exitCode = 2;
+  } else if (selectedJob.status !== 'FAILED') {
+    throw new Error(
+      `Chỉ được retry job FAILED; job ${selectedJob.id} đang là ${selectedJob.status}.`,
+    );
   } else {
-    let repairedPostUrl = selectedJob.postUrl;
-    if (explicitPostUrl) repairedPostUrl = validateFacebookUrl(explicitPostUrl);
-    if (forceReel) repairedPostUrl = canonicalReelUrl(selectedJob.postId);
-    const repairedShopeeUrl = explicitShopeeUrl
-      ? validateShopeeUrl(explicitShopeeUrl)
-      : selectedJob.shopeeUrl;
+    const repair = {};
+    const explicitPostUrl = flagValue('--post-url');
+    const explicitShopeeUrl = flagValue('--shopee-url');
+    const explicitPostText = flagValue('--post-text');
+    const explicitLinkName = flagValue('--link-name');
+    const forceReel = hasFlag('--reel');
+    const forcePost = hasFlag('--post');
+    if (forceReel && forcePost) throw new Error('Chỉ chọn một trong --reel hoặc --post.');
 
-    const retriedJob = await prisma.mobileLinkJob.update({
-      where: { id: selectedJob.id },
-      data: {
-        postUrl: repairedPostUrl,
-        shopeeUrl: repairedShopeeUrl,
-        status: 'PENDING',
-        deviceId: null,
-        claimedAt: null,
-        leaseExpiresAt: null,
-        completedAt: null,
-        errorMessage: null,
-        resultMessage: null,
-      },
-    });
+    if (explicitPostUrl) repair.postUrl = validatedFacebookUrl(explicitPostUrl);
+    if (explicitShopeeUrl) repair.shopeeUrl = explicitShopeeUrl;
+    if (explicitPostText) repair.postText = explicitPostText;
+    if (explicitLinkName) repair.linkName = explicitLinkName;
+    if (forceReel) {
+      if (!/^\d+_\d+$/.test(String(selectedJob.postId || '').trim())) {
+        throw new Error('Job Reel phải có Post ID dạng PAGE_ID_VIDEO_ID để mở đúng Fanpage.');
+      }
+      repair.contentType = 'reel';
+      if (!explicitPostUrl) repair.postUrl = canonicalReelUrl(selectedJob.postId);
+    }
+    if (forcePost) {
+      if (selectedJob.contentType !== 'post' && !explicitPostUrl) {
+        throw new Error('Khi đổi job sang bài viết, bắt buộc truyền --post-url chính xác.');
+      }
+      repair.contentType = 'post';
+    }
 
-    const isReel = /\/(?:reel|reels|videos)\//i.test(retriedJob.postUrl);
-    console.log('Đã đưa đúng tác vụ gắn link về hàng chờ.');
+    const retriedJob = await retryMobileLinkJob(selectedJob.id, repair);
+    if (!retriedJob) {
+      throw new Error('Job đã đổi trạng thái trong lúc retry; không có gì được xếp lại.');
+    }
+
+    console.log('Đã đưa đúng tác vụ FAILED về hàng chờ.');
     console.log(`Job ID: ${retriedJob.id}`);
     console.log(`Facebook Post ID: ${retriedJob.postId}`);
-    console.log(`Loại nội dung: ${isReel ? 'Reels/Video' : 'Bài viết'}`);
+    console.log(`Loại nội dung: ${retriedJob.contentType === 'reel' ? 'Reels/Video' : 'Bài viết'}`);
     console.log(`Facebook URL: ${retriedJob.postUrl}`);
     console.log(`Shopee URL: ${retriedJob.shopeeUrl}`);
-    console.log('Giữ Android Worker đang chạy để điện thoại nhận lại đúng tác vụ này.');
+    console.log('Giữ Android Worker 0.4.0 đang chạy để điện thoại nhận tác vụ.');
   }
 } catch (error) {
-  console.error('Không thể thử lại tác vụ gắn link:', error);
+  const legacyHint = /postText is required/i.test(String(error?.message || ''))
+    ? ' Job cũ thiếu caption; hãy thêm --post-text "caption đúng" và --reel/--post.'
+    : '';
+  console.error(`Không thể thử lại tác vụ gắn link: ${error.message}.${legacyHint}`);
   process.exitCode = 1;
-} finally {
-  await prisma.$disconnect();
 }

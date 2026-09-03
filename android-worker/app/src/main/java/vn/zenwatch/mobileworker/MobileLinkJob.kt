@@ -25,13 +25,7 @@ data class MobileLinkJob(
     companion object {
         fun fromJson(json: JSONObject): MobileLinkJob {
             val postUrl = json.getString("postUrl")
-            val explicitContentType = json.optString("contentType", "").trim().lowercase()
-            val contentType = when {
-                explicitContentType in setOf("reel", "reels", "video") -> "reel"
-                explicitContentType == "post" -> "post"
-                REEL_URL_HINTS.any { hint -> postUrl.contains(hint, ignoreCase = true) } -> "reel"
-                else -> "post"
-            }
+            val contentType = normalizeContentType(json.optString("contentType", ""))
             return MobileLinkJob(
                 id = json.getString("id"),
                 postId = json.getString("postId"),
@@ -44,17 +38,13 @@ data class MobileLinkJob(
             )
         }
 
-        private val REEL_URL_HINTS = listOf(
-            "/reel/",
-            "/reels/",
-            "/videos/",
-            "/watch/",
-            "watch?v=",
-            "video.php",
-            "fb.watch/",
-            "/share/r/",
-            "/share/v/",
-        )
+        internal fun normalizeContentType(value: String): String {
+            val normalized = value.trim().lowercase()
+            require(normalized == "post" || normalized == "reel") {
+                "contentType phải là post hoặc reel"
+            }
+            return normalized
+        }
     }
 }
 

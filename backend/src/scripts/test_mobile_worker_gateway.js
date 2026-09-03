@@ -55,7 +55,7 @@ try {
       ...authorized,
       'content-type': 'application/json',
     },
-    body: JSON.stringify({ deviceId: 'test-device', status: 'SUCCEEDED' }),
+    body: JSON.stringify({ deviceId: 'test-device', attempt: 1, status: 'SUCCEEDED' }),
   });
   assert.equal(response.status, 200);
 

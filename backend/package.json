@@ -9,7 +9,6 @@
     "dev:watch": "node --watch-path=src src/app.js",
     "start": "node src/app.js",
     "start:mobile-worker-gateway": "node --env-file=.env src/mobileWorkerGateway.js",
-    "start:mobile-worker-stack": "node --env-file=.env src/scripts/start_mobile_worker_stack.js",
     "start:mobile-worker-funnel": "node src/scripts/start_mobile_worker_funnel.js",
     "scan": "node src/scripts/scan_drive.js",
     "configure:mobile-worker": "node src/scripts/configure_mobile_worker.js",

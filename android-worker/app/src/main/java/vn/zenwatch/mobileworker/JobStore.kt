@@ -31,8 +31,8 @@ object JobStore {
             ActiveJob(
                 job = MobileLinkJob.fromJson(JSONObject(rawJob)),
                 step = AutomationStep.valueOf(
-                    preferences.getString(KEY_STEP, AutomationStep.OPEN_MENU.name)
-                        ?: AutomationStep.OPEN_MENU.name,
+                    preferences.getString(KEY_STEP, AutomationStep.OPEN_POST.name)
+                        ?: AutomationStep.OPEN_POST.name,
                 ),
                 startedAt = preferences.getLong(KEY_STARTED_AT, System.currentTimeMillis()),
                 stepStartedAt = preferences.getLong(

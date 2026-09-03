@@ -16,7 +16,7 @@ class MobileWorkerService : Service() {
     private val running = AtomicBoolean(false)
     private var workerThread: Thread? = null
     private lateinit var wakeController: DeviceWakeController
-    private var lastLaunchedJobId: String? = null
+    private var lastLaunchedAttemptKey: String? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -78,17 +78,30 @@ class MobileWorkerService : Service() {
                     }
                     if (active.reportStatus != null) {
                         updateStatus("Đang gửi kết quả ${active.reportStatus}…")
-                        api.report(
+                        val reportOutcome = api.report(
                             active.job.id,
                             deviceId,
+                            active.job.attempt,
                             active.reportStatus,
                             active.reportMessage.orEmpty(),
                         )
-                        lastJobResult =
-                            "${active.reportStatus}: ${active.reportMessage.orEmpty()}".take(240)
+                        lastJobResult = when (reportOutcome) {
+                            MobileWorkerReportOutcome.REPORTED ->
+                                "${active.reportStatus}: ${active.reportMessage.orEmpty()}".take(240)
+                            MobileWorkerReportOutcome.STALE ->
+                                "STALE: backend không còn nhận kết quả job ${active.job.id}".take(240)
+                        }
                         JobStore.clear(this)
+                        lastLaunchedAttemptKey = null
                         wakeController.finishJob()
-                        updateStatus("Đã gửi kết quả job ${active.job.id}")
+                        updateStatus(
+                            when (reportOutcome) {
+                                MobileWorkerReportOutcome.REPORTED ->
+                                    "Đã gửi kết quả job ${active.job.id}"
+                                MobileWorkerReportOutcome.STALE ->
+                                    "Job ${active.job.id} đã hết hạn trên backend • đã xóa trạng thái cục bộ"
+                            },
+                        )
                     } else if (System.currentTimeMillis() - active.startedAt > JOB_TIMEOUT_MS) {
                         JobStore.markForReport(
                             this,
@@ -100,7 +113,8 @@ class MobileWorkerService : Service() {
                         // but Facebook may still show a menu/form from an older post.
                         // Always invalidate the saved UI step and reopen this job's
                         // exact post once before Accessibility is allowed to continue.
-                        if (lastLaunchedJobId != active.job.id) {
+                        val attemptKey = "${active.job.id}:${active.job.attempt}"
+                        if (lastLaunchedAttemptKey != attemptKey) {
                             JobStore.restartNavigation(this)
                             updateStatus("Đang mở lại bài ${active.job.postId}")
                             if (!launchFacebookPost(active.job)) {
@@ -112,11 +126,21 @@ class MobileWorkerService : Service() {
                                 sleepInterruptibly(ACTIVE_POLL_MS)
                                 continue
                             }
-                            lastLaunchedJobId = active.job.id
+                            lastLaunchedAttemptKey = attemptKey
                             sleepInterruptibly(DEVICE_WAKE_SETTLE_MS)
                         }
-                        api.heartbeat(active.job.id, deviceId)
-                        updateStatus("Đang xử lý ${active.job.id} • ${active.step.name}")
+                        when (api.heartbeat(active.job.id, deviceId, active.job.attempt)) {
+                            MobileWorkerHeartbeatOutcome.ACTIVE ->
+                                updateStatus("Đang xử lý ${active.job.id} • ${active.step.name}")
+                            MobileWorkerHeartbeatOutcome.STALE -> {
+                                lastJobResult =
+                                    "STALE: backend đã hết hạn attempt ${active.job.attempt}"
+                                JobStore.clear(this)
+                                lastLaunchedAttemptKey = null
+                                wakeController.finishJob()
+                                updateStatus("Attempt cũ đã hết hạn • đang chờ tác vụ mới")
+                            }
+                        }
                     }
                 } else if (wakeController.isSecurelyLocked()) {
                     wakeController.finishJob()
@@ -145,7 +169,7 @@ class MobileWorkerService : Service() {
                                     message = "Không mở được ứng dụng Facebook",
                                 )
                             } else {
-                                lastLaunchedJobId = job.id
+                                lastLaunchedAttemptKey = "${job.id}:${job.attempt}"
                             }
                         }
                         sleepMs = ACTIVE_POLL_MS

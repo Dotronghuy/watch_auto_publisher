@@ -36,17 +36,6 @@ object ReelProfilePolicy {
         return matches.singleOrNull()
     }
 
-    fun captionMatchScore(postText: String, visibleText: String): Int {
-        val targetTokens = captionTokens(postText).take(MAX_FINGERPRINT_TOKENS)
-        if (targetTokens.isEmpty()) return 0
-        val visibleTokens = captionTokens(visibleText)
-        val prefixRun = longestTargetPrefixRun(targetTokens, visibleTokens)
-        val targetTerms = significantTerms(postText)
-        val visibleTerms = normalize(visibleText).split(' ').filter { it.isNotBlank() }.toSet()
-        val significantMatches = targetTerms.count(visibleTerms::contains)
-        return prefixRun * PREFIX_SCORE_WEIGHT + significantMatches
-    }
-
     fun hasStrongCaptionMatch(postText: String, visibleText: String): Boolean {
         val targetTokens = captionTokens(postText).take(MAX_FINGERPRINT_TOKENS)
         if (targetTokens.size < MIN_CAPTION_TOKENS) return false
@@ -101,5 +90,4 @@ object ReelProfilePolicy {
     private const val REQUIRED_PREFIX_TOKENS = 10
     private const val REQUIRED_SIGNIFICANT_TERMS = 4
     private const val MAX_FINGERPRINT_TOKENS = 12
-    private const val PREFIX_SCORE_WEIGHT = 100
 }

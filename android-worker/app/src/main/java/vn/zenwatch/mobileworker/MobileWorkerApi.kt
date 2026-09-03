@@ -7,7 +7,29 @@ import java.net.URI
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 
-class MobileWorkerApi(private val settings: WorkerSettings) {
+internal enum class MobileWorkerReportOutcome {
+    REPORTED,
+    STALE,
+}
+
+internal enum class MobileWorkerHeartbeatOutcome {
+    ACTIVE,
+    STALE,
+}
+
+internal fun reportOutcomeForHttpStatus(code: Int): MobileWorkerReportOutcome? = when {
+    code == HttpURLConnection.HTTP_CONFLICT -> MobileWorkerReportOutcome.STALE
+    code in 200..299 -> MobileWorkerReportOutcome.REPORTED
+    else -> null
+}
+
+internal fun heartbeatOutcomeForHttpStatus(code: Int): MobileWorkerHeartbeatOutcome? = when {
+    code == HttpURLConnection.HTTP_CONFLICT -> MobileWorkerHeartbeatOutcome.STALE
+    code in 200..299 -> MobileWorkerHeartbeatOutcome.ACTIVE
+    else -> null
+}
+
+internal class MobileWorkerApi(private val settings: WorkerSettings) {
     private data class Response(val code: Int, val body: String)
 
     fun health(): String {
@@ -28,19 +50,32 @@ class MobileWorkerApi(private val settings: WorkerSettings) {
         return MobileLinkJob.fromJson(JSONObject(response.body).getJSONObject("job"))
     }
 
-    fun heartbeat(jobId: String, deviceId: String) {
-        val body = JSONObject().put("deviceId", deviceId)
+    fun heartbeat(
+        jobId: String,
+        deviceId: String,
+        attempt: Int,
+    ): MobileWorkerHeartbeatOutcome {
+        val body = JSONObject()
+            .put("deviceId", deviceId)
+            .put("attempt", attempt)
         val response = request(
             "POST",
             "/api/mobile-worker/jobs/${encodePath(jobId)}/heartbeat",
             body,
         )
-        if (response.code !in 200..299) throw apiError(response)
+        return heartbeatOutcomeForHttpStatus(response.code) ?: throw apiError(response)
     }
 
-    fun report(jobId: String, deviceId: String, status: String, message: String) {
+    fun report(
+        jobId: String,
+        deviceId: String,
+        attempt: Int,
+        status: String,
+        message: String,
+    ): MobileWorkerReportOutcome {
         val body = JSONObject()
             .put("deviceId", deviceId)
+            .put("attempt", attempt)
             .put("status", status)
             .put("message", message)
         val response = request(
@@ -48,7 +83,7 @@ class MobileWorkerApi(private val settings: WorkerSettings) {
             "/api/mobile-worker/jobs/${encodePath(jobId)}/result",
             body,
         )
-        if (response.code !in 200..299) throw apiError(response)
+        return reportOutcomeForHttpStatus(response.code) ?: throw apiError(response)
     }
 
     private fun request(
@@ -100,6 +135,6 @@ class MobileWorkerApi(private val settings: WorkerSettings) {
         URLEncoder.encode(value, StandardCharsets.UTF_8.name()).replace("+", "%20")
 
     companion object {
-        private const val WORKER_VERSION = "0.3.9"
+        private const val WORKER_VERSION = "0.4.0"
     }
 }

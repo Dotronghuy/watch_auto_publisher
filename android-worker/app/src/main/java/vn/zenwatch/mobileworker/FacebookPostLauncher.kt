@@ -36,8 +36,6 @@ object FacebookPostLauncher {
 
     fun targetCount(job: MobileLinkJob): Int = targetUris(job).size
 
-    fun exactWebUrl(job: MobileLinkJob): String = job.postUrl
-
     private fun targetUris(job: MobileLinkJob): List<Uri> {
         val graphPermalink = httpsUri(job.postUrl)
         val videoJob = isPageVideoJob(job)
@@ -69,12 +67,9 @@ object FacebookPostLauncher {
             ).distinctBy(Uri::toString)
         }
 
-        val canonicalReel = buildReelPermalink(job.postId.trim())
         return listOfNotNull(
             graphPermalink,
             graphPermalink?.let(::faceWebModal),
-            canonicalReel,
-            faceWebModal(canonicalReel),
         ).distinctBy(Uri::toString)
     }
 
@@ -93,14 +88,6 @@ object FacebookPostLauncher {
             .appendPath("permalink.php")
             .appendQueryParameter("story_fbid", storyId)
             .appendQueryParameter("id", pageId)
-            .build()
-
-    private fun buildReelPermalink(reelId: String): Uri =
-        Uri.Builder()
-            .scheme("https")
-            .authority("www.facebook.com")
-            .appendPath("reel")
-            .appendPath(reelId)
             .build()
 
     private fun httpsUri(value: String): Uri? = runCatching {
