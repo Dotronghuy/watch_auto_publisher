@@ -12,6 +12,8 @@ data class MobileLinkJob(
     val contentType: String,
     val attempt: Int,
 ) {
+    val attemptKey: String get() = "$id:$attempt"
+
     fun toJson(): JSONObject = JSONObject()
         .put("id", id)
         .put("postId", postId)
@@ -34,7 +36,7 @@ data class MobileLinkJob(
                 linkName = json.optString("linkName", "Mua ở đây"),
                 postText = json.optString("postText", ""),
                 contentType = contentType,
-                attempt = json.optInt("attempt", 1),
+                attempt = normalizeAttempt(json.getInt("attempt")),
             )
         }
 
@@ -44,6 +46,11 @@ data class MobileLinkJob(
                 "contentType phải là post hoặc reel"
             }
             return normalized
+        }
+
+        internal fun normalizeAttempt(value: Int): Int {
+            require(value > 0) { "attempt phải là số nguyên dương" }
+            return value
         }
     }
 }

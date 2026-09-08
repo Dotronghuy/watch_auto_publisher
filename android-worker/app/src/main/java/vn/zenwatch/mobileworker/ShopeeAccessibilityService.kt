@@ -12,7 +12,13 @@ import android.view.accessibility.AccessibilityNodeInfo
 
 class ShopeeAccessibilityService : AccessibilityService() {
     private val handler = Handler(Looper.getMainLooper())
-    private val processRunnable = Runnable { processCurrentStep() }
+    private val tickGate = AutomationTickGate()
+    private val processRunnable = Runnable {
+        tickGate.reset()
+        processCurrentStep()
+    }
+    private var trackedAttemptKey: String? = null
+    private val saveConfirmations = mutableSetOf<String>()
     private val menuSemanticTapAttempts = mutableMapOf<String, Int>()
     private val menuFallbackTapAttempts = mutableMapOf<String, Int>()
     private val menuTapDispatched = mutableSetOf<String>()
@@ -29,9 +35,17 @@ class ShopeeAccessibilityService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event?.packageName?.toString() != FACEBOOK_PACKAGE) return
-        if (JobStore.load(this) == null) return
-        handler.removeCallbacks(processRunnable)
-        handler.postDelayed(processRunnable, EVENT_SETTLE_MS)
+        if (!MobileWorkerService.isRunning) return
+        val active = JobStore.load(this) ?: return
+        if (active.step == AutomationStep.REPORTING) return
+        if (active.step == AutomationStep.VERIFY && MobileWorkerService.canAutomate(active.job)) {
+            val labels = event.text.map { it.toString() } + listOfNotNull(event.contentDescription?.toString())
+            if (ProductLinkUiPolicy.hasExactLabel(labels, PRODUCT_LINK_SUCCESS_HINTS)) {
+                saveConfirmations.add(active.job.attemptKey)
+            }
+        }
+        // Do not push an existing tick back on every animation/content event.
+        if (tickGate.request()) handler.postDelayed(processRunnable, EVENT_SETTLE_MS)
     }
 
     override fun onInterrupt() = Unit
@@ -39,22 +53,25 @@ class ShopeeAccessibilityService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         clearAttemptState()
+        MobileWorkerService.automationSession.pause()
         JobStore.load(this)?.let { active ->
             if (active.step != AutomationStep.REPORTING) {
                 JobStore.restartNavigation(this)
-                FacebookPostLauncher.launch(this, active.job)
             }
         }
-        handler.postDelayed(processRunnable, EVENT_SETTLE_MS)
+        scheduleNext(EVENT_SETTLE_MS)
     }
 
     override fun onDestroy() {
         handler.removeCallbacks(processRunnable)
+        tickGate.reset()
+        MobileWorkerService.automationSession.pause()
         clearAttemptState()
         super.onDestroy()
     }
 
     private fun clearAttemptState() {
+        saveConfirmations.clear()
         menuSemanticTapAttempts.clear()
         menuFallbackTapAttempts.clear()
         menuTapDispatched.clear()
@@ -71,10 +88,28 @@ class ShopeeAccessibilityService : AccessibilityService() {
     }
 
     private fun processCurrentStep() {
-        val active = JobStore.load(this) ?: return
-        if (active.step == AutomationStep.REPORTING) return
+        if (!MobileWorkerService.isRunning) {
+            clearAttemptState()
+            trackedAttemptKey = null
+            return
+        }
+        val active = JobStore.load(this)
+        if (active == null || active.step == AutomationStep.REPORTING) {
+            clearAttemptState()
+            trackedAttemptKey = null
+            return
+        }
+        if (trackedAttemptKey != active.job.attemptKey) {
+            clearAttemptState()
+            trackedAttemptKey = active.job.attemptKey
+        }
+        if (!MobileWorkerService.canAutomate(active.job)) {
+            clearAttemptState()
+            scheduleNext(ROOT_RETRY_MS)
+            return
+        }
         val root = rootInActiveWindow
-        if (root == null) {
+        if (root == null || root.packageName?.toString() != FACEBOOK_PACKAGE) {
             // Facebook can open before Android has exposed its accessibility tree.
             // Keep polling so the flow does not depend on receiving another UI event.
             scheduleNext(ROOT_RETRY_MS)
@@ -555,7 +590,7 @@ class ShopeeAccessibilityService : AccessibilityService() {
 
     private fun fillUrl(root: AccessibilityNodeInfo, active: ActiveJob) {
         val inputs = findEditableNodes(root)
-        val urlInput = inputs.firstOrNull { nodeLabel(it).contains("url", ignoreCase = true) }
+        val urlInput = findProductField(inputs, listOf("url"), active.job.shopeeUrl)
         if (urlInput == null) {
             failStepAfter(active, 20_000, "Không tìm thấy đúng ô URL")
             return
@@ -574,11 +609,7 @@ class ShopeeAccessibilityService : AccessibilityService() {
 
     private fun fillName(root: AccessibilityNodeInfo, active: ActiveJob) {
         val inputs = findEditableNodes(root)
-        val nameInput = inputs.firstOrNull {
-            val label = nodeLabel(it)
-            label.contains("Tên liên kết", ignoreCase = true)
-                || label.contains("Link name", ignoreCase = true)
-        }
+        val nameInput = findProductField(inputs, listOf("Tên liên kết", "Link name"), active.job.linkName)
 
         if (nameInput == null) {
             failStepAfter(active, 15_000, "Không tìm thấy đúng ô Tên liên kết")
@@ -597,6 +628,15 @@ class ShopeeAccessibilityService : AccessibilityService() {
     }
 
     private fun saveLink(root: AccessibilityNodeInfo, active: ActiveJob) {
+        val inputs = findEditableNodes(root)
+        val urlInput = findProductField(inputs, listOf("url"), active.job.shopeeUrl)
+        val nameInput = findProductField(inputs, listOf("Tên liên kết", "Link name"), active.job.linkName)
+        if (urlInput == null || nameInput == null || urlInput == nameInput ||
+            !fieldContainsExpectedValue(urlInput, active.job.shopeeUrl) ||
+            !fieldContainsExpectedValue(nameInput, active.job.linkName)) {
+            failStepAfter(active, 25_000, "Nội dung URL/tên liên kết đã thay đổi trước khi Lưu")
+            return
+        }
         val saveButton = findExactNode(
             root,
             listOf("Lưu", "Save"),
@@ -648,36 +688,19 @@ class ShopeeAccessibilityService : AccessibilityService() {
                 || label.contains("Link name", ignoreCase = true)
                 || node.text?.toString() == active.job.shopeeUrl
         }
-        val returnedToProductPage = !formStillVisible && findBestNode(
-            root,
-            listOf(
-                "Thêm sản phẩm",
-                "Quản lý sản phẩm",
-                "Add product",
-                "Manage products",
-            ),
-            exactFirst = true,
-            visibleOnly = true,
-        ) != null
         val successConfirmationVisible = findBestNode(
             root,
             PRODUCT_LINK_SUCCESS_HINTS,
             visibleOnly = true,
         ) != null
         val productLinkSurfaceVisible = hasProductLinkSurface(root)
-        val savedLinkEvidenceVisible = productLinkSurfaceVisible &&
-            listOf(active.job.linkName, active.job.shopeeUrl)
-            .filter { it.isNotBlank() }
-            .let { evidence ->
-                evidence.isNotEmpty() && findBestNode(
-                    root,
-                    evidence,
-                    visibleOnly = true,
-                ) != null
-            }
-        val positiveSaveEvidence = returnedToProductPage
-            || successConfirmationVisible
-            || savedLinkEvidenceVisible
+        if (successConfirmationVisible) saveConfirmations.add(active.job.attemptKey)
+        val savedLinkEvidenceVisible = productLinkSurfaceVisible && findExactNode(
+            root, listOf(active.job.shopeeUrl), visibleOnly = true,
+        ) != null
+        val positiveSaveEvidence = ProductLinkUiPolicy.saved(
+            formStillVisible, active.job.attemptKey in saveConfirmations, savedLinkEvidenceVisible,
+        )
 
         val verifyFallbackKey = "${active.job.id}:${active.job.attempt}:verify-save"
         if (
@@ -685,6 +708,15 @@ class ShopeeAccessibilityService : AccessibilityService() {
             && elapsedInStep(active) >= 3_000
             && saveRetryAttempts.add(verifyFallbackKey)
         ) {
+            val inputs = findEditableNodes(root)
+            val urlInput = findProductField(inputs, listOf("url"), active.job.shopeeUrl)
+            val nameInput = findProductField(inputs, listOf("Tên liên kết", "Link name"), active.job.linkName)
+            if (urlInput == null || nameInput == null || urlInput == nameInput ||
+                !fieldContainsExpectedValue(urlInput, active.job.shopeeUrl) ||
+                !fieldContainsExpectedValue(nameInput, active.job.linkName)) {
+                JobStore.markForReport(this, false, "Form không còn đúng URL/tên liên kết khi thử Lưu lại")
+                return
+            }
             val saveButton = findExactNode(
                 root,
                 listOf("Lưu", "Save"),
@@ -710,9 +742,7 @@ class ShopeeAccessibilityService : AccessibilityService() {
             JobStore.markForReport(
                 this,
                 success = true,
-                message = if (returnedToProductPage) {
-                    "Đã gắn link Shopee và quay lại trang quản lý sản phẩm"
-                } else if (successConfirmationVisible) {
+                message = if (active.job.attemptKey in saveConfirmations) {
                     "Facebook xác nhận đã lưu link Shopee"
                 } else {
                     "Đã thấy link Shopee vừa lưu trên Facebook"
@@ -748,7 +778,7 @@ class ShopeeAccessibilityService : AccessibilityService() {
         if (exactFirst) {
             nodes.firstOrNull { node ->
                 (!visibleOnly || node.isVisibleToUser)
-                    && keywords.any { keyword -> nodeLabel(node).trim().equals(keyword, true) }
+                    && ProductLinkUiPolicy.hasExactLabel(nodeTextLabels(node), keywords)
             }?.let { return it }
         }
 
@@ -775,7 +805,7 @@ class ShopeeAccessibilityService : AccessibilityService() {
         collectNodes(root, nodes)
         return nodes.firstOrNull { node ->
             (!visibleOnly || node.isVisibleToUser)
-                && keywords.any { keyword -> nodeLabel(node).trim().equals(keyword, true) }
+                && ProductLinkUiPolicy.hasExactLabel(nodeTextLabels(node), keywords)
         }
     }
 
@@ -783,10 +813,17 @@ class ShopeeAccessibilityService : AccessibilityService() {
         val nodes = mutableListOf<AccessibilityNodeInfo>()
         collectNodes(root, nodes)
         return nodes.filter { node ->
-            node.isEditable
+            node.isVisibleToUser && node.isEnabled && (node.isEditable
                 || node.className?.toString()?.contains("EditText", ignoreCase = true) == true
-                || node.actionList.any { it.id == AccessibilityNodeInfo.ACTION_SET_TEXT }
+                || node.actionList.any { it.id == AccessibilityNodeInfo.ACTION_SET_TEXT })
         }
+    }
+
+    private fun findProductField(
+        inputs: List<AccessibilityNodeInfo>, keywords: List<String>, expected: String,
+    ): AccessibilityNodeInfo? {
+        val fields = inputs.map { ProductLinkField(nodeTextLabels(it) + listOfNotNull(it.viewIdResourceName), it.text?.toString().orEmpty()) }
+        return ProductLinkUiPolicy.fieldIndex(fields, keywords, expected)?.let(inputs::get)
     }
 
     private fun fieldContainsExpectedValue(
@@ -1080,9 +1117,10 @@ class ShopeeAccessibilityService : AccessibilityService() {
                 ) {
                     null
                 } else {
-                    val score = kotlin.math.abs(bounds.centerX() - targetX)
-                        + kotlin.math.abs(bounds.centerY() - targetY) * 2f
-                        + if (semanticMatch) -220f else 0f
+                    val score = ProductLinkUiPolicy.menuScore(
+                        bounds.centerX().toFloat(), bounds.centerY().toFloat(), targetX, targetY,
+                        verticalWeight = 2f, labelPenalty = if (semanticMatch) -220f else 0f,
+                    )
                     node to score
                 }
             }
@@ -1268,13 +1306,14 @@ class ShopeeAccessibilityService : AccessibilityService() {
                         val semanticMatch = POST_MENU_LABEL_HINTS.any {
                             normalizedLabel.contains(it)
                         }
-                        val score = kotlin.math.abs(bounds.centerX() - targetX)
-                            + (kotlin.math.abs(bounds.centerY() - targetY) * 1.8f)
-                            + when {
+                        val score = ProductLinkUiPolicy.menuScore(
+                            bounds.centerX().toFloat(), bounds.centerY().toFloat(), targetX, targetY,
+                            verticalWeight = 1.8f, labelPenalty = when {
                                 semanticMatch -> -250f
                                 label.isBlank() -> 0f
                                 else -> 60f
-                            }
+                            },
+                        )
                         node to score
                     }
                 }
@@ -1367,6 +1406,7 @@ class ShopeeAccessibilityService : AccessibilityService() {
         endY: Float,
         durationMs: Long,
     ): Boolean {
+        if (!automationAllowed()) return false
         val path = Path().apply {
             moveTo(startX, startY)
             lineTo(endX, endY)
@@ -1378,6 +1418,7 @@ class ShopeeAccessibilityService : AccessibilityService() {
     }
 
     private fun tapScreenPoint(x: Float, y: Float): Boolean {
+        if (!automationAllowed()) return false
         val path = Path().apply { moveTo(x, y) }
         val gesture = GestureDescription.Builder()
             .addStroke(GestureDescription.StrokeDescription(path, 0, 120))
@@ -1386,6 +1427,7 @@ class ShopeeAccessibilityService : AccessibilityService() {
     }
 
     private fun tapAffiliateProductRowByGesture(): Boolean {
+        if (!automationAllowed()) return false
         val width = resources.displayMetrics.widthPixels.toFloat()
         val height = resources.displayMetrics.heightPixels.toFloat()
         val path = Path().apply {
@@ -1398,6 +1440,7 @@ class ShopeeAccessibilityService : AccessibilityService() {
     }
 
     private fun tapNodeByGesture(node: AccessibilityNodeInfo): Boolean {
+        if (!automationAllowed() || !node.isVisibleToUser || !node.isEnabled) return false
         val bounds = Rect()
         node.getBoundsInScreen(bounds)
         if (bounds.isEmpty) return false
@@ -1421,14 +1464,22 @@ class ShopeeAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun nodeLabel(node: AccessibilityNodeInfo): String = listOfNotNull(
+    private fun nodeTextLabels(node: AccessibilityNodeInfo): List<String> = listOfNotNull(
         node.text?.toString(),
         node.contentDescription?.toString(),
         node.hintText?.toString(),
-        node.viewIdResourceName,
-    ).joinToString(" ")
+    ).map(String::trim).filter(String::isNotBlank).distinct()
+
+    private fun nodeLabel(node: AccessibilityNodeInfo): String =
+        (nodeTextLabels(node) + listOfNotNull(node.viewIdResourceName)).joinToString(" ")
+
+    private fun automationAllowed(): Boolean {
+        val current = JobStore.load(this) ?: return false
+        return current.reportStatus == null && MobileWorkerService.canAutomate(current.job)
+    }
 
     private fun click(node: AccessibilityNodeInfo): Boolean {
+        if (!automationAllowed() || !node.isVisibleToUser || !node.isEnabled) return false
         var current: AccessibilityNodeInfo? = node
         repeat(5) {
             if (current?.isClickable == true) {
@@ -1440,6 +1491,7 @@ class ShopeeAccessibilityService : AccessibilityService() {
     }
 
     private fun setText(node: AccessibilityNodeInfo, value: String): Boolean {
+        if (!automationAllowed()) return false
         node.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
         val arguments = Bundle().apply {
             putCharSequence(
@@ -1463,7 +1515,8 @@ class ShopeeAccessibilityService : AccessibilityService() {
 
     private fun scheduleNext(delayMs: Long) {
         handler.removeCallbacks(processRunnable)
-        handler.postDelayed(processRunnable, delayMs)
+        tickGate.reset()
+        if (tickGate.request()) handler.postDelayed(processRunnable, delayMs)
     }
 
     companion object {

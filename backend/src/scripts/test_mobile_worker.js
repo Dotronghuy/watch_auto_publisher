@@ -1,15 +1,20 @@
 import express from 'express';
-import { PrismaClient } from '@prisma/client';
-import mobileWorkerRouter from '../routes/mobileWorker.routes.js';
-import {
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { createMobileWorkerGateway } from '../mobileWorkerGateway.js';
+
+const testDirectory = await mkdtemp(path.join(tmpdir(), 'zenwatch-mobile-worker-'));
+process.env.MOBILE_WORKER_DATABASE_URL = `file:${path.join(testDirectory, 'test.db').replace(/\\/g, '/')}`;
+const { mobileLinkPrisma: prisma } = await import('../services/mobileLinkJob.db.js');
+const { default: mobileWorkerRouter } = await import('../routes/mobileWorker.routes.js');
+const {
   claimNextMobileLinkJob,
   completeMobileLinkJob,
   enqueueMobileLinkJob,
   heartbeatMobileLinkJob,
   retryMobileLinkJob,
-} from '../services/mobileLinkJob.service.js';
-
-const prisma = new PrismaClient();
+} = await import('../services/mobileLinkJob.service.js');
 const token = 'codex-mobile-worker-test-token';
 const deviceId = 'codex-test-device';
 const postId = `codex_mobile_worker_test_${Date.now()}`;
@@ -148,6 +153,72 @@ const testQueue = async () => {
   assert(retryCompleted?.status === 'SUCCEEDED', 'retried attempt did not complete');
 };
 
+const testRecovery = async () => {
+  const legacy = await prisma.mobileLinkJob.create({ data: {
+    postId: `${postId}_legacy`,
+    postUrl: 'https://www.facebook.com/test/posts/4',
+    shopeeUrl: 'https://shopee.vn/product/1/4',
+    postText: null,
+    contentType: 'video',
+  } });
+  const payload = {
+    postId: `${postId}_recovery`,
+    postUrl: 'https://www.facebook.com/test/posts/5',
+    shopeeUrl: 'https://shopee.vn/product/1/5',
+    postText: 'Bài kiểm thử phục hồi kết nối đúng lượt xử lý',
+    contentType: 'post',
+  };
+  const queued = await enqueueMobileLinkJob(payload);
+  const first = await claimNextMobileLinkJob({ deviceId: 'recovery-one' });
+  assert(first?.id === queued.id, 'invalid legacy job blocked the valid queue');
+  assert((await prisma.mobileLinkJob.findUnique({ where: { id: legacy.id } })).status === 'FAILED',
+    'invalid legacy job was not quarantined');
+  const repeated = await claimNextMobileLinkJob({ deviceId: 'recovery-one' });
+  assert(repeated.id === first.id && repeated.attempt === first.attempt,
+    'lost claim response caused a duplicate attempt');
+
+  let conflict = null;
+  try { await enqueueMobileLinkJob({ ...payload, shopeeUrl: 'https://shopee.vn/product/2/9' }); }
+  catch (error) { conflict = error; }
+  assert(conflict?.code === 'MOBILE_LINK_JOB_PAYLOAD_CONFLICT',
+    'processing payload was changed while Android was using it');
+
+  await prisma.mobileLinkJob.update({
+    where: { id: first.id }, data: { leaseExpiresAt: new Date(Date.now() - 1000) },
+  });
+  const second = await claimNextMobileLinkJob({ deviceId: 'recovery-two' });
+  assert(second.id === first.id && second.attempt === first.attempt + 1,
+    'expired lease did not create a new attempt');
+  assert(!(await heartbeatMobileLinkJob({ jobId: first.id, deviceId: 'recovery-one', attempt: first.attempt })),
+    'expired device retained ownership');
+  assert(await completeMobileLinkJob({ jobId: first.id, deviceId: 'recovery-one', attempt: first.attempt,
+    status: 'SUCCEEDED', message: 'stale success' }) === null, 'stale success overwrote the current attempt');
+  await completeMobileLinkJob({ jobId: second.id, deviceId: 'recovery-two', attempt: second.attempt,
+    status: 'SUCCEEDED', message: 'recovered' });
+  console.log('mobile-worker recovery: legacy queue, lost claim response, expired lease, stale result OK');
+};
+
+const testConcurrentClaims = async () => {
+  for (const suffix of ['one', 'two']) {
+    await enqueueMobileLinkJob({
+      postId: `${postId}_concurrent_${suffix}`,
+      postUrl: 'https://www.facebook.com/test/posts/6',
+      shopeeUrl: 'https://shopee.vn/product/1/6',
+      postText: 'Bài kiểm thử hai điện thoại nhận tác vụ đồng thời',
+      contentType: 'post',
+    });
+  }
+  const claims = await Promise.all(['concurrent-one', 'concurrent-two'].map((deviceId) =>
+    claimNextMobileLinkJob({ deviceId })));
+  assert(claims.every(Boolean), 'concurrent claim unexpectedly lost an available job');
+  assert(new Set(claims.map((job) => job.id)).size === 2, 'two devices claimed the same job');
+  for (const job of claims) {
+    await completeMobileLinkJob({ jobId: job.id, deviceId: job.deviceId, attempt: job.attempt,
+      status: 'SUCCEEDED', message: 'concurrent claim ok' });
+  }
+  console.log('mobile-worker concurrent claims: OK');
+};
+
 const testRoute = async () => {
   process.env.MOBILE_WORKER_TOKEN = token;
   const app = express();
@@ -155,11 +226,16 @@ const testRoute = async () => {
   app.use('/api/mobile-worker', mobileWorkerRouter);
 
   const server = await new Promise((resolve) => {
-    const instance = app.listen(0, () => resolve(instance));
+    const instance = app.listen(0, '127.0.0.1', () => resolve(instance));
+  });
+  const gateway = createMobileWorkerGateway({ token, targetPort: server.address().port });
+  await new Promise((resolve, reject) => {
+    gateway.once('error', reject);
+    gateway.listen(0, '127.0.0.1', resolve);
   });
 
   try {
-    const { port } = server.address();
+    const { port } = gateway.address();
     const baseUrl = `http://127.0.0.1:${port}/api/mobile-worker`;
     const headers = {
       Authorization: `Bearer ${token}`,
@@ -187,6 +263,8 @@ const testRoute = async () => {
     assert(nextResponse.status === 200, `next returned ${nextResponse.status}`);
     const nextBody = await nextResponse.json();
     assert(nextBody.job?.id === queued.id, 'route claimed the wrong job');
+    assert(nextBody.job.postText === queued.postText && nextBody.job.shopeeUrl === queued.shopeeUrl &&
+      nextBody.job.contentType === queued.contentType, 'gateway changed the immutable job payload');
     const attempt = nextBody.job?.attempt;
     assert(Number.isInteger(attempt) && attempt > 0, 'route did not return a valid attempt');
 
@@ -223,17 +301,27 @@ const testRoute = async () => {
     });
     assert(resultResponse.status === 200, 'route result failed');
   } finally {
+    await new Promise((resolve) => gateway.close(resolve));
     await new Promise((resolve) => server.close(resolve));
   }
 };
 
 try {
+  for (const migration of [
+    '../../prisma/migrations/20260724102500_add_mobile_link_jobs/migration.sql',
+    '../../prisma/migrations/20260825050000_add_mobile_link_job_context/migration.sql',
+  ]) {
+    const sql = await readFile(new URL(migration, import.meta.url), 'utf8');
+    for (const statement of sql.split(';').map((part) => part.trim()).filter(Boolean)) {
+      await prisma.$executeRawUnsafe(statement);
+    }
+  }
   await testQueue();
+  await testRecovery();
+  await testConcurrentClaims();
   await testRoute();
   console.log('mobile-worker backend integration: OK');
 } finally {
-  await prisma.mobileLinkJob.deleteMany({
-    where: { postId: { in: [postId, routePostId, retryPostId] } },
-  });
   await prisma.$disconnect();
+  await rm(testDirectory, { recursive: true, force: true });
 }

@@ -9,6 +9,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.IBinder
+import android.os.SystemClock
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
 
@@ -20,6 +21,7 @@ class MobileWorkerService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        automationSession.pause()
         wakeController = DeviceWakeController(this)
         wakeController.startPolling()
         createNotificationChannel()
@@ -34,6 +36,7 @@ class MobileWorkerService : Service() {
     }
 
     override fun onDestroy() {
+        automationSession.pause()
         running.set(false)
         workerThread?.interrupt()
         workerThread = null
@@ -47,141 +50,117 @@ class MobileWorkerService : Service() {
 
     private fun workerLoop() {
         val deviceId = WorkerConfig.deviceId(this)
-
         while (running.get()) {
             var sleepMs = IDLE_POLL_MS
             try {
                 val settings = WorkerConfig.load(this)
-                if (!WorkerConfig.isValid(settings)) {
-                    updateStatus("Chờ cấu hình URL/token")
-                    sleepInterruptibly(IDLE_POLL_MS)
-                    continue
-                }
-                if (!WorkerConfig.isAccessibilityEnabled(this)) {
-                    updateStatus("Chờ bật quyền Trợ năng")
-                    sleepInterruptibly(IDLE_POLL_MS)
-                    continue
-                }
-
-                val api = MobileWorkerApi(settings)
                 val active = JobStore.load(this)
-                if (active != null) {
-                    sleepMs = ACTIVE_POLL_MS
-                    if (active.reportStatus == null && !wakeController.wakeForJob()) {
-                        JobStore.markForReport(
-                            this,
-                            success = false,
-                            message = "Máy đang khóa bằng PIN/mật khẩu; Worker không thể tự mở khóa",
-                        )
-                        sleepInterruptibly(ACTIVE_POLL_MS)
-                        continue
-                    }
-                    if (active.reportStatus != null) {
+                if (!WorkerConfig.isValid(settings)) {
+                    pauseAutomation()
+                    updateStatus("Chờ cấu hình URL/token")
+                } else {
+                    val api = MobileWorkerApi(settings)
+                    if (active?.reportStatus != null) {
+                        // Deliver an already-completed result even if Accessibility
+                        // has since been disabled or the screen is now locked.
+                        pauseAutomation()
                         updateStatus("Đang gửi kết quả ${active.reportStatus}…")
-                        val reportOutcome = api.report(
-                            active.job.id,
-                            deviceId,
-                            active.job.attempt,
-                            active.reportStatus,
-                            active.reportMessage.orEmpty(),
+                        val outcome = api.report(
+                            active.job.id, deviceId, active.job.attempt,
+                            active.reportStatus, active.reportMessage.orEmpty(),
                         )
-                        lastJobResult = when (reportOutcome) {
+                        if (!running.get()) return
+                        lastJobResult = when (outcome) {
                             MobileWorkerReportOutcome.REPORTED ->
                                 "${active.reportStatus}: ${active.reportMessage.orEmpty()}".take(240)
                             MobileWorkerReportOutcome.STALE ->
                                 "STALE: backend không còn nhận kết quả job ${active.job.id}".take(240)
                         }
                         JobStore.clear(this)
-                        lastLaunchedAttemptKey = null
-                        wakeController.finishJob()
-                        updateStatus(
-                            when (reportOutcome) {
-                                MobileWorkerReportOutcome.REPORTED ->
-                                    "Đã gửi kết quả job ${active.job.id}"
-                                MobileWorkerReportOutcome.STALE ->
-                                    "Job ${active.job.id} đã hết hạn trên backend • đã xóa trạng thái cục bộ"
-                            },
-                        )
-                    } else if (System.currentTimeMillis() - active.startedAt > JOB_TIMEOUT_MS) {
-                        JobStore.markForReport(
-                            this,
-                            success = false,
-                            message = "Quá thời gian tại bước ${active.step.name}",
-                        )
-                    } else {
-                        // An app update or service restart preserves the active job,
-                        // but Facebook may still show a menu/form from an older post.
-                        // Always invalidate the saved UI step and reopen this job's
-                        // exact post once before Accessibility is allowed to continue.
-                        val attemptKey = "${active.job.id}:${active.job.attempt}"
-                        if (lastLaunchedAttemptKey != attemptKey) {
-                            JobStore.restartNavigation(this)
-                            updateStatus("Đang mở lại bài ${active.job.postId}")
-                            if (!launchFacebookPost(active.job)) {
-                                JobStore.markForReport(
-                                    this,
-                                    success = false,
-                                    message = "Không mở được đúng bài viết Facebook",
-                                )
-                                sleepInterruptibly(ACTIVE_POLL_MS)
-                                continue
-                            }
-                            lastLaunchedAttemptKey = attemptKey
-                            sleepInterruptibly(DEVICE_WAKE_SETTLE_MS)
-                        }
-                        when (api.heartbeat(active.job.id, deviceId, active.job.attempt)) {
-                            MobileWorkerHeartbeatOutcome.ACTIVE ->
-                                updateStatus("Đang xử lý ${active.job.id} • ${active.step.name}")
-                            MobileWorkerHeartbeatOutcome.STALE -> {
-                                lastJobResult =
-                                    "STALE: backend đã hết hạn attempt ${active.job.attempt}"
-                                JobStore.clear(this)
-                                lastLaunchedAttemptKey = null
-                                wakeController.finishJob()
-                                updateStatus("Attempt cũ đã hết hạn • đang chờ tác vụ mới")
-                            }
-                        }
-                    }
-                } else if (wakeController.isSecurelyLocked()) {
-                    wakeController.finishJob()
-                    updateStatus("Máy đang khóa bằng PIN/mật khẩu • chưa nhận job mới")
-                } else {
-                    wakeController.finishJob()
-                    updateStatus("Đang chờ tác vụ mới…")
-                    val job = api.claimNext(deviceId)
-                    if (job != null) {
-                        JobStore.save(this, job)
-                        if (!wakeController.wakeForJob()) {
-                            JobStore.markForReport(
-                                this,
-                                success = false,
-                                message = "Máy đang khóa bằng PIN/mật khẩu; Worker không thể tự mở khóa",
-                            )
-                        } else {
-                            updateStatus("Đã nhận job ${job.id} • mở Facebook")
-                            sleepInterruptibly(DEVICE_WAKE_SETTLE_MS)
-                        }
-                        if (JobStore.load(this)?.reportStatus == null) {
-                            if (!launchFacebookPost(job)) {
-                                JobStore.markForReport(
-                                    this,
-                                    success = false,
-                                    message = "Không mở được ứng dụng Facebook",
-                                )
-                            } else {
-                                lastLaunchedAttemptKey = "${job.id}:${job.attempt}"
-                            }
-                        }
+                        updateStatus(lastJobResult)
+                    } else if (!WorkerConfig.isAccessibilityEnabled(this)) {
+                        pauseAutomation()
+                        updateStatus("Chờ bật quyền Trợ năng")
+                    } else if (active != null) {
                         sleepMs = ACTIVE_POLL_MS
+                        processActiveJob(active, api, deviceId)
+                    } else if (wakeController.isSecurelyLocked()) {
+                        pauseAutomation()
+                        updateStatus("Máy đang khóa bằng PIN/mật khẩu • chưa nhận job mới")
+                    } else {
+                        pauseAutomation()
+                        updateStatus("Đang chờ tác vụ mới…")
+                        val job = api.claimNext(deviceId)
+                        if (!running.get()) return
+                        if (job != null) {
+                            JobStore.save(this, job)
+                            updateStatus("Đã nhận job ${job.id} • xác nhận lượt xử lý")
+                            sleepMs = 350L
+                        }
                     }
                 }
-            } catch (interrupted: InterruptedException) {
+            } catch (_: InterruptedException) {
                 return
             } catch (error: Exception) {
+                pauseAutomation()
+                if (!running.get()) return
                 updateStatus("Lỗi Worker: ${error.message?.take(160)}")
             }
-            sleepInterruptibly(sleepMs)
+            try {
+                sleepInterruptibly(sleepMs)
+            } catch (_: InterruptedException) {
+                return
+            }
         }
+    }
+
+    private fun processActiveJob(active: ActiveJob, api: MobileWorkerApi, deviceId: String) {
+        if (System.currentTimeMillis() - active.startedAt > JOB_TIMEOUT_MS) {
+            pauseAutomation()
+            JobStore.markForReport(this, false, "Quá thời gian tại bước ${active.step.name}")
+            return
+        }
+
+        // Confirm ownership before resuming a persisted job or opening Facebook.
+        // A stale attempt may have been reassigned while this process was stopped.
+        val outcome = api.heartbeat(active.job.id, deviceId, active.job.attempt)
+        if (!running.get()) return
+        if (outcome == MobileWorkerHeartbeatOutcome.STALE) {
+            pauseAutomation()
+            lastJobResult = "STALE: backend đã hết hạn attempt ${active.job.attempt}"
+            JobStore.clear(this)
+            updateStatus("Attempt cũ đã hết hạn • đang chờ tác vụ mới")
+            return
+        }
+
+        val current = JobStore.load(this) ?: return
+        if (current.job.attemptKey != active.job.attemptKey || current.reportStatus != null) return
+        if (!wakeController.wakeForJob()) {
+            pauseAutomation()
+            JobStore.markForReport(this, false, "Máy đang khóa bằng PIN/mật khẩu; Worker không thể tự mở khóa")
+            return
+        }
+        val attemptKey = active.job.attemptKey
+        if (lastLaunchedAttemptKey != attemptKey || !canAutomate(active.job)) {
+            automationSession.pause()
+            JobStore.restartNavigation(this)
+            updateStatus("Đang mở lại bài ${active.job.postId}")
+            if (!launchFacebookPost(active.job)) {
+                JobStore.markForReport(this, false, "Không mở được đúng bài viết Facebook")
+                return
+            }
+            lastLaunchedAttemptKey = attemptKey
+            sleepInterruptibly(DEVICE_WAKE_SETTLE_MS)
+        }
+        if (!running.get()) return
+        automationSession.confirm(attemptKey, SystemClock.elapsedRealtime())
+        updateStatus("Đang xử lý ${active.job.id} • ${JobStore.load(this)?.step?.name.orEmpty()}")
+    }
+
+    private fun pauseAutomation() {
+        automationSession.pause()
+        lastLaunchedAttemptKey = null
+        wakeController.finishJob()
     }
 
     private fun launchFacebookPost(job: MobileLinkJob): Boolean {
@@ -229,6 +208,11 @@ class MobileWorkerService : Service() {
     }
 
     companion object {
+        internal val automationSession = AutomationSession()
+
+        internal fun canAutomate(job: MobileLinkJob): Boolean = isRunning &&
+            automationSession.permits(job.attemptKey, SystemClock.elapsedRealtime())
+
         private const val CHANNEL_ID = "zenwatch_mobile_worker"
         private const val NOTIFICATION_ID = 7201
         private const val IDLE_POLL_MS = 12_000L

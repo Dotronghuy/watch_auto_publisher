@@ -12,6 +12,7 @@ object JobStore {
     private const val KEY_REPORT_STATUS = "report_status"
     private const val KEY_REPORT_MESSAGE = "report_message"
 
+    @Synchronized
     fun save(context: Context, job: MobileLinkJob) {
         val now = System.currentTimeMillis()
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -24,6 +25,7 @@ object JobStore {
             .apply()
     }
 
+    @Synchronized
     fun load(context: Context): ActiveJob? {
         val preferences = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val rawJob = preferences.getString(KEY_JOB, null) ?: return null
@@ -48,7 +50,10 @@ object JobStore {
         }
     }
 
+    @Synchronized
     fun setStep(context: Context, step: AutomationStep) {
+        val active = load(context) ?: return
+        if (active.reportStatus != null) return
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .edit()
             .putString(KEY_STEP, step.name)
@@ -65,7 +70,11 @@ object JobStore {
         setStep(context, AutomationStep.OPEN_POST)
     }
 
+    @Synchronized
     fun markForReport(context: Context, success: Boolean, message: String) {
+        val active = load(context) ?: return
+        if (active.reportStatus != null) return
+        MobileWorkerService.automationSession.pause()
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .edit()
             .putString(KEY_STEP, AutomationStep.REPORTING.name)
@@ -75,7 +84,9 @@ object JobStore {
             .apply()
     }
 
+    @Synchronized
     fun clear(context: Context) {
+        MobileWorkerService.automationSession.pause()
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .edit()
             .clear()

@@ -8,7 +8,7 @@ class MobileWorkerApiTest {
     @Test
     fun `accepts successful result responses`() {
         assertEquals(MobileWorkerReportOutcome.REPORTED, reportOutcomeForHttpStatus(200))
-        assertEquals(MobileWorkerReportOutcome.REPORTED, reportOutcomeForHttpStatus(204))
+        assertNull(reportOutcomeForHttpStatus(204))
     }
 
     @Test
@@ -28,6 +28,6 @@ class MobileWorkerApiTest {
     @Test
     fun `keeps an accepted heartbeat active`() {
         assertEquals(MobileWorkerHeartbeatOutcome.ACTIVE, heartbeatOutcomeForHttpStatus(200))
-        assertEquals(MobileWorkerHeartbeatOutcome.ACTIVE, heartbeatOutcomeForHttpStatus(204))
+        assertNull(heartbeatOutcomeForHttpStatus(204))
     }
 }

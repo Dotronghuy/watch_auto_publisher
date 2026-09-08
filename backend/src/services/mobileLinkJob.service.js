@@ -1,6 +1,4 @@
-import { PrismaClient } from '@prisma/client';
-
-const prisma = new PrismaClient();
+import { mobileLinkPrisma as prisma } from './mobileLinkJob.db.js';
 const DEFAULT_LEASE_MS = 5 * 60 * 1000;
 const JOB_STATUSES = new Set(['PENDING', 'PROCESSING', 'SUCCEEDED', 'FAILED']);
 const RESULT_STATUSES = new Set(['SUCCEEDED', 'FAILED']);
@@ -279,31 +277,55 @@ export const claimNextMobileLinkJob = async ({
       },
       orderBy: { claimedAt: 'asc' },
     });
-    if (activeJob) return activeJob;
+    // Old installations may contain jobs that predate caption/contentType.
+    // Quarantine them before handing them to the strict Android parser, otherwise
+    // the same unreadable job can keep this device stuck on every poll.
+    const isRunnable = async (job) => {
+      try {
+        const payload = normalizeMobileLinkJobPayload(job);
+        if (!mobileLinkPayloadMatches(job, payload)) {
+          throw validationError('Stored job payload is not canonical');
+        }
+        return true;
+      } catch (error) {
+        if (error.code !== 'MOBILE_LINK_JOB_VALIDATION') throw error;
+        await tx.mobileLinkJob.update({
+          where: { id: job.id },
+          data: {
+            status: 'FAILED',
+            completedAt: now,
+            leaseExpiresAt: null,
+            errorMessage: `Invalid stored mobile job; repair before retry: ${error.message}`,
+          },
+        });
+        return false;
+      }
+    };
+    if (activeJob && await isRunnable(activeJob)) return activeJob;
 
-    const pendingJob = await tx.mobileLinkJob.findFirst({
-      where: { status: 'PENDING' },
-      orderBy: { createdAt: 'asc' },
-    });
-    if (!pendingJob) return null;
+    for (let skipped = 0; skipped < 25; skipped += 1) {
+      const pendingJob = await tx.mobileLinkJob.findFirst({
+        where: { status: 'PENDING' },
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      });
+      if (!pendingJob) return null;
+      if (!(await isRunnable(pendingJob))) continue;
 
-    const claimed = await tx.mobileLinkJob.updateMany({
-      where: {
-        id: pendingJob.id,
-        status: 'PENDING',
-      },
-      data: {
-        status: 'PROCESSING',
-        deviceId: normalizedDeviceId,
-        claimedAt: now,
-        leaseExpiresAt,
-        attempt: { increment: 1 },
-        errorMessage: null,
-      },
-    });
-    if (claimed.count !== 1) return null;
-
-    return tx.mobileLinkJob.findUnique({ where: { id: pendingJob.id } });
+      const claimed = await tx.mobileLinkJob.updateMany({
+        where: { id: pendingJob.id, status: 'PENDING' },
+        data: {
+          status: 'PROCESSING',
+          deviceId: normalizedDeviceId,
+          claimedAt: now,
+          leaseExpiresAt,
+          attempt: { increment: 1 },
+          errorMessage: null,
+        },
+      });
+      if (claimed.count !== 1) return null;
+      return tx.mobileLinkJob.findUnique({ where: { id: pendingJob.id } });
+    }
+    return null;
   });
 };
 

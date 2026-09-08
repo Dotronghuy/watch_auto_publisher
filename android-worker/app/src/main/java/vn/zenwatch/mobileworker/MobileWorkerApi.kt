@@ -19,13 +19,13 @@ internal enum class MobileWorkerHeartbeatOutcome {
 
 internal fun reportOutcomeForHttpStatus(code: Int): MobileWorkerReportOutcome? = when {
     code == HttpURLConnection.HTTP_CONFLICT -> MobileWorkerReportOutcome.STALE
-    code in 200..299 -> MobileWorkerReportOutcome.REPORTED
+    code == HttpURLConnection.HTTP_OK -> MobileWorkerReportOutcome.REPORTED
     else -> null
 }
 
 internal fun heartbeatOutcomeForHttpStatus(code: Int): MobileWorkerHeartbeatOutcome? = when {
     code == HttpURLConnection.HTTP_CONFLICT -> MobileWorkerHeartbeatOutcome.STALE
-    code in 200..299 -> MobileWorkerHeartbeatOutcome.ACTIVE
+    code == HttpURLConnection.HTTP_OK -> MobileWorkerHeartbeatOutcome.ACTIVE
     else -> null
 }
 
@@ -63,7 +63,9 @@ internal class MobileWorkerApi(private val settings: WorkerSettings) {
             "/api/mobile-worker/jobs/${encodePath(jobId)}/heartbeat",
             body,
         )
-        return heartbeatOutcomeForHttpStatus(response.code) ?: throw apiError(response)
+        val outcome = heartbeatOutcomeForHttpStatus(response.code) ?: throw apiError(response)
+        if (outcome == MobileWorkerHeartbeatOutcome.ACTIVE) requireAcknowledgement(response)
+        return outcome
     }
 
     fun report(
@@ -83,7 +85,9 @@ internal class MobileWorkerApi(private val settings: WorkerSettings) {
             "/api/mobile-worker/jobs/${encodePath(jobId)}/result",
             body,
         )
-        return reportOutcomeForHttpStatus(response.code) ?: throw apiError(response)
+        val outcome = reportOutcomeForHttpStatus(response.code) ?: throw apiError(response)
+        if (outcome == MobileWorkerReportOutcome.REPORTED) requireAcknowledgement(response)
+        return outcome
     }
 
     private fun request(
@@ -98,6 +102,7 @@ internal class MobileWorkerApi(private val settings: WorkerSettings) {
 
         val connection = baseUri.resolve(path).toURL().openConnection() as HttpURLConnection
         try {
+            connection.instanceFollowRedirects = false
             connection.requestMethod = method
             connection.connectTimeout = 15_000
             connection.readTimeout = 20_000
@@ -131,10 +136,16 @@ internal class MobileWorkerApi(private val settings: WorkerSettings) {
         return IllegalStateException("HTTP ${response.code}: ${detail.take(240)}")
     }
 
+    private fun requireAcknowledgement(response: Response) {
+        check(runCatching { JSONObject(response.body).optBoolean("ok", false) }.getOrDefault(false)) {
+            "Máy chủ chưa xác nhận kết quả; giữ job để gửi lại"
+        }
+    }
+
     private fun encodePath(value: String): String =
         URLEncoder.encode(value, StandardCharsets.UTF_8.name()).replace("+", "%20")
 
     companion object {
-        private const val WORKER_VERSION = "0.4.0"
+        private const val WORKER_VERSION = "0.4.1"
     }
 }

@@ -10,7 +10,7 @@
 5. Bấm **Lưu** và trả kết quả về backend.
 
 Với bài video/Reels, ứng dụng không mở trình xem Reels toàn màn hình. Worker chỉ dùng
-một deep link native để mở đúng profile Fanpage, chọn tab **Tất cả** và chỉ chấp nhận
+một đường dẫn profile để mở đúng Fanpage, chọn tab **Tất cả** và chỉ chấp nhận
 thẻ bài có caption khớp mạnh với nội dung backend vừa đăng. Không có phương án chọn
 Reel đầu tiên hoặc Reel mặc định khi caption không khớp:
 
@@ -39,11 +39,12 @@ gateway tại `http://127.0.0.1:3100`.
 Ghi URL cố định vào `MOBILE_WORKER_BASE_URL` trong `backend/.env`, sau đó chạy:
 
 ```powershell
+cd backend
 npm.cmd run configure:mobile-worker
-npx.cmd prisma migrate deploy
 npm.cmd run test:mobile-worker
 npm.cmd run test:mobile-worker-gateway
 npm.cmd run test:mobile-worker-public
+cd ..
 ```
 
 Thông tin cần nhập vào điện thoại được ghi ở:
@@ -87,11 +88,20 @@ app/build/outputs/apk/debug/app-debug.apk
 Bản đã kiểm thử để cài lên điện thoại hiện nằm tại:
 
 ```text
-dist/ZenWatch-Link-Worker-v0.4.0-canonical-flow-debug.apk
+dist/ZenWatch-Link-Worker-v0.4.1-reliability-debug.apk
 ```
 
-Chỉ dùng bản `0.4.0`; các APK cũ không còn tương thích với hợp đồng `jobId + attempt`
-và bằng chứng xác nhận lưu link của backend hiện tại.
+Chỉ dùng bản `0.4.1`. Worker xác nhận lại quyền xử lý với backend trước khi mở bài,
+tạm dừng thao tác khi mất kết nối và dừng Trợ năng khi bấm **Dừng Worker**.
+Job đã lưu kết quả vẫn gửi lại được khi điện thoại khóa màn hình hoặc tắt Trợ năng.
+Nhãn nút Lưu được đối chiếu riêng từng trường của Android; sau khi nhập, URL và tên
+liên kết được đọc lại trước khi lưu. Chỉ báo thành công khi có thông báo lưu thành công
+hoặc thấy đúng URL trên giao diện quản lý; đóng form đơn thuần không đủ xác nhận.
+
+`test:mobile-worker` tạo database SQLite tạm riêng, chạy các ca nhận đồng thời,
+mất phản hồi, hết hạn, retry và gửi kết quả cũ qua gateway, rồi xóa database tạm.
+Job cũ thiếu caption/contentType hợp lệ được chuyển sang FAILED để sửa và retry;
+chúng không chặn các job hợp lệ phía sau.
 
 ## Cấu hình backend
 

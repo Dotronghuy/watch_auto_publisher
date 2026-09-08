@@ -11,8 +11,8 @@ android {
         applicationId = "vn.zenwatch.mobileworker"
         minSdk = 26
         targetSdk = 35
-        versionCode = 31
-        versionName = "0.4.0"
+        versionCode = 32
+        versionName = "0.4.1"
     }
 
     buildTypes {
