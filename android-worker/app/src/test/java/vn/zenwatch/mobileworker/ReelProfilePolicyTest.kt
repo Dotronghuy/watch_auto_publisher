@@ -7,28 +7,21 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ReelProfilePolicyTest {
-    @Test
-    fun `builds the Page Posts timeline URL from a composite Facebook post ID`() {
-        assertEquals(
-            "https://www.facebook.com/profile.php?id=101788945134600&sk=posts",
-            ReelProfilePolicy.pagePostsUrl("101788945134600_1498447018965401"),
-        )
+    @Test fun conflictingModelAfterSharedIntroductionIsRejected() {
+        val intro = "Trước cuộc họp chiếc đồng hồ có thể nói thay phong cách của bạn Olevs "
+        assertFalse(ReelProfilePolicy.hasStrongCaptionMatch(intro + "9931", intro + "9932"))
+        assertTrue(ReelProfilePolicy.hasStrongCaptionMatch(intro + "9931", intro + "9931"))
     }
 
-    @Test
-    fun `video navigation URL never points at a generic Facebook video surface`() {
-        val target = ReelProfilePolicy.pagePostsUrl("101788945134600_1498447018965401")
-            .orEmpty()
-            .lowercase()
-        assertFalse(target.contains("/reel"))
-        assertFalse(target.contains("/videos"))
-        assertFalse(target.contains("/watch"))
-        assertTrue(target.contains("sk=posts"))
+    @Test fun hiddenModelDoesNotAuthorizeTruncatedGenericCaption() {
+        val intro = "Trước cuộc họp chiếc đồng hồ có thể nói thay phong cách của bạn"
+        assertFalse(ReelProfilePolicy.hasStrongCaptionMatch(intro + " DW001", intro + "..."))
     }
 
-    @Test
-    fun `does not invent a page ID for a legacy video-only job`() {
-        assertNull(ReelProfilePolicy.pagePostsUrl("1498447018965401"))
+    @Test fun conflictingUntruncatedTailDoesNotMatchJustBecauseOpeningMatches() {
+        val intro = "Trước cuộc họp chiếc đồng hồ có thể nói thay phong cách của bạn "
+        assertFalse(ReelProfilePolicy.hasStrongCaptionMatch(intro + "màu trắng thanh lịch",
+            intro + "màu đen cá tính"))
     }
 
     @Test

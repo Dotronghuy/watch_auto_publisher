@@ -34,10 +34,10 @@ import { saveImageHash } from '../utils/crm.db.js';
 import {
   enqueueMobileLinkJob,
   fallbackFacebookPostUrl,
-  facebookObjectIdFromPostId,
   isAllowedShopeeUrl,
   normalizeFacebookPostUrl,
 } from './mobileLinkJob.service.js';
+import { createFacebookPermalinkResolver } from './facebookPermalink.service.js';
 import { buildPerformanceMultipliers, getToneInstructionText, selectContentTone } from './content-tone.service.js';
 
 export { getToneInstructionText };
@@ -2293,56 +2293,18 @@ export const autoPublishRoutine = async (retryContext = null, runOptions = {}) =
   }
 }
 
-const resolveFacebookPostUrl = async (postId, pageToken, { contentType = 'post' } = {}) => {
-  const reelJob = contentType === 'reel';
-  const objectId = facebookObjectIdFromPostId(postId);
-  let lastGraphError = null;
-
-  // Reel jobs now open the owning Page profile and identify the freshly
-  // published card by caption. A Graph permalink is neither used nor required;
-  // waiting for it here would prevent the Android worker from receiving the job.
-  if (reelJob) {
+const resolveFacebookPostUrl = createFacebookPermalinkResolver({
+  requestGraph: (url, options) => axios.get(url, options),
+  normalizePostUrl: normalizeFacebookPostUrl,
+  fallbackPostUrl: fallbackFacebookPostUrl,
+  logFallback: ({ postId, reason }) => {
     liveLog(
-      `[Android Worker] Reel ${objectId}: tạo job ngay để tìm bài trên profile Fanpage.`,
-      'info',
-      'Facebook',
-    );
-    return normalizeFacebookPostUrl(
-      fallbackFacebookPostUrl(postId, contentType),
-      postId,
-      { contentType },
-    );
-  }
-
-  if (pageToken) {
-    try {
-      const response = await axios.get(`https://graph.facebook.com/v21.0/${postId}`, {
-        params: {
-          fields: 'id,permalink_url',
-          access_token: pageToken,
-        },
-        timeout: 15000,
-      });
-      const graphId = String(response.data?.id || '').trim();
-      const permalink = String(response.data?.permalink_url || '').trim();
-      if (facebookObjectIdFromPostId(graphId) === objectId && permalink) {
-        return normalizeFacebookPostUrl(permalink, postId, { contentType });
-      }
-      lastGraphError = new Error('Facebook chưa trả permalink khớp post_id');
-    } catch (error) {
-      lastGraphError = error;
-    }
-  }
-
-  if (lastGraphError) {
-    liveLog(
-      `[Android Worker] Khong lay duoc permalink tu Graph API, dung URL du phong: ${lastGraphError.message}`,
+      `[Android Worker] Chưa lấy được permalink cho ${postId} (${reason}); dùng link trực tiếp theo ID.`,
       'warning',
       'Facebook',
     );
-  }
-  return normalizeFacebookPostUrl(fallbackFacebookPostUrl(postId, contentType), postId, { contentType });
-};
+  },
+});
 
 export async function dispatchShopeeLinkMobile(
   postId,

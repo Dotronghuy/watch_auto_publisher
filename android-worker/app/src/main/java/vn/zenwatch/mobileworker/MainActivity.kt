@@ -138,6 +138,7 @@ class MainActivity : Activity() {
         val accessibility = WorkerConfig.isAccessibilityEnabled(this)
         val active = JobStore.load(this)
         val lines = mutableListOf<String>()
+        lines += "Phiên bản: " + packageManager.getPackageInfo(packageName, 0).versionName
         lines += if (MobileWorkerService.isRunning) "Worker: đang chạy" else "Worker: đã dừng"
         lines += if (accessibility) "Trợ năng: đã bật" else "Trợ năng: chưa bật"
         lines += if (WorkerConfig.isValid(settings)) "Cấu hình: hợp lệ" else "Cấu hình: chưa hoàn tất"

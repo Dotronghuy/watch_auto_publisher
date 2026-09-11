@@ -83,18 +83,46 @@ export const fallbackFacebookPostUrl = (postId, contentType = 'post') => {
   return '';
 };
 
-export const facebookUrlReferencesPostId = (value, postId) => {
-  const expectedObjectId = facebookObjectIdFromPostId(postId);
-  if (!expectedObjectId) return false;
-
+// Parse only exact object routes. A numeric segment inside an arbitrary path or
+// a duplicate query field is not evidence of the destination Facebook will open.
+const facebookDirectRoute = (value) => {
   try {
     const url = new URL(value);
-    const numericParts = decodeURIComponent(`${url.pathname}${url.search}`)
-      .match(/\d+/g) || [];
-    return numericParts.includes(expectedObjectId);
+    const host = url.hostname.toLowerCase();
+    if (url.protocol !== 'https:' || url.username || url.password || url.port
+      || !(host === 'facebook.com' || host.endsWith('.facebook.com'))) return null;
+    if (['id', 'story_fbid', 'v'].some((key) => url.searchParams.getAll(key).length > 1)) return null;
+    const pathname = decodeURIComponent(url.pathname);
+    const postPath = pathname.match(/^\/([^/]+)\/posts\/(\d+|pfbid[A-Za-z0-9]+)\/?$/);
+    const videoPath = pathname.match(/^\/(?:([^/]+)\/)?(?:reel|reels|videos)\/(\d+)\/?$/);
+    if (pathname === '/permalink.php' || pathname === '/story.php') {
+      return { kind: 'post', pageId: url.searchParams.get('id'), objectId: url.searchParams.get('story_fbid') };
+    }
+    if (postPath || videoPath) {
+      const match = postPath || videoPath;
+      return {
+        kind: postPath ? 'post' : 'video',
+        pageId: /^\d+$/.test(match[1] || '') ? match[1] : null,
+        objectId: match[2],
+      };
+    }
+    return /^\/watch\/?$/.test(pathname)
+      ? { kind: 'video', pageId: null, objectId: url.searchParams.get('v') } : null;
   } catch {
-    return false;
+    return null;
   }
+};
+
+const facebookRouteMatchesOwner = (route, postId) => {
+  const expectedPage = normalizeText(postId).match(/^(\d+)_\d+$/)?.[1];
+  return Boolean(route) && !(expectedPage && route.pageId && route.pageId !== expectedPage);
+};
+
+export const facebookUrlReferencesPostId = (value, postId) => {
+  const expectedObjectId = facebookObjectIdFromPostId(postId);
+  const route = facebookDirectRoute(value);
+  return Boolean(expectedObjectId && facebookRouteMatchesOwner(route, postId)
+    && route.objectId === expectedObjectId);
 };
 
 /**
@@ -119,12 +147,18 @@ export const normalizeFacebookPostUrl = (value, postId, { contentType = 'post' }
 
   try {
     const url = new URL(candidate);
-    const hostname = url.hostname.toLowerCase();
-    const isFacebookHost = hostname === 'facebook.com'
-      || hostname.endsWith('.facebook.com')
-      || hostname === 'fb.watch';
-    if (!isFacebookHost || !['http:', 'https:'].includes(url.protocol)) return fallback;
+    if (!['http:', 'https:'].includes(url.protocol)) return fallback;
     url.protocol = 'https:';
+    const route = facebookDirectRoute(url.toString());
+    if (!facebookRouteMatchesOwner(route, postId)) return fallback;
+    if (normalizedContentType === 'post') {
+      if (route.kind !== 'post') return fallback;
+      // Opaque pfbid permalinks returned by Graph cannot be compared numerically.
+      // Preserve those, but never accept a known mismatched numeric post/Page URL.
+      const opaqueStory = /^pfbid[A-Za-z0-9]+$/.test(route.objectId || '');
+      if (/^\d+(?:_\d+)?$/.test(normalizeText(postId))
+        && !opaqueStory && !facebookUrlReferencesPostId(url.toString(), postId)) return fallback;
+    }
     // A Reel job is allowed to open only a permalink that contains the exact
     // video object ID returned by the upload. Share/Page URLs without that ID can
     // degrade to a generic Reels feed and expose an unrelated video on Android.

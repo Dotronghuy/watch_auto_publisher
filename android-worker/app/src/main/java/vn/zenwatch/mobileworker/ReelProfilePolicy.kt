@@ -2,27 +2,14 @@ package vn.zenwatch.mobileworker
 
 import java.text.Normalizer
 
+/** Caption identity checks only; no profile navigation. */
 object ReelProfilePolicy {
-    private val compositePostId = Regex("^(\\d+)_(\\d+)$")
     private val combiningMarks = Regex("\\p{Mn}+")
     private val nonWord = Regex("[^a-z0-9]+")
     private val ignoredTerms = setOf(
         "cua", "cho", "voi", "nhung", "mot", "cac", "khi", "nay", "tai",
         "the", "and", "with", "this", "that", "from", "your", "facebook",
     )
-
-    fun pageIdFromPostId(postId: String): String? =
-        compositePostId.matchEntire(postId.trim())?.groupValues?.get(1)
-
-    /**
-     * Opens the Page's post timeline, not Facebook's resumable native Reel surface.
-     * Facebook can restore the last selected Reel when launched with fb://page/...
-     * whereas sk=posts explicitly requests the Page feed where uploaded videos are
-     * rendered as ordinary Page cards with their caption and three-dot menu.
-     */
-    fun pagePostsUrl(postId: String): String? = pageIdFromPostId(postId)?.let { pageId ->
-        "https://www.facebook.com/profile.php?id=$pageId&sk=posts"
-    }
 
     /**
      * Return a card only when exactly one visible card contains a deterministic
@@ -37,11 +24,24 @@ object ReelProfilePolicy {
     }
 
     fun hasStrongCaptionMatch(postText: String, visibleText: String): Boolean {
-        val targetTokens = captionTokens(postText).take(MAX_FINGERPRINT_TOKENS)
+        val targetTokens = captionTokens(postText)
         if (targetTokens.size < MIN_CAPTION_TOKENS) return false
         val visibleTokens = captionTokens(visibleText)
+        // A common marketing introduction cannot authorize a different model/SKU.
+        // If a distinctive code is hidden by truncation, leave the job unverified.
+        val modelTokens = targetTokens.filter { token ->
+            token.any(Char::isDigit) && (token.any(Char::isLetter) || token.length >= 3)
+        }.toSet()
+        if (!visibleTokens.containsAll(modelTokens)) return false
         val requiredPrefix = minOf(REQUIRED_PREFIX_TOKENS, targetTokens.size)
-        if (longestTargetPrefixRun(targetTokens, visibleTokens) < requiredPrefix) return false
+        val prefixRun = longestTargetPrefixRun(targetTokens, visibleTokens)
+        if (prefixRun < requiredPrefix) return false
+        if (prefixRun < targetTokens.size) {
+            val truncated = visibleText.contains("…") || visibleText.contains("...") ||
+                Regex("(?i)(xem thêm|see more)").containsMatchIn(visibleText)
+            val endsAtPrefix = visibleTokens.takeLast(prefixRun) == targetTokens.take(prefixRun)
+            if (!truncated && !endsAtPrefix) return false
+        }
 
         val targetTerms = significantTerms(postText)
         if (targetTerms.isEmpty()) return false
@@ -87,7 +87,6 @@ object ReelProfilePolicy {
         .trim()
 
     private const val MIN_CAPTION_TOKENS = 4
-    private const val REQUIRED_PREFIX_TOKENS = 10
+    private const val REQUIRED_PREFIX_TOKENS = 12
     private const val REQUIRED_SIGNIFICANT_TERMS = 4
-    private const val MAX_FINGERPRINT_TOKENS = 12
 }

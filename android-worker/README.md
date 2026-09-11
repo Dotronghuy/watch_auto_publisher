@@ -9,17 +9,20 @@
 4. Nhập URL Shopee và tên liên kết.
 5. Bấm **Lưu** và trả kết quả về backend.
 
-Với bài video/Reels, ứng dụng không mở trình xem Reels toàn màn hình. Worker chỉ dùng
-một đường dẫn profile để mở đúng Fanpage, chọn tab **Tất cả** và chỉ chấp nhận
-thẻ bài có caption khớp mạnh với nội dung backend vừa đăng. Không có phương án chọn
-Reel đầu tiên hoặc Reel mặc định khi caption không khớp:
+Bài viết/ảnh và video/Reels đều mở thẳng link đích, không vào profile, không chuyển
+tab và không cuộn dò caption. Backend tra `permalink_url` của đối tượng vừa đăng;
+video dùng VIDEO_ID, bài thường dùng PAGE_ID_POST_ID. Nếu Graph chưa trả permalink,
+dùng link trực tiếp theo ID. Link sai ID/Page hoặc link share/feed không được dùng.
 
-1. Bấm dấu ba chấm ở header của đúng thẻ bài Reels.
-2. Chọn **Quản lý sản phẩm**.
-3. Chọn **Thêm sản phẩm liên kết tiếp thị**.
-4. Nhập URL Shopee, tên liên kết và bấm **Lưu**.
+Worker mở HTTPS trong ứng dụng Facebook trước; nếu Facebook mở sai màn hình,
+thử cùng link qua handler Facebook rồi link trực tiếp theo ID, với số lần giới hạn.
+Caption chỉ dùng để xác minh nội dung đích trước khi mở menu, không phải để tìm bài.
+Reel toàn màn hình có bộ nhận diện riêng, không bắt buộc phải có header thời gian.
 
-Bài viết/ảnh thường vẫn mở bằng permalink chính xác như trước.
+Với video, sau khi xác minh đúng nội dung và nút tùy chọn:
+1. Mở tùy chọn của video → **Quản lý sản phẩm**.
+2. Chọn **Thêm sản phẩm liên kết tiếp thị**.
+3. Nhập URL Shopee, tên liên kết và bấm **Lưu**.
 
 Điện thoại không cần USB hoặc kết nối chung Wi-Fi với máy tính.
 
@@ -85,13 +88,21 @@ APK debug được tạo tại:
 app/build/outputs/apk/debug/app-debug.apk
 ```
 
-Bản đã kiểm thử để cài lên điện thoại hiện nằm tại:
+Bản sửa điều hướng đang cần xác nhận trên điện thoại thật:
 
 ```text
-dist/ZenWatch-Link-Worker-v0.4.1-reliability-debug.apk
+dist/ZenWatch-Link-Worker-v0.4.3-direct-link-debug.apk
 ```
 
-Chỉ dùng bản `0.4.1`. Worker xác nhận lại quyền xử lý với backend trước khi mở bài,
+Bản `0.4.3` có kiểm thử URL và bố cục tổng hợp; chưa được xác nhận trên Facebook máy thật.
+Bài thường phải có caption và nút tùy chọn của cùng một thẻ chi tiết. Reel phải có
+một vùng caption khớp và một nút tùy chọn có nhãn rõ ràng. Không bấm nút không nhãn,
+không chọn Reel đầu tiên, không đoán tọa độ khi không tìm thấy nút sản phẩm.
+Chấp nhận menu sản phẩm chỉ sau khi chính lần xử lý hiện tại đã mở menu bài đích.
+Nếu Facebook chuyển về Feed/profile hoặc không cung cấp mục quản lý sản phẩm,
+Worker báo lỗi và không gắn link. Mở Intent thành công không chứng minh đúng bài.
+
+Worker xác nhận lại quyền xử lý với backend trước khi mở bài,
 tạm dừng thao tác khi mất kết nối và dừng Trợ năng khi bấm **Dừng Worker**.
 Job đã lưu kết quả vẫn gửi lại được khi điện thoại khóa màn hình hoặc tắt Trợ năng.
 Nhãn nút Lưu được đối chiếu riêng từng trường của Android; sau khi nhập, URL và tên
@@ -102,6 +113,11 @@ hoặc thấy đúng URL trên giao diện quản lý; đóng form đơn thuần
 mất phản hồi, hết hạn, retry và gửi kết quả cũ qua gateway, rồi xóa database tạm.
 Job cũ thiếu caption/contentType hợp lệ được chuyển sang FAILED để sửa và retry;
 chúng không chặn các job hợp lệ phía sau.
+
+Job đã FAILED không tự chạy lại chỉ bằng việc bấm **Bắt đầu Worker**.
+Sau khi cài APK và cập nhật backend, thử lại chính job bị lỗi bằng chức năng retry;
+không đăng thêm một bài mới chỉ để thay thế job cũ. Cần quay màn hình Facebook từ lúc
+Worker mở link bài/video đến khi lưu hoặc báo lỗi để xác nhận luồng thực tế.
 
 ## Cấu hình backend
 
