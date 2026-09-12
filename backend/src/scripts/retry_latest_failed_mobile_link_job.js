@@ -95,12 +95,9 @@ try {
     console.log(`Loại nội dung: ${retriedJob.contentType === 'reel' ? 'Reels/Video' : 'Bài viết'}`);
     console.log(`Facebook URL: ${retriedJob.postUrl}`);
     console.log(`Shopee URL: ${retriedJob.shopeeUrl}`);
-    console.log('Giữ Android Worker 0.4.0 đang chạy để điện thoại nhận tác vụ.');
+    console.log('Giữ Android Worker bản mới nhất đang chạy để điện thoại nhận tác vụ.');
   }
 } catch (error) {
-  const legacyHint = /postText is required/i.test(String(error?.message || ''))
-    ? ' Job cũ thiếu caption; hãy thêm --post-text "caption đúng" và --reel/--post.'
-    : '';
-  console.error(`Không thể thử lại tác vụ gắn link: ${error.message}.${legacyHint}`);
+  console.error(`Không thể thử lại tác vụ gắn link: ${error.message}.`);
   process.exitCode = 1;
 }

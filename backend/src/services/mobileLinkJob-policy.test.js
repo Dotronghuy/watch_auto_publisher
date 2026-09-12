@@ -17,7 +17,7 @@ test('accepts only the two canonical content types', () => {
   assert.throws(() => normalizeMobileLinkContentType(''), /post or reel/);
 });
 
-test('requires exact caption and an allowed Shopee Vietnam URL', () => {
+test('keeps optional caption metadata and requires an allowed Shopee Vietnam URL', () => {
   const valid = normalizeMobileLinkJobPayload({
     postId: '101_202',
     postUrl: 'https://www.facebook.com/101/posts/202',
@@ -28,16 +28,6 @@ test('requires exact caption and an allowed Shopee Vietnam URL', () => {
   assert.equal(valid.postText, 'Caption nhận diện đúng bài');
   assert.equal(valid.contentType, 'post');
 
-  assert.throws(
-    () => normalizeMobileLinkJobPayload({
-      postId: '101_202',
-      postUrl: valid.postUrl,
-      shopeeUrl: valid.shopeeUrl,
-      postText: '',
-      contentType: 'post',
-    }),
-    /postText is required/,
-  );
   assert.throws(
     () => normalizeMobileLinkJobPayload({
       postId: '101_202',
@@ -58,6 +48,30 @@ test('requires exact caption and an allowed Shopee Vietnam URL', () => {
     }),
     /PAGE_ID_VIDEO_ID/,
   );
+});
+
+test('accepts missing, null and blank captions for exact post and video destinations', () => {
+  for (const contentType of ['post', 'reel']) {
+    const input = {
+      postId: '101_202',
+      postUrl: contentType === 'post'
+        ? 'https://www.facebook.com/101/posts/202'
+        : 'https://www.facebook.com/reel/202',
+      shopeeUrl: 'https://vn.shp.ee/example',
+      contentType,
+    };
+    assert.equal(normalizeMobileLinkJobPayload(input).postText, '');
+    for (const postText of [undefined, null, '', ' \n\t ']) {
+      const normalized = normalizeMobileLinkJobPayload({ ...input, postText });
+      assert.equal(normalized.postText, '');
+      assert.equal(normalized.postUrl, input.postUrl);
+      assert.equal(normalized.contentType, contentType);
+    }
+    assert.throws(() => normalizeMobileLinkJobPayload({ ...input, postId: '' }), /postId is required/);
+    assert.throws(() => normalizeMobileLinkJobPayload({ ...input, contentType: 'video' }), /post or reel/);
+    assert.throws(() => normalizeMobileLinkJobPayload({ ...input, shopeeUrl: 'http://shopee.vn/product/1/2' }),
+      /Shopee Vietnam HTTPS URL/);
+  }
 });
 
 test('does not invent a Reel URL for a plain regular-post ID', () => {
@@ -90,6 +104,8 @@ test('claimed and terminal jobs accept only their original payload', () => {
     mobileLinkPayloadMatches({ ...payload, shopeeUrl: 'https://vn.shp.ee/old' }, payload),
     false,
   );
+  assert.equal(mobileLinkPayloadMatches({ ...payload, postText: 'Changed metadata' }, payload), false);
+  assert.equal(mobileLinkPayloadMatches({ ...payload, postText: null }, { ...payload, postText: '' }), true);
 });
 
 test('result reporting is idempotent but rejects contradictory terminal results', () => {

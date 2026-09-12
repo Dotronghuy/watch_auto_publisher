@@ -203,7 +203,8 @@ export const normalizeMobileLinkJobPayload = ({
   const normalizedPostText = normalizeText(postText);
 
   if (!normalizedPostId) throw validationError('postId is required');
-  if (!normalizedPostText) throw validationError('postText is required');
+  // Caption is optional metadata for older clients, never a prerequisite for
+  // opening a validated direct post/video URL.
   if (normalizedContentType === 'reel' && !/^\d+_\d+$/.test(normalizedPostId)) {
     throw validationError('Reel postId must use PAGE_ID_VIDEO_ID');
   }
@@ -311,9 +312,8 @@ export const claimNextMobileLinkJob = async ({
       },
       orderBy: { claimedAt: 'asc' },
     });
-    // Old installations may contain jobs that predate caption/contentType.
-    // Quarantine them before handing them to the strict Android parser, otherwise
-    // the same unreadable job can keep this device stuck on every poll.
+    // Quarantine malformed destination/type/product payloads before Android
+    // parses them. A legacy job with no caption is still runnable.
     const isRunnable = async (job) => {
       try {
         const payload = normalizeMobileLinkJobPayload(job);

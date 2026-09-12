@@ -153,6 +153,78 @@ const testQueue = async () => {
   assert(retryCompleted?.status === 'SUCCEEDED', 'retried attempt did not complete');
 };
 
+const testOptionalCaptionJobs = async () => {
+  let objectId = 901;
+  for (const contentType of ['post', 'reel']) {
+    for (const postText of [undefined, null, '', ' \n\t ']) {
+      objectId += 1;
+      const payload = {
+        postId: `101_${objectId}`,
+        postUrl: contentType === 'post'
+          ? `https://www.facebook.com/101/posts/${objectId}`
+          : `https://www.facebook.com/reel/${objectId}`,
+        shopeeUrl: 'https://shopee.vn/product/1/9',
+        contentType,
+        ...(postText === undefined ? {} : { postText }),
+      };
+      const created = await enqueueMobileLinkJob(payload);
+      assert(created.postText === '', 'optional caption was not normalized');
+      const first = await claimNextMobileLinkJob({ deviceId: 'caption-optional-device' });
+      assert(first?.id === created.id, 'missing/blank caption prevented claiming a direct URL');
+
+      let conflict = null;
+      try { await enqueueMobileLinkJob({ ...payload, postText: 'Changed optional metadata' }); }
+      catch (error) { conflict = error; }
+      assert(conflict?.code === 'MOBILE_LINK_JOB_PAYLOAD_CONFLICT',
+        'optional caption change bypassed claimed payload immutability');
+      assert(!(await heartbeatMobileLinkJob({
+        jobId: first.id, deviceId: 'wrong-device', attempt: first.attempt,
+      })), 'captionless job lost device ownership protection');
+
+      await completeMobileLinkJob({
+        jobId: first.id, deviceId: first.deviceId, attempt: first.attempt,
+        status: 'FAILED', message: 'expected optional-caption retry test',
+      });
+      const retried = await retryMobileLinkJob(first.id);
+      assert(retried?.status === 'PENDING' && retried.postText === '',
+        'missing/blank caption prevented explicit retry');
+      const second = await claimNextMobileLinkJob({ deviceId: 'caption-optional-device' });
+      assert(second?.id === first.id && second.attempt === first.attempt + 1,
+        'captionless retry did not create a fenced attempt');
+      await completeMobileLinkJob({
+        jobId: second.id, deviceId: second.deviceId, attempt: second.attempt,
+        status: 'SUCCEEDED', message: 'optional caption is supported',
+      });
+    }
+  }
+  // Legacy nullable database rows must remain runnable without a metadata repair.
+  const legacy = await prisma.mobileLinkJob.create({ data: {
+    postId: '101_999',
+    postUrl: 'https://www.facebook.com/101/posts/999',
+    shopeeUrl: 'https://shopee.vn/product/1/9',
+    postText: null,
+    contentType: 'post',
+  } });
+  const claimed = await claimNextMobileLinkJob({ deviceId: 'caption-legacy-device' });
+  assert(claimed?.id === legacy.id, 'legacy null caption was quarantined');
+  const repeated = await claimNextMobileLinkJob({ deviceId: 'caption-legacy-device' });
+  assert(repeated?.id === claimed.id && repeated.attempt === claimed.attempt,
+    'legacy null caption prevented active job recovery');
+  await completeMobileLinkJob({
+    jobId: claimed.id, deviceId: claimed.deviceId, attempt: claimed.attempt,
+    status: 'FAILED', message: 'expected legacy retry test',
+  });
+  const retried = await retryMobileLinkJob(legacy.id);
+  assert(retried?.status === 'PENDING' && retried.postText === '',
+    'legacy null caption prevented retry without repair');
+  const finalAttempt = await claimNextMobileLinkJob({ deviceId: 'caption-legacy-device' });
+  await completeMobileLinkJob({
+    jobId: finalAttempt.id, deviceId: finalAttempt.deviceId, attempt: finalAttempt.attempt,
+    status: 'SUCCEEDED', message: 'legacy optional caption completed',
+  });
+  console.log('mobile-worker optional captions: post/video enqueue, claim, retry, legacy null, immutable payload and ownership OK');
+};
+
 const testRecovery = async () => {
   const legacy = await prisma.mobileLinkJob.create({ data: {
     postId: `${postId}_legacy`,
@@ -252,7 +324,6 @@ const testRoute = async () => {
       postId: routePostId,
       postUrl: 'https://www.facebook.com/test/posts/2',
       shopeeUrl: 'https://shopee.vn/product/1/3',
-      postText: 'Bài kiểm thử route mobile worker',
       contentType: 'post',
     });
     const routeDeviceId = 'codex-route-device';
@@ -263,6 +334,7 @@ const testRoute = async () => {
     assert(nextResponse.status === 200, `next returned ${nextResponse.status}`);
     const nextBody = await nextResponse.json();
     assert(nextBody.job?.id === queued.id, 'route claimed the wrong job');
+    assert(nextBody.job.postText === '', 'route rejected or changed an absent optional caption');
     assert(nextBody.job.postText === queued.postText && nextBody.job.shopeeUrl === queued.shopeeUrl &&
       nextBody.job.contentType === queued.contentType, 'gateway changed the immutable job payload');
     const attempt = nextBody.job?.attempt;
@@ -317,6 +389,7 @@ try {
     }
   }
   await testQueue();
+  await testOptionalCaptionJobs();
   await testRecovery();
   await testConcurrentClaims();
   await testRoute();

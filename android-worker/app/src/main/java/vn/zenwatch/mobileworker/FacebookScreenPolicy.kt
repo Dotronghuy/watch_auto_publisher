@@ -8,11 +8,28 @@ internal data class FacebookScreenNode(
     val right: Float,
     val bottom: Float,
     val interactive: Boolean = false,
+    val iconLike: Boolean = false,
+    val resourceId: String = "",
 ) {
     val centerX get() = (left + right) / 2
     val centerY get() = (top + bottom) / 2
     val width get() = right - left
     val height get() = bottom - top
+}
+
+/** A detected node, or the verified detail header's options position. */
+internal data class FacebookMenuTarget(
+    val nodeIndex: Int?,
+    val x: Float,
+    val y: Float,
+    val evidence: String,
+)
+
+internal object FacebookMenuTapPolicy {
+    fun attemptLimit(evidence: String): Int = if (evidence == "header_row") 1 else 3
+
+    fun preferNodeClick(evidence: String, attempt: Int): Boolean =
+        evidence in setOf("semantic_node", "video_options") && attempt % 2 == 0
 }
 
 internal object FacebookScreenPolicy {
@@ -64,74 +81,121 @@ internal object FacebookScreenPolicy {
         }.map(FacebookScreenNode::centerY)
             .distinctBy { (it / height * 100).toInt() }.sorted().toList()
 
-    /** Bind a caption to its OWN header. Never search the whole screen then use the first header. */
-    fun matchingHeaderY(
-        postText: String, nodes: List<FacebookScreenNode>, width: Float, height: Float,
-    ): Float? {
-        val headers = headerCenters(nodes, width, height)
-        val cardTexts = headers.mapIndexed { index, y ->
-            val top = y - height * 0.015f
-            val bottom = headers.getOrNull(index + 1)?.minus(height * 0.02f) ?: height
-            nodes.asSequence().filter { node ->
-                // A parent spanning multiple cards is not evidence for either one.
-                node.width > 0 && node.height > 0 &&
-                    node.top >= top && node.bottom <= bottom
-            }.flatMap { it.labels.asSequence() }
-                .filter { it.isNotBlank() && it.length <= 4_000 }
-                .distinct().take(120).joinToString(" ")
-        }
-        val index = ReelProfilePolicy.strongCaptionMatchIndex(postText, cardTexts) ?: return null
-        return headers[index] / height
-    }
-
-    /** One detail card, one caption-bound semantic options button, never an unlabelled guess. */
-    fun directPostMenuIndex(
-        postText: String, nodes: List<FacebookScreenNode>, width: Float, height: Float,
-    ): Int? {
+    /** No post text is accepted here: the job's validated direct URL selects the content. */
+    fun directPostMenuTarget(
+        nodes: List<FacebookScreenNode>, width: Float, height: Float,
+    ): FacebookMenuTarget? {
         if (width <= 0 || height <= 0 || profileTabIndices(nodes, width, height).isNotEmpty()) return null
-        if (headerCenters(nodes, width, height).size != 1) return null
-        val headerY = matchingHeaderY(postText, nodes, width, height)?.times(height) ?: return null
+        val headerY = headerCenters(nodes, width, height).singleOrNull() ?: return null
         val options = nodes.indices.filter { index ->
             val node = nodes[index]
-            val semantic = ProductLinkUiPolicy.hasExactLabel(node.labels, POST_OPTIONS_LABELS) ||
-                node.labels.any { label -> POST_OPTIONS_IDS.any { label.endsWith("/$it") || label == it } }
-            semantic && node.interactive && node.width in 1f..width * 0.24f &&
-                node.height in 1f..height * 0.12f && node.centerX >= width * 0.75f &&
+            optionsSemantic(node, POST_OPTIONS_LABELS) && node.interactive &&
+                node.width in 1f..width * 0.24f && node.height in 1f..height * 0.12f &&
+                node.centerX >= width * 0.75f &&
                 kotlin.math.abs(node.centerY - headerY) <= maxOf(48f, height * 0.075f)
         }
-        return uniqueOptionsIndex(options, nodes, width, height)
+        if (options.isNotEmpty()) {
+            return uniqueOptionsIndex(options, nodes, width, height)?.let {
+                nodeTarget(it, nodes, "semantic_node")
+            }
+        }
+        val authorY = headerAuthorY(nodes, width, height, headerY)
+        // Facebook can expose the three dots as an unlabelled ImageView/View.
+        // Limit those nodes to the right edge of this one post header, never the toolbar.
+        val icons = nodes.indices.filter { index ->
+            val node = nodes[index]
+            val inRow = if (authorY != null) {
+                kotlin.math.abs(node.centerY - authorY) <= maxOf(16f, height * 0.018f)
+            } else node.centerY in (headerY - height * 0.055f)..(headerY + height * 0.018f)
+            node.labels.all(String::isBlank) && (node.interactive || node.iconLike) &&
+                node.width in width * 0.015f..width * 0.16f &&
+                node.height in height * 0.008f..height * 0.065f &&
+                node.centerX in width * 0.88f..width * 0.985f && inRow
+        }
+        if (icons.isNotEmpty()) {
+            return uniqueOptionsIndex(icons, nodes, width, height)?.let {
+                nodeTarget(it, nodes, "header_icon")
+            }
+        }
+        // Layout observed in the user's 869x1884 screenshot: close/search toolbar,
+        // a single author/time header, and comment composer. Some versions omit the
+        // dots from the accessibility tree entirely. Use the author's actual row Y,
+        // not a fixed screen Y; OPEN_MENU permits only one such attempt and requires
+        // the product menu to appear before any link input.
+        if (authorY != null && hasPostDetailChrome(nodes, height)) {
+            val x = width * 0.947f
+            // Missing dots are different from a known non-menu control at that point.
+            // Ignore large containers, but never tap through a labelled Share/Boost/etc.
+            val occupied = nodes.any { node ->
+                node.width in 1f..width * 0.24f && node.height in 1f..height * 0.12f &&
+                    x in node.left..node.right && authorY in node.top..node.bottom &&
+                    node.labels.any(String::isNotBlank) && !optionsSemantic(node, POST_OPTIONS_LABELS)
+            }
+            if (occupied) return null
+            return FacebookMenuTarget(null, x, authorY, "header_row")
+        }
+        return null
     }
 
-    /** Fullscreen Reel: a caption near the bottom does not need a post-age header. */
-    fun directReelMenuIndex(
-        postText: String, nodes: List<FacebookScreenNode>, width: Float, height: Float,
-    ): Int? {
+    /** Fullscreen video options do not depend on a caption or an age header. */
+    fun directReelMenuTarget(
+        nodes: List<FacebookScreenNode>, width: Float, height: Float,
+    ): FacebookMenuTarget? {
         if (width <= 0 || height <= 0 || profileTabIndices(nodes, width, height).isNotEmpty()) return null
         if (headerCenters(nodes, width, height).size > 1) return null
         val staleSheet = nodes.any { ProductLinkUiPolicy.hasExactLabel(it.labels,
             listOf("Lưu thước phim", "Save reel", "Remix thước phim này", "Remix this reel")) }
-        if (staleSheet) return null
-        if (!hasVideoSurface(nodes, height)) return null
-        val captionNodes = nodes.filter { node ->
-            node.width > 0 && node.height in 1f..height * 0.45f &&
-                node.top >= 0 && node.bottom <= height &&
-                node.labels.any { it.length <= 4_000 && ReelProfilePolicy.hasStrongCaptionMatch(postText, it) }
-        }
-        // Nested accessibility text/description nodes may describe one caption.
-        // Two disjoint caption regions indicate a feed/recommendations, not one Reel.
-        val captionRegions = mutableListOf<FacebookScreenNode>()
-        captionNodes.sortedBy { it.height }.forEach { node ->
-            if (captionRegions.none { other -> overlaps(node, other) }) captionRegions.add(node)
-        }
-        if (captionRegions.size != 1) return null
+        if (staleSheet || !hasVideoSurface(nodes, height)) return null
         val options = nodes.indices.filter { index ->
             val node = nodes[index]
             node.interactive && node.width in 1f..width * 0.27f &&
                 node.height in 1f..height * 0.15f &&
                 node.centerX >= width * 0.65f && node.centerY in height * 0.06f..height * 0.96f &&
-                ProductLinkUiPolicy.hasExactLabel(node.labels, REEL_OPTIONS_LABELS)
+                optionsSemantic(node, REEL_OPTIONS_LABELS)
         }
-        return uniqueOptionsIndex(options, nodes, width, height)
+        // An unlabelled Reel action rail also contains reactions/share/audio:
+        // unlike a post header, its unknown icons have no unique menu location.
+        return uniqueOptionsIndex(options, nodes, width, height)?.let {
+            nodeTarget(it, nodes, "video_options")
+        }
+    }
+
+    private fun nodeTarget(index: Int, nodes: List<FacebookScreenNode>, evidence: String) =
+        FacebookMenuTarget(index, nodes[index].centerX, nodes[index].centerY, evidence)
+
+    private fun optionsSemantic(node: FacebookScreenNode, labels: List<String>): Boolean =
+        ProductLinkUiPolicy.hasExactLabel(node.labels, labels + listOf("…", "...", "⋯", "⋮")) ||
+            POST_OPTIONS_IDS.any { node.resourceId.endsWith("/$it") || node.resourceId == it }
+
+    private fun headerAuthorY(
+        nodes: List<FacebookScreenNode>, width: Float, height: Float, headerY: Float,
+    ): Float? {
+        val candidates = nodes.filter { node ->
+            node.left >= width * 0.1f && node.centerX <= width * 0.78f &&
+                node.width in width * 0.1f..width * 0.8f && node.height in 1f..height * 0.055f &&
+                node.centerY in (headerY - height * 0.06f)..(headerY - height * 0.008f) &&
+                node.labels.any { label ->
+                    label.isNotBlank() && label.length <= 100 && !agePattern.containsMatchIn(label) &&
+                        !ProductLinkUiPolicy.hasExactLabel(listOf(label),
+                            listOf("Đóng", "Close", "Tìm kiếm", "Search", "Facebook", "Reels", "Thước phim"))
+                }
+        }
+        // The closest text row immediately above the post time is the author line.
+        return candidates.maxOfOrNull(FacebookScreenNode::centerY)
+    }
+
+    private fun hasPostDetailChrome(nodes: List<FacebookScreenNode>, height: Float): Boolean {
+        val close = nodes.any { it.centerY < height * 0.14f &&
+            ProductLinkUiPolicy.hasExactLabel(it.labels, listOf("Đóng", "Close", "Dismiss")) }
+        val search = nodes.any { it.centerY < height * 0.14f &&
+            ProductLinkUiPolicy.hasExactLabel(it.labels, listOf("Tìm kiếm", "Search")) }
+        val composer = nodes.any { node ->
+            node.centerY > height * 0.6f && node.labels.any { label ->
+                listOf("Bình luận dưới tên", "Viết bình luận", "Comment as", "Write a comment")
+                    .any { label.startsWith(it, true) }
+            }
+        }
+        return close && search && composer
     }
 
     private fun uniqueOptionsIndex(

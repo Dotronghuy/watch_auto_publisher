@@ -122,16 +122,20 @@ class ShopeeAccessibilityService : AccessibilityService() {
         }
     }
 
-    /** Open only direct object URLs. Caption verification never searches a timeline. */
+    /** Open the job's direct URL and wait for the post/video menu surface; no caption comparison. */
     private fun openExactPost(root: AccessibilityNodeInfo, active: ActiveJob) {
         val key = active.job.attemptKey
+        if (elapsedInStep(active) < DIRECT_OPEN_SETTLE_MS) {
+            scheduleNext(DIRECT_OPEN_SETTLE_MS - elapsedInStep(active))
+            return
+        }
         val staleProductUi = hasProductLinkSurface(root) || isReelOptionsMenuVisible(root)
         val wrongDestination = looksLikeFacebookHomeFeed(root) || looksLikeProfileTimeline(root)
         val boostPostUi = looksLikeBoostPostScreen(root)
         val currentTarget = exactPostReopenTargets[key] ?: 0
 
         if (!staleProductUi && !wrongDestination && !boostPostUi &&
-            findVerifiedMenuButton(root, active) != null) {
+            findDirectMenuControl(root, active) != null) {
             menuSemanticTapAttempts.remove(key)
             menuTapDispatched.remove(key)
             linkManagerNavigationProof.remove(key)
@@ -164,11 +168,10 @@ class ShopeeAccessibilityService : AccessibilityService() {
             staleProductUi -> "Facebook vẫn hiển thị menu/form của bài cũ"
             wrongDestination -> "Link đích bị Facebook chuyển về Feed/profile"
             boostPostUi -> "Facebook mở nhầm màn Quảng bá bài viết"
-            active.job.postText.isBlank() -> "Job không có caption để xác minh nội dung đích"
-            else -> "Chưa xác minh được caption và nút tùy chọn của đúng bài/video từ link đích"
+            else -> "Đã mở link đích nhưng chưa nhận diện được nút ba chấm của bài/video"
         }
         failStepAfter(active, EXACT_POST_FAIL_TIMEOUT_MS,
-            "$reason; không gắn link khi chưa xác minh. ${navigationDiagnostics(root, active)}")
+            "$reason; chưa mở được quản lý sản phẩm. ${navigationDiagnostics(root, active)}")
     }
 
     private fun restartDirectNavigation(active: ActiveJob) {
@@ -211,9 +214,9 @@ class ShopeeAccessibilityService : AccessibilityService() {
             }
             return
         }
-        val button = findVerifiedMenuButton(root, active)
+        val button = findDirectMenuControl(root, active)
         if (button == null) {
-            // After a tap, give the menu time to populate; a hidden caption is expected.
+            // After a tap, give the menu time to populate; the detail surface may be hidden.
             if (key in menuTapDispatched) {
                 failStepAfter(active, 35_000, "Đã mở tùy chọn nhưng không thấy mục quản lý sản phẩm")
             } else {
@@ -222,9 +225,13 @@ class ShopeeAccessibilityService : AccessibilityService() {
             return
         }
         val attempts = menuSemanticTapAttempts[key] ?: 0
-        if (attempts < POST_MENU_SEMANTIC_TAP_LIMIT) {
-            val dispatched = tapNodeByGesture(button)
-            val clicked = if (!dispatched) click(button) else false
+        val limit = FacebookMenuTapPolicy.attemptLimit(button.target.evidence)
+        if (attempts < limit) {
+            // Only a semantic menu node may receive ACTION_CLICK, never its Page/card
+            // ancestor. Unknown header icons go straight to their exact tap location.
+            val clicked = FacebookMenuTapPolicy.preferNodeClick(button.target.evidence, attempts) &&
+                button.node?.let(::clickMenuNode) == true
+            val dispatched = if (!clicked) tapAt(button.target.x, button.target.y) else false
             menuSemanticTapAttempts[key] = attempts + 1
             if (dispatched || clicked) menuTapDispatched.add(key)
             scheduleNext(if (dispatched || clicked) 1_000 else 450)
@@ -569,11 +576,14 @@ class ShopeeAccessibilityService : AccessibilityService() {
             val bounds = Rect()
             node.getBoundsInScreen(bounds)
             FacebookScreenNode(
-                nodeTextLabels(node) + listOfNotNull(node.viewIdResourceName), bounds.left.toFloat(), bounds.top.toFloat(),
+                nodeTextLabels(node), bounds.left.toFloat(), bounds.top.toFloat(),
                 bounds.right.toFloat(), bounds.bottom.toFloat(),
-                node.isClickable || node.parent?.isClickable == true ||
+                node.isEnabled && (node.isClickable || node.parent?.isClickable == true ||
+                    node.actionList.any { it.id == AccessibilityNodeInfo.ACTION_CLICK } ||
                     node.className?.toString()?.contains("Tab", true) == true ||
-                    node.className?.toString()?.contains("Button", true) == true,
+                    node.className?.toString()?.contains("Button", true) == true),
+                iconLike = node.isEnabled && node.className?.toString()?.contains("Image", true) == true,
+                resourceId = node.viewIdResourceName.orEmpty(),
             )
         }
     }
@@ -632,19 +642,20 @@ class ShopeeAccessibilityService : AccessibilityService() {
         ) != null
     }
 
-    private fun findVerifiedMenuButton(root: AccessibilityNodeInfo, active: ActiveJob): AccessibilityNodeInfo? {
-        if (active.job.postText.isBlank()) return null
+    private data class MenuControl(val target: FacebookMenuTarget, val node: AccessibilityNodeInfo?)
+
+    private fun findDirectMenuControl(root: AccessibilityNodeInfo, active: ActiveJob): MenuControl? {
+        if (FacebookPostLauncher.targetCount(active.job) == 0) return null
         val (nodes, snapshot) = screenNodes(root)
         val width = resources.displayMetrics.widthPixels.toFloat()
         val height = resources.displayMetrics.heightPixels.toFloat()
         if (profileTabIndices(snapshot).isNotEmpty()) return null
-        if (isVideoJob(active) && FacebookScreenPolicy.hasVideoSurface(snapshot, height)) {
-            return FacebookScreenPolicy.directReelMenuIndex(active.job.postText, snapshot, width, height)
-                ?.let(nodes::get)
-        }
-        // Some direct video links render a normal detail card, without a Reel surface.
-        return FacebookScreenPolicy.directPostMenuIndex(active.job.postText, snapshot, width, height)
-            ?.let(nodes::get)
+        val target = if (isVideoJob(active) && FacebookScreenPolicy.hasVideoSurface(snapshot, height)) {
+            FacebookScreenPolicy.directReelMenuTarget(snapshot, width, height)
+        } else {
+            FacebookScreenPolicy.directPostMenuTarget(snapshot, width, height)
+        } ?: return null
+        return MenuControl(target, target.nodeIndex?.let(nodes::get))
     }
 
     private fun looksLikeBoostPostScreen(root: AccessibilityNodeInfo): Boolean {
@@ -708,9 +719,13 @@ class ShopeeAccessibilityService : AccessibilityService() {
         node.getBoundsInScreen(bounds)
         if (bounds.isEmpty) return false
 
-        val path = Path().apply {
-            moveTo(bounds.exactCenterX(), bounds.exactCenterY())
-        }
+        return tapAt(bounds.exactCenterX(), bounds.exactCenterY())
+    }
+
+    private fun tapAt(x: Float, y: Float): Boolean {
+        if (!automationAllowed() || x !in 0f..resources.displayMetrics.widthPixels.toFloat() ||
+            y !in 0f..resources.displayMetrics.heightPixels.toFloat()) return false
+        val path = Path().apply { moveTo(x, y) }
         val gesture = GestureDescription.Builder()
             .addStroke(GestureDescription.StrokeDescription(path, 0, 120))
             .build()
@@ -739,6 +754,13 @@ class ShopeeAccessibilityService : AccessibilityService() {
     private fun automationAllowed(): Boolean {
         val current = JobStore.load(this) ?: return false
         return current.reportStatus == null && MobileWorkerService.canAutomate(current.job)
+    }
+
+    private fun clickMenuNode(node: AccessibilityNodeInfo): Boolean {
+        if (!automationAllowed() || !node.isVisibleToUser || !node.isEnabled) return false
+        if (!node.isClickable &&
+            node.actionList.none { it.id == AccessibilityNodeInfo.ACTION_CLICK }) return false
+        return node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
     }
 
     private fun click(node: AccessibilityNodeInfo): Boolean {
@@ -783,7 +805,7 @@ class ShopeeAccessibilityService : AccessibilityService() {
     }
 
     companion object {
-        private const val POST_MENU_SEMANTIC_TAP_LIMIT = 3
+        private const val DIRECT_OPEN_SETTLE_MS = 2_000L
         private const val EXACT_POST_FIRST_RETRY_MS = 6_000L
         private const val EXACT_POST_REOPEN_SETTLE_MS = 6_000L
         private const val EXACT_POST_FAIL_TIMEOUT_MS = 65_000L
