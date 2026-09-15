@@ -4,6 +4,10 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import multer from 'multer';
 import { runAutoFill, stopAutoFill } from '../services/autofill/autofill.service.js';
+import {
+  ALL_BRANDS_VALUE,
+  getAvailableBrands,
+} from '../services/autofill/googleSheets.service.js';
 
 const router = express.Router();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -24,6 +28,7 @@ const storage = multer.diskStorage({
 const upload = multer({ storage });
 const configuredCredentialsPath = path.join(__dirname, '../config/credentials.json');
 const uploadedCredentialsPath = path.join(UPLOAD_DIR, 'credentials.json');
+const GOOGLE_SHEET_URL_PATTERN = /^https:\/\/docs\.google\.com\/spreadsheets\/d\/[a-zA-Z0-9-_]+/;
 
 function getCredentialsPath() {
   if (fs.existsSync(configuredCredentialsPath)) return configuredCredentialsPath;
@@ -70,7 +75,7 @@ router.get('/status', (req, res) => {
     isRunning,
     hasCredentials: Boolean(getCredentialsPath()),
     hasExcel: fs.existsSync(excelPath),
-    engine: 'playwright-chatgpt'
+    engine: 'playwright-dual-ai'
   });
 });
 
@@ -78,13 +83,52 @@ router.post('/upload', upload.fields([{ name: 'credentials', maxCount: 1 }, { na
   res.json({ success: true, message: 'Upload thành công!' });
 });
 
+router.post('/brands', async (req, res) => {
+  const { sheetUrl } = req.body || {};
+  if (!sheetUrl) {
+    return res.status(400).json({ success: false, message: 'Thiếu URL Google Sheets' });
+  }
+  if (!GOOGLE_SHEET_URL_PATTERN.test(sheetUrl)) {
+    return res.status(400).json({ success: false, message: 'URL Google Sheets không hợp lệ' });
+  }
+
+  const credentialsPath = getCredentialsPath();
+  if (!credentialsPath) {
+    return res.status(400).json({
+      success: false,
+      message: 'Chưa cấu hình file credentials.json trong backend/src/config',
+    });
+  }
+
+  try {
+    const credentials = JSON.parse(fs.readFileSync(credentialsPath, 'utf8'));
+    const result = await getAvailableBrands(sheetUrl, credentials);
+    return res.json({ success: true, ...result });
+  } catch (error) {
+    return res.status(400).json({
+      success: false,
+      message: `Không tải được danh sách thương hiệu: ${error.message}`,
+    });
+  }
+});
+
 router.post('/start', async (req, res) => {
   if (isRunning) return res.json({ success: false, message: 'Tool đang chạy, vui lòng đợi...' });
 
   const { sheetUrl, aiTone } = req.body;
+  const selectedBrand = String(req.body?.selectedBrand || '').trim();
   if (!sheetUrl) return res.status(400).json({ success: false, message: 'Thiếu URL Google Sheets' });
-  if (!/^https:\/\/docs\.google\.com\/spreadsheets\/d\/[a-zA-Z0-9-_]+/.test(sheetUrl)) {
+  if (!GOOGLE_SHEET_URL_PATTERN.test(sheetUrl)) {
     return res.status(400).json({ success: false, message: 'URL Google Sheets không hợp lệ' });
+  }
+  if (!selectedBrand) {
+    return res.status(400).json({
+      success: false,
+      message: 'Hãy chọn thương hiệu cần cào trước khi bắt đầu.',
+    });
+  }
+  if (selectedBrand !== ALL_BRANDS_VALUE && selectedBrand.length > 120) {
+    return res.status(400).json({ success: false, message: 'Tên thương hiệu không hợp lệ.' });
   }
 
   const credentialsPath = getCredentialsPath();
@@ -97,6 +141,7 @@ router.post('/start', async (req, res) => {
   const config = {
     sheetUrl,
     aiTone: allowedTones.includes(aiTone) ? aiTone : 'Thu hút (Engaging)',
+    selectedBrand,
     credentialsPath,
     excelPath,
   };
@@ -109,11 +154,7 @@ router.post('/start', async (req, res) => {
   try {
     await runAutoFill(config, broadcastLog);
   } catch (err) {
-    if (err.code === 'CHATGPT_HISTORY_RATE_LIMIT') {
-      broadcastLog(`⏸️ TOOL ĐÃ DỪNG AN TOÀN ĐỂ KIỂM TRA CHATGPT: ${err.message}`);
-    } else {
-      broadcastLog(`❌ LỖI NGHIÊM TRỌNG: ${err.message}`);
-    }
+    broadcastLog(`❌ LỖI NGHIÊM TRỌNG: ${err.message}`);
   } finally {
     isRunning = false;
     broadcastStatus('done');

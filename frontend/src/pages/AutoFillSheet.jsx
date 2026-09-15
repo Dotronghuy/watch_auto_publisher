@@ -1,7 +1,17 @@
 import { useState, useEffect, useRef } from 'react';
-import { Play, Square, Settings, Link as LinkIcon, Circle } from 'lucide-react';
+import {
+  Building2,
+  Circle,
+  Link as LinkIcon,
+  Play,
+  RefreshCw,
+  Settings,
+  Square,
+} from 'lucide-react';
 import { clsx } from 'clsx';
 import { twMerge } from 'tailwind-merge';
+
+const ALL_BRANDS_VALUE = '__ALL__';
 
 function cn(...inputs) {
   return twMerge(clsx(inputs));
@@ -29,6 +39,11 @@ export default function AutoFillSheet() {
   const [backendOnline, setBackendOnline] = useState(null);
   // Hide Excel upload to match exact mockup design
   const [aiTone, setAiTone] = useState(() => localStorage.getItem('autofill_aiTone') || 'Thu hút (Engaging)');
+  const [selectedBrand, setSelectedBrand] = useState(() => localStorage.getItem('autofill_selectedBrand') || '');
+  const [brands, setBrands] = useState([]);
+  const [brandsLoading, setBrandsLoading] = useState(false);
+  const [brandsError, setBrandsError] = useState('');
+  const [brandReloadKey, setBrandReloadKey] = useState(0);
   const logEndRef = useRef(null);
   const runWasActiveRef = useRef(false);
 
@@ -78,11 +93,76 @@ export default function AutoFillSheet() {
   }, []);
 
   useEffect(() => {
+    const normalizedUrl = sheetUrl.trim();
+    const isValidSheetUrl = /^https:\/\/docs\.google\.com\/spreadsheets\/d\/[a-zA-Z0-9-_]+/.test(normalizedUrl);
+    if (!isValidSheetUrl || status === 'running') {
+      if (!normalizedUrl) {
+        setBrands([]);
+        setBrandsError('');
+      }
+      return undefined;
+    }
+
+    const controller = new AbortController();
+    const timer = setTimeout(async () => {
+      setBrandsLoading(true);
+      setBrandsError('');
+      try {
+        const response = await fetch('/api/autofill/brands', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sheetUrl: normalizedUrl }),
+          signal: controller.signal,
+        });
+        const data = await readApiResponse(response);
+        if (!response.ok || !data.success) {
+          throw new Error(getApiError(data, 'Không tải được danh sách thương hiệu'));
+        }
+
+        const availableBrands = Array.isArray(data.brands) ? data.brands : [];
+        setBrands(availableBrands);
+        setBackendOnline(true);
+        setSelectedBrand((currentBrand) => {
+          if (!currentBrand || currentBrand === ALL_BRANDS_VALUE) return currentBrand;
+          const matchingBrand = availableBrands.find((brand) => (
+            brand.localeCompare(currentBrand, 'vi', { sensitivity: 'base' }) === 0
+          ));
+          if (matchingBrand) {
+            localStorage.setItem('autofill_selectedBrand', matchingBrand);
+            return matchingBrand;
+          }
+          localStorage.removeItem('autofill_selectedBrand');
+          return '';
+        });
+      } catch (error) {
+        if (error.name === 'AbortError') return;
+        setBrands([]);
+        setBrandsError(error.message);
+      } finally {
+        if (!controller.signal.aborted) setBrandsLoading(false);
+      }
+    }, 500);
+
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [sheetUrl, status, brandReloadKey]);
+
+  useEffect(() => {
     logEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [logs]);
 
   const startAutoFill = async () => {
     if (!sheetUrl) return alert('Vui lòng nhập đường dẫn Google Sheet!');
+    if (brandsLoading) return alert('Đang đọc danh sách thương hiệu từ Sheet, vui lòng đợi một chút!');
+    if (!selectedBrand) return alert('Vui lòng chọn thương hiệu cần cào!');
+    if (
+      selectedBrand === ALL_BRANDS_VALUE
+      && !window.confirm('Bạn đang chọn cào TẤT CẢ THƯƠNG HIỆU. Bạn chắc chắn muốn đưa toàn bộ SKU vào hàng đợi?')
+    ) {
+      return;
+    }
 
     setLogs([]);
     try {
@@ -101,7 +181,7 @@ export default function AutoFillSheet() {
       const res = await fetch('/api/autofill/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sheetUrl, aiTone })
+        body: JSON.stringify({ sheetUrl, aiTone, selectedBrand })
       });
       const data = await readApiResponse(res);
       if (!res.ok || !data.success) {
@@ -144,7 +224,7 @@ export default function AutoFillSheet() {
       {/* HEADER SECTION */}
       <div className="mb-2">
         <h1 className="text-[26px] font-bold flex items-center gap-3">
-          <span>Tool Cào Dữ liệu (Playwright + ChatGPT)</span>
+          <span>Tool Cào Dữ liệu (Playwright Dual AI)</span>
           <span 
             className="text-[10px] uppercase font-bold tracking-widest px-2 py-0.5 rounded"
             style={{ backgroundColor: 'rgba(255,77,141,0.15)', color: '#FF4D8D' }}
@@ -153,7 +233,7 @@ export default function AutoFillSheet() {
           </span>
         </h1>
         <p className="mt-2 text-[13px]" style={{ color: '#94A3B8' }}>
-          Playwright cào thông số sản phẩm và điều khiển ChatGPT để sinh content, không tiêu tốn API AI.
+          ChatGPT và Gemini xử lý SKU song song bằng Playwright; tự chuyển sang Gemini nếu ChatGPT bị giới hạn, không dùng API AI.
         </p>
       </div>
 
@@ -171,7 +251,7 @@ export default function AutoFillSheet() {
             </div>
           )}
           <div className="rounded-lg px-4 py-3 text-[12px] leading-5" style={{ backgroundColor: 'rgba(34,197,94,0.07)', border: '1px solid rgba(34,197,94,0.25)', color: '#86EFAC' }}>
-            Engine an toàn: dùng một phiên Playwright cho toàn bộ danh sách, giữ nguyên ô Sheet đã có dữ liệu và chỉ điền thông số còn trống. Credentials Google chỉ dùng để đọc/ghi Sheet.
+            Engine an toàn: hai profile Playwright riêng cho ChatGPT và Gemini, khóa ghi theo từng dòng để không trùng SKU. Giữ nguyên thông số Sheet đã có và chỉ điền ô còn trống.
           </div>
 
           {/* Row 1: URL */}
@@ -193,15 +273,88 @@ export default function AutoFillSheet() {
                 onChange={(e) => {
                   setSheetUrl(e.target.value);
                   localStorage.setItem('autofill_sheetUrl', e.target.value);
+                  setSelectedBrand('');
+                  localStorage.removeItem('autofill_selectedBrand');
                 }}
                 disabled={status === 'running'}
               />
             </div>
           </div>
 
-          {/* Row 2: AI Tone Only */}
+          {/* Row 2: Brand filter */}
+          <div>
+            <div className="flex items-center justify-between gap-3 mb-2">
+              <label className="block text-[11px] font-bold" style={{ color: '#e2e8f0' }}>
+                Thương hiệu cần cào (Brand Focus)
+              </label>
+              <span className="text-[10px]" style={{ color: '#64748B' }}>
+                {brands.length > 0 ? `${brands.length} thương hiệu trong Sheet` : ''}
+              </span>
+            </div>
+            <div
+              className="flex items-center gap-3 rounded-lg px-4 py-3 transition-colors"
+              style={{ backgroundColor: '#0B0F19', border: '1px solid #2D3349' }}
+              onFocusCapture={(e) => e.currentTarget.style.borderColor = '#FF4D8D'}
+              onBlurCapture={(e) => e.currentTarget.style.borderColor = '#2D3349'}
+            >
+              <Building2 className="h-4 w-4 shrink-0" style={{ color: '#94A3B8' }} />
+              <select
+                className="w-full text-[13px] bg-transparent focus:outline-none cursor-pointer"
+                style={{ color: selectedBrand ? '#e2e8f0' : '#94A3B8' }}
+                value={selectedBrand}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  setSelectedBrand(value);
+                  if (value) localStorage.setItem('autofill_selectedBrand', value);
+                  else localStorage.removeItem('autofill_selectedBrand');
+                }}
+                disabled={status === 'running' || brandsLoading}
+              >
+                <option value="" style={{ backgroundColor: '#161821' }}>
+                  {brandsLoading ? 'Đang đọc thương hiệu từ Sheet...' : '-- Chọn thương hiệu cần cào --'}
+                </option>
+                {selectedBrand
+                  && selectedBrand !== ALL_BRANDS_VALUE
+                  && !brands.includes(selectedBrand)
+                  && (
+                    <option value={selectedBrand} style={{ backgroundColor: '#161821' }}>
+                      {selectedBrand}
+                    </option>
+                  )}
+                {brands.map((brand) => (
+                  <option key={brand} value={brand} style={{ backgroundColor: '#161821' }}>
+                    {brand}
+                  </option>
+                ))}
+                <option value={ALL_BRANDS_VALUE} style={{ backgroundColor: '#161821', color: '#FCA5A5' }}>
+                  ⚠ Tất cả thương hiệu (cào toàn bộ SKU)
+                </option>
+              </select>
+              <button
+                type="button"
+                onClick={() => setBrandReloadKey((current) => current + 1)}
+                disabled={status === 'running' || brandsLoading || !sheetUrl}
+                className="p-1.5 rounded-md transition-colors disabled:opacity-40"
+                title="Đọc lại danh sách thương hiệu"
+                style={{ color: '#94A3B8', backgroundColor: 'rgba(148,163,184,0.08)' }}
+              >
+                <RefreshCw className={cn('h-4 w-4', brandsLoading && 'animate-spin')} />
+              </button>
+            </div>
+            {brandsError ? (
+              <div className="mt-2 text-[11px]" style={{ color: '#FCA5A5' }}>
+                {brandsError}
+              </div>
+            ) : (
+              <div className="mt-2 text-[11px]" style={{ color: '#64748B' }}>
+                Tool chỉ đưa SKU thuộc thương hiệu đã chọn vào hàng đợi ChatGPT/Gemini.
+              </div>
+            )}
+          </div>
+
+          {/* Row 3: AI Tone */}
           <div className="mt-2">
-            <label className="block text-[11px] font-bold mb-2" style={{ color: '#e2e8f0' }}>Giọng điệu ChatGPT (Generation Tone)</label>
+            <label className="block text-[11px] font-bold mb-2" style={{ color: '#e2e8f0' }}>Giọng điệu AI (Generation Tone)</label>
             <div className="flex flex-wrap gap-3 mt-1.5 p-3 rounded-lg border border-dashed" style={{ backgroundColor: '#0B0F19', borderColor: '#2D3349' }}>
               {['Chuyên nghiệp', 'Thu hút (Engaging)', 'Kỹ thuật', 'Thuyết phục'].map((tone) => (
                 <button
@@ -226,7 +379,7 @@ export default function AutoFillSheet() {
             </div>
           </div>
 
-          {/* Row 3: Big Button */}
+          {/* Row 4: Big Button */}
           <div className="mt-4">
             {status !== 'running' || backendOnline === false ? (
               <button
@@ -275,7 +428,7 @@ export default function AutoFillSheet() {
           {logs.length === 0 ? (
             <div className="flex flex-col gap-2 opacity-90">
               <div>&gt; System initialized. Awaiting commands...</div>
-              <div>&gt; Playwright + ChatGPT engine ready (AI API disabled)...</div>
+              <div>&gt; Playwright + ChatGPT + Gemini engines ready (AI API disabled)...</div>
               <div className="mt-1 animate-pulse">&gt; _</div>
             </div>
           ) : (

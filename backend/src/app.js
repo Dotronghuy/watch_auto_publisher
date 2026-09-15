@@ -6,6 +6,7 @@ import { startScheduler } from './scheduler.js';
 import { trackPostMetrics } from './services/tracking.service.js';
 import { startTelegramBot } from './services/telegram.service.js';
 import { startFastCRMInboxSync } from './services/crm.service.js';
+import { warmProductInfoCache } from './services/sheet.service.js';
 import authRoutes from './routes/auth.routes.js';
 import userRoutes from './routes/user.routes.js';
 import webhookRoutes from './routes/webhook.routes.js';
@@ -87,6 +88,9 @@ try { startTelegramBot(); } catch (e) { console.error('⚠️ Telegram bot lỗi
 
 app.listen(PORT, async () => {
   console.log(`🚀 Server is running on http://localhost:${PORT}`);
+  warmProductInfoCache().catch((error) => {
+    console.warn('⚠️ Chưa thể làm nóng cache Product:', error.message);
+  });
 
   try {
     startFastCRMInboxSync(process.env.CRM_FAST_SYNC_INTERVAL_MS || 15000);

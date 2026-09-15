@@ -5,6 +5,10 @@ import { fileURLToPath } from 'url';
 import cron from 'node-cron';
 import { spawn } from 'child_process';
 import { syncHashesFromSheets } from './services/image-hash.service.js';
+import {
+  syncLocalImageEmbeddingIndex,
+  warmLocalImageRecognition
+} from './services/local-image-embedding.service.js';
 import { runNightlySelfLearning } from './services/self-learning.service.js';
 import { readJsonFileSync } from './utils/json-file.js';
 import { readLastSuccessfulRun } from './services/publish-run-state.service.js';
@@ -307,9 +311,17 @@ export const startScheduler = async (isSettingsUpdate = false) => {
   }
   global.hashCronJob = cron.schedule('0 3 * * *', () => {
     console.log('⏰ Bắt đầu đồng bộ ảnh Google Sheets cho Chatbot (Lịch định kỳ: 3:00 sáng)...');
-    syncHashesFromSheets().catch(e => console.error('Lỗi syncHashesFromSheets:', e));
+    syncHashesFromSheets({ forceFull: true })
+      .then(() => syncLocalImageEmbeddingIndex())
+      .catch(e => console.error('Lỗi đồng bộ bộ nhận diện ảnh:', e));
   });
   console.log('✅ Đã lên lịch Sync Ảnh Google Sheets lúc 03:00 sáng mỗi ngày.');
+  warmLocalImageRecognition().catch(
+    e => console.error('Lỗi khởi động model nhận diện ảnh local:', e)
+  );
+  syncHashesFromSheets()
+    .then(() => syncLocalImageEmbeddingIndex())
+    .catch(e => console.error('Lỗi cập nhật nhanh bộ nhận diện ảnh khi khởi động:', e));
 
   isSchedulerRunning = false; // Reset để cho phép gọi lại khi user thay đổi settings
 };

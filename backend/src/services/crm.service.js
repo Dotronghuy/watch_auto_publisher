@@ -1,4 +1,5 @@
 import axios from 'axios';
+import FormData from 'form-data';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -448,6 +449,38 @@ export const replyCRM = async (targetId, message, type, conversationId) => {
 };
 
 /**
+ * Show Messenger's native typing state without creating an extra chat message.
+ */
+export const sendSenderActionCRM = async (targetId, action, type, conversationId) => {
+  if (type !== 'inbox') return null;
+  if (!['mark_seen', 'typing_on', 'typing_off'].includes(action)) {
+    throw new Error(`Sender action không hợp lệ: ${action}`);
+  }
+
+  const conversation = await getConversationById(conversationId);
+  if (!conversation?.account_id || conversation.platform !== 'facebook') return null;
+
+  const activeAccounts = getActiveAccounts();
+  const acc = activeAccounts.find(item => item.id === conversation.account_id);
+  const token = acc?.fbAccessToken;
+  if (!token) return null;
+
+  try {
+    const response = await axios.post(`${GRAPH_API_BASE}/me/messages`, {
+      recipient: { id: targetId },
+      sender_action: action
+    }, {
+      params: { access_token: token },
+      timeout: 5000
+    });
+    return response.data;
+  } catch (error) {
+    console.warn(`Không thể gửi sender_action ${action}:`, error.response?.data || error.message);
+    return null;
+  }
+};
+
+/**
  * Gửi ảnh sản phẩm qua Facebook Messenger / Instagram DM
  */
 export const replyImageCRM = async (targetId, imageUrl, type, conversationId) => {
@@ -467,28 +500,73 @@ export const replyImageCRM = async (targetId, imageUrl, type, conversationId) =>
                  : acc.fbAccessToken;
   if (!token) throw new Error(`Không tìm thấy token hợp lệ cho tài khoản ${acc.name}`);
 
+  if (type !== 'inbox') {
+    throw new Error(`Không hỗ trợ gửi ảnh cho loại hội thoại ${type}`);
+  }
+
   try {
-    if (type === 'inbox') {
-      const res = await axios.post(`${GRAPH_API_BASE}/me/messages`, {
-        recipient: { id: targetId },
-        message: {
-          attachment: {
-            type: 'image',
-            payload: {
-              url: imageUrl,
-              is_reusable: true
-            }
+    const res = await axios.post(`${GRAPH_API_BASE}/me/messages`, {
+      recipient: { id: targetId },
+      message: {
+        attachment: {
+          type: 'image',
+          payload: {
+            url: imageUrl,
+            is_reusable: true
           }
         }
-      }, {
-        params: { access_token: token }
-      });
-      return res.data;
+      }
+    }, {
+      params: { access_token: token }
+    });
+
+    if (!res.data?.message_id) {
+      throw new Error('Meta không trả về message_id khi gửi ảnh bằng URL');
     }
-    // Instagram DM cũng dùng cùng format
-    // Comment thì không gửi ảnh được
-  } catch (err) {
-    console.error('❌ Lỗi khi gửi ảnh CRM:', err.response?.data || err.message);
-    // Không throw để không làm crash luồng chính - ảnh là bonus, text là chính
+    return res.data;
+  } catch (urlError) {
+    console.warn('⚠️ Meta không lấy được URL ảnh, chuyển sang upload file trực tiếp:', urlError.response?.data || urlError.message);
+
+    try {
+      const imageResponse = await axios.get(imageUrl, {
+        responseType: 'arraybuffer',
+        timeout: 20000,
+        maxRedirects: 10
+      });
+      const contentType = String(imageResponse.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
+      if (!contentType.startsWith('image/')) {
+        throw new Error(`URL không trả về file ảnh (${contentType || 'không có content-type'})`);
+      }
+
+      const extension = contentType.split('/')[1]?.replace('jpeg', 'jpg') || 'jpg';
+      const imageBuffer = Buffer.from(imageResponse.data);
+      const form = new FormData();
+      form.append('recipient', JSON.stringify({ id: targetId }));
+      form.append('message', JSON.stringify({
+        attachment: {
+          type: 'image',
+          payload: { is_reusable: true }
+        }
+      }));
+      form.append('filedata', imageBuffer, {
+        filename: `product-image.${extension}`,
+        contentType,
+        knownLength: imageBuffer.length
+      });
+
+      const uploadRes = await axios.post(`${GRAPH_API_BASE}/me/messages`, form, {
+        params: { access_token: token },
+        headers: form.getHeaders(),
+        maxBodyLength: Infinity,
+        maxContentLength: Infinity
+      });
+      if (!uploadRes.data?.message_id) {
+        throw new Error('Meta không trả về message_id khi upload ảnh');
+      }
+      return uploadRes.data;
+    } catch (uploadError) {
+      console.error('❌ Lỗi khi upload ảnh CRM:', uploadError.response?.data || uploadError.message);
+      throw uploadError;
+    }
   }
 };

@@ -70,6 +70,7 @@ router.post('/', async (req, res) => {
           const senderId = event.sender?.id;
           const recipientId = event.recipient?.id;
           const timestamp = event.timestamp;
+          const webhookReceivedAtMs = Date.now();
 
           // Bỏ qua tin nhắn từ chính Page gửi đi (echo)
           if (event.message?.is_echo) continue;
@@ -155,7 +156,9 @@ router.post('/', async (req, res) => {
                 const imgAtt = msg.attachments.find(a => a.type === 'image');
                 if (imgAtt && imgAtt.payload) imageUrl = imgAtt.payload.url;
               }
-              handleIncomingMessage(convId, text, imageUrl).catch(e => console.error('Chatbot FB error:', e.message));
+              handleIncomingMessage(convId, text, imageUrl, {
+                receivedAtMs: webhookReceivedAtMs
+              }).catch(e => console.error('Chatbot FB error:', e.message));
             }
           }
 
@@ -181,6 +184,7 @@ router.post('/', async (req, res) => {
           const senderId = event.sender?.id;
           const recipientId = event.recipient?.id;
           const timestamp = event.timestamp;
+          const webhookReceivedAtMs = Date.now();
 
           if (event.message?.is_echo) continue;
 
@@ -265,7 +269,9 @@ router.post('/', async (req, res) => {
                 const imgAtt = msg.attachments.find(a => a.type === 'image');
                 if (imgAtt && imgAtt.payload) imageUrl = imgAtt.payload.url;
               }
-              handleIncomingMessage(convId, text, imageUrl).catch(e => console.error('Chatbot IG error:', e.message));
+              handleIncomingMessage(convId, text, imageUrl, {
+                receivedAtMs: webhookReceivedAtMs
+              }).catch(e => console.error('Chatbot IG error:', e.message));
             }
           }
         }

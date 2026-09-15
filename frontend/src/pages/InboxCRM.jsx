@@ -39,6 +39,33 @@ const dedupeMirroredOutgoingMessages = (items) => {
   });
 };
 
+const getMessageKey = (message) => (
+  String(message?.id || [
+    'anonymous',
+    message?.conversation_id,
+    message?.created_time,
+    message?.is_from_page,
+    message?.message
+  ].join(':'))
+);
+
+const mergeMessages = (currentPayload, incomingPayload) => {
+  const current = normalizeArrayPayload(currentPayload, 'messages');
+  const incoming = normalizeArrayPayload(incomingPayload, 'messages');
+  const merged = new Map();
+
+  current.forEach((message) => {
+    merged.set(getMessageKey(message), message);
+  });
+  incoming.forEach((message) => {
+    merged.set(getMessageKey(message), message);
+  });
+
+  return [...merged.values()].sort(
+    (a, b) => parseMessageTime(a.created_time) - parseMessageTime(b.created_time)
+  );
+};
+
 const InboxCRM = () => {
   const { hasPermission } = useAuth();
   const [conversations, setConversations] = useState([]);
@@ -88,6 +115,8 @@ const InboxCRM = () => {
   const chatMessagesRef = useRef(null);
   const emojiPickerRef = useRef(null);
   const activeConvRef = useRef(activeConv);
+  const messageFetchSequenceRef = useRef(0);
+  const messageRefreshTimerRef = useRef(null);
 
   // LUÔN ĐỒNG BỘ activeConvRef VỚI STATE MỚI NHẤT
   useEffect(() => {
@@ -114,15 +143,33 @@ const InboxCRM = () => {
     }
   }, []);
 
-  const fetchMessages = useCallback(async (convId) => {
+  const fetchMessages = useCallback(async (convId, { merge = false } = {}) => {
+    const requestId = ++messageFetchSequenceRef.current;
+
     try {
       const res = await fetch(`/api/crm/conversations/${encodeURIComponent(convId)}/messages`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
       const data = await res.json();
-      setMessages(normalizeArrayPayload(data, 'messages'));
+      const nextMessages = normalizeArrayPayload(data, 'messages');
+
+      if (activeConvRef.current?.id !== convId) return;
+      if (!merge && requestId !== messageFetchSequenceRef.current) return;
+
+      setMessages(prev => merge ? mergeMessages(prev, nextMessages) : nextMessages);
     } catch (e) {
       console.error('Lỗi fetch messages', e);
     }
   }, []);
+
+  const scheduleMessageRefresh = useCallback((conversationId) => {
+    clearTimeout(messageRefreshTimerRef.current);
+    messageRefreshTimerRef.current = setTimeout(() => {
+      if (activeConvRef.current?.id === conversationId) {
+        fetchMessages(conversationId, { merge: true });
+      }
+    }, 300);
+  }, [fetchMessages]);
 
   const scrollToBottom = useCallback(() => {
     if (chatMessagesRef.current) {
@@ -151,9 +198,6 @@ const InboxCRM = () => {
     }
   }, [activeConv, customerProfile]);
   
-  // Keep ref in sync so SSE callback can read latest activeConv
-  useEffect(() => { activeConvRef.current = activeConv; }, [activeConv]);
-
   useEffect(() => {
     let didCancel = false;
     queueMicrotask(() => {
@@ -202,12 +246,13 @@ const InboxCRM = () => {
                 }
               : prev
             );
-          }
 
-          // Có tin nhắn mới → refresh messages nếu đang xem đúng conversation đó
-          const current = activeConvRef.current;
-          if (current && current.id === conversationId) {
-            fetchMessages(current.id);
+            const current = activeConvRef.current;
+            if (current?.id === conversationId) {
+              // Render from SSE immediately, then reconcile with the saved DB row.
+              setMessages(prev => mergeMessages(prev, [newMessage]));
+              scheduleMessageRefresh(conversationId);
+            }
           }
         }
       } catch {
@@ -216,18 +261,20 @@ const InboxCRM = () => {
     };
 
     eventSource.onerror = () => {
-      // Reconnect tự động bởi browser, ko cần xử lý
+      // EventSource reconnects automatically. Refresh local data while it reconnects.
+      fetchConversations();
+      const current = activeConvRef.current;
+      if (current) fetchMessages(current.id, { merge: true });
     };
 
-    // Background auto-sync: Đã TẮT vì đã dùng Webhook
-    // const syncInterval = setInterval(async () => {
-    //   try {
-    //     await fetch('/api/crm/sync', { method: 'POST' });
-    //   } catch {
-    //     // Background sync will retry on the next interval.
-    //   }
-    // }, 5000);
-    const syncInterval = null;
+    // Local DB fallback keeps the inbox live if SSE or the dev proxy reconnects.
+    const localRefreshInterval = setInterval(() => {
+      if (document.visibilityState !== 'visible') return;
+
+      fetchConversations();
+      const current = activeConvRef.current;
+      if (current) fetchMessages(current.id, { merge: true });
+    }, 3000);
 
     // Trigger sync lần đầu
     fetch('/api/crm/sync', { method: 'POST' }).catch(() => {});
@@ -235,9 +282,10 @@ const InboxCRM = () => {
     return () => {
       didCancel = true;
       eventSource.close();
-      clearInterval(syncInterval);
+      clearInterval(localRefreshInterval);
+      clearTimeout(messageRefreshTimerRef.current);
     };
-  }, [fetchAccounts, fetchConversations, fetchMessages]);
+  }, [fetchAccounts, fetchConversations, fetchMessages, scheduleMessageRefresh]);
 
   // Fetch tags for all conversations to display in sidebar
   useEffect(() => {
@@ -271,12 +319,15 @@ const InboxCRM = () => {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
+  const activeConversationId = activeConv?.id;
+  const activeSenderId = activeConv?.sender_id;
+
   useEffect(() => {
-    if (activeConv) {
-      queueMicrotask(() => fetchMessages(activeConv.id));
+    if (activeConversationId) {
+      queueMicrotask(() => fetchMessages(activeConversationId));
       
       // Fetch Customer Profile
-      fetch(`/api/crm/customers/${encodeURIComponent(activeConv.sender_id)}`)
+      fetch(`/api/crm/customers/${encodeURIComponent(activeSenderId)}`)
         .then(res => res.json())
         .then(data => {
           try { data.tags = typeof data.tags === 'string' ? JSON.parse(data.tags) : []; } catch { data.tags = []; }
@@ -285,7 +336,7 @@ const InboxCRM = () => {
         })
         .catch(err => console.error('Lỗi lấy profile:', err));
     }
-  }, [activeConv, fetchMessages]);
+  }, [activeConversationId, activeSenderId, fetchMessages]);
 
   // Auto extract phone from messages if missing
   useEffect(() => {
@@ -343,6 +394,10 @@ const InboxCRM = () => {
 
   // Chọn conversation + đánh dấu đã đọc
   const handleSelectConv = async (conv) => {
+    if (activeConvRef.current?.id !== conv.id) {
+      setMessages([]);
+    }
+    activeConvRef.current = conv;
     setActiveConv(conv);
     if (conv.needs_reply) {
       // Đánh dấu đã đọc + gửi mark_seen cho FB/IG

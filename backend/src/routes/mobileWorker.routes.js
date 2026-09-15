@@ -4,6 +4,7 @@ import { verifyToken, requireAdmin } from '../middleware/auth.middleware.js';
 import {
   claimNextMobileLinkJob,
   completeMobileLinkJob,
+  getMobileLinkJob,
   getMobileLinkQueueStats,
   heartbeatMobileLinkJob,
   listMobileLinkJobs,
@@ -11,6 +12,20 @@ import {
 } from '../services/mobileLinkJob.service.js';
 
 const router = express.Router();
+
+const positiveAttempt = (value) => {
+  const attempt = Number(value);
+  return Number.isInteger(attempt) && attempt > 0 ? attempt : null;
+};
+
+const knownJobErrorStatus = (error) => {
+  if (error?.code === 'MOBILE_LINK_JOB_VALIDATION') return 400;
+  if (
+    error?.code === 'MOBILE_LINK_JOB_PAYLOAD_CONFLICT'
+    || error?.code === 'MOBILE_LINK_JOB_RETRY_REQUIRED'
+  ) return 409;
+  return null;
+};
 
 const safeEqual = (left, right) => {
   const leftBuffer = Buffer.from(String(left || ''));
@@ -66,11 +81,14 @@ router.get('/jobs/next', verifyWorkerToken, async (req, res, next) => {
 router.post('/jobs/:jobId/heartbeat', verifyWorkerToken, async (req, res, next) => {
   try {
     const deviceId = String(req.body?.deviceId || '').trim();
+    const attempt = positiveAttempt(req.body?.attempt);
     if (!deviceId) return res.status(400).json({ error: 'deviceId is required' });
+    if (!attempt) return res.status(400).json({ error: 'attempt must be a positive integer' });
 
     const updated = await heartbeatMobileLinkJob({
       jobId: req.params.jobId,
       deviceId,
+      attempt,
     });
     if (!updated) return res.status(409).json({ error: 'Job is not owned by this device' });
     res.json({ ok: true });
@@ -82,10 +100,12 @@ router.post('/jobs/:jobId/heartbeat', verifyWorkerToken, async (req, res, next) 
 router.post('/jobs/:jobId/result', verifyWorkerToken, async (req, res, next) => {
   try {
     const deviceId = String(req.body?.deviceId || '').trim();
+    const attempt = positiveAttempt(req.body?.attempt);
     const status = String(req.body?.status || '').trim().toUpperCase();
     const message = String(req.body?.message || '').trim();
 
     if (!deviceId) return res.status(400).json({ error: 'deviceId is required' });
+    if (!attempt) return res.status(400).json({ error: 'attempt must be a positive integer' });
     if (!['SUCCEEDED', 'FAILED'].includes(status)) {
       return res.status(400).json({ error: 'status must be SUCCEEDED or FAILED' });
     }
@@ -93,7 +113,8 @@ router.post('/jobs/:jobId/result', verifyWorkerToken, async (req, res, next) => 
     const job = await completeMobileLinkJob({
       jobId: req.params.jobId,
       deviceId,
-      success: status === 'SUCCEEDED',
+      attempt,
+      status,
       message,
     });
     if (!job) return res.status(409).json({ error: 'Job is not active for this device' });
@@ -113,8 +134,18 @@ router.get('/jobs', verifyToken, requireAdmin, async (req, res, next) => {
 
 router.post('/jobs/:jobId/retry', verifyToken, requireAdmin, async (req, res, next) => {
   try {
-    res.json({ ok: true, job: await retryMobileLinkJob(req.params.jobId) });
+    const existing = await getMobileLinkJob(req.params.jobId);
+    if (!existing) return res.status(404).json({ error: 'Mobile link job not found' });
+    const job = await retryMobileLinkJob(req.params.jobId, req.body || {});
+    if (!job) {
+      return res.status(409).json({
+        error: `Only FAILED jobs can be retried; current status is ${existing.status}`,
+      });
+    }
+    res.json({ ok: true, job });
   } catch (error) {
+    const status = knownJobErrorStatus(error);
+    if (status) return res.status(status).json({ error: error.message });
     next(error);
   }
 });

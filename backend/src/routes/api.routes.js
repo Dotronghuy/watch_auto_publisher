@@ -27,6 +27,7 @@ import { initCRMDB, getConversations, getMessagesByConversation, saveMessage, ma
 import { syncAllCRM, replyCRM } from '../services/crm.service.js';
 import { autoTagAllConversations } from '../services/autotag.service.js';
 import { syncHashesFromSheets } from '../services/image-hash.service.js';
+import { syncLocalImageEmbeddingIndex } from '../services/local-image-embedding.service.js';
 import { startArena, stopArena, getArenaStatus, arenaEmitter } from '../services/ai_arena.service.js';
 import { CONTENT_CTAS, CONTENT_TONES, TONE_PROMPT_VERSION, getToneInstructionText } from '../services/content-tone.service.js';
 
@@ -389,17 +390,40 @@ router.get('/products', async (req, res) => {
 
 // 3. Nút Đồng bộ Sheet
 router.post('/trigger-sync', (req, res) => {
-  res.json({ success: true, message: 'Đã kích hoạt đồng bộ.', syncedAt: new Date().toISOString() });
+  res.json({
+    success: true,
+    message: 'Đang đồng bộ Sheet và cập nhật bộ nhận diện ảnh.',
+    syncedAt: new Date().toISOString()
+  });
+  syncHashesFromSheets().then(() => syncLocalImageEmbeddingIndex()).catch(error => {
+    console.error('Lỗi đồng bộ Sheet và hash ảnh:', error.message);
+  });
 });
 
 // 4. Nút Chạy Auto Ngay - Gọi hàm THẬT
 router.post('/trigger-workflow', async (req, res) => {
+  const requestedContentKind = String(req.body?.contentKind || '').trim().toLowerCase();
+  if (requestedContentKind && !['video', 'post'].includes(requestedContentKind)) {
+    return res.status(400).json({
+      success: false,
+      message: 'contentKind must be video or post',
+    });
+  }
+  if (requestedContentKind && getIsRunning()) {
+    return res.status(409).json({
+      success: false,
+      message: 'Another publish workflow is already running',
+    });
+  }
   // Reset stop signal trước mỗi lần chạy mới
   resetGlobalStop();
   addActivity('Bắt đầu luồng Auto đăng bài (AI Workflow)', 'info');
   sendLogToClients({ time: new Date().toLocaleTimeString(), sender: 'System', message: '🚀 Bắt đầu luồng thực tế...', type: 'info' });
 
-  autoPublishRoutine()
+  autoPublishRoutine(null, {
+    forceContentKind: requestedContentKind || null,
+    ignoreCooldown: Boolean(requestedContentKind),
+  })
     .then(async (result) => {
       if (hasSuccessfulPublishResult(result)) {
         try {
@@ -1323,10 +1347,7 @@ router.post('/crm/reply', async (req, res) => {
     const localMessageId = result?.message_id || result?.id || ('msg_' + Date.now());
     const createdTime = new Date().toISOString();
     
-    // Lưu vào DB ở local ngay lập tức
-    // Push message to CRM SSE clients instantly
-    broadcastCRM('new_message', { conversationId, message: { id: localMessageId, conversation_id: conversationId, message, is_from_page: 1, created_time: createdTime } });
-
+    // Save first so a realtime client can reconcile without reading stale data.
     await saveMessage(
       localMessageId,
       conversationId, 
@@ -1334,6 +1355,8 @@ router.post('/crm/reply', async (req, res) => {
       true, 
       createdTime
     );
+
+    broadcastCRM('new_message', { conversationId, message: { id: localMessageId, conversation_id: conversationId, message, is_from_page: 1, created_time: createdTime } });
 
     res.json({ success: true, data: result });
   } catch (err) {
@@ -1444,7 +1467,9 @@ router.post('/crm/bot/sync-images', async (req, res) => {
     // Trả về response ngay để không bị timeout
     res.json({ success: true, message: 'Đang chạy đồng bộ ngầm...' });
     // Chạy ngầm
-    syncHashesFromSheets();
+    syncHashesFromSheets()
+      .then(() => syncLocalImageEmbeddingIndex())
+      .catch(error => console.error('Lỗi đồng bộ bộ nhận diện ảnh:', error.message));
   } catch (err) {
     console.error('Lỗi API sync-images:', err);
   }

@@ -7,7 +7,29 @@ import java.net.URI
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 
-class MobileWorkerApi(private val settings: WorkerSettings) {
+internal enum class MobileWorkerReportOutcome {
+    REPORTED,
+    STALE,
+}
+
+internal enum class MobileWorkerHeartbeatOutcome {
+    ACTIVE,
+    STALE,
+}
+
+internal fun reportOutcomeForHttpStatus(code: Int): MobileWorkerReportOutcome? = when {
+    code == HttpURLConnection.HTTP_CONFLICT -> MobileWorkerReportOutcome.STALE
+    code == HttpURLConnection.HTTP_OK -> MobileWorkerReportOutcome.REPORTED
+    else -> null
+}
+
+internal fun heartbeatOutcomeForHttpStatus(code: Int): MobileWorkerHeartbeatOutcome? = when {
+    code == HttpURLConnection.HTTP_CONFLICT -> MobileWorkerHeartbeatOutcome.STALE
+    code == HttpURLConnection.HTTP_OK -> MobileWorkerHeartbeatOutcome.ACTIVE
+    else -> null
+}
+
+internal class MobileWorkerApi(private val settings: WorkerSettings) {
     private data class Response(val code: Int, val body: String)
 
     fun health(): String {
@@ -28,19 +50,34 @@ class MobileWorkerApi(private val settings: WorkerSettings) {
         return MobileLinkJob.fromJson(JSONObject(response.body).getJSONObject("job"))
     }
 
-    fun heartbeat(jobId: String, deviceId: String) {
-        val body = JSONObject().put("deviceId", deviceId)
+    fun heartbeat(
+        jobId: String,
+        deviceId: String,
+        attempt: Int,
+    ): MobileWorkerHeartbeatOutcome {
+        val body = JSONObject()
+            .put("deviceId", deviceId)
+            .put("attempt", attempt)
         val response = request(
             "POST",
             "/api/mobile-worker/jobs/${encodePath(jobId)}/heartbeat",
             body,
         )
-        if (response.code !in 200..299) throw apiError(response)
+        val outcome = heartbeatOutcomeForHttpStatus(response.code) ?: throw apiError(response)
+        if (outcome == MobileWorkerHeartbeatOutcome.ACTIVE) requireAcknowledgement(response)
+        return outcome
     }
 
-    fun report(jobId: String, deviceId: String, status: String, message: String) {
+    fun report(
+        jobId: String,
+        deviceId: String,
+        attempt: Int,
+        status: String,
+        message: String,
+    ): MobileWorkerReportOutcome {
         val body = JSONObject()
             .put("deviceId", deviceId)
+            .put("attempt", attempt)
             .put("status", status)
             .put("message", message)
         val response = request(
@@ -48,7 +85,9 @@ class MobileWorkerApi(private val settings: WorkerSettings) {
             "/api/mobile-worker/jobs/${encodePath(jobId)}/result",
             body,
         )
-        if (response.code !in 200..299) throw apiError(response)
+        val outcome = reportOutcomeForHttpStatus(response.code) ?: throw apiError(response)
+        if (outcome == MobileWorkerReportOutcome.REPORTED) requireAcknowledgement(response)
+        return outcome
     }
 
     private fun request(
@@ -63,6 +102,7 @@ class MobileWorkerApi(private val settings: WorkerSettings) {
 
         val connection = baseUri.resolve(path).toURL().openConnection() as HttpURLConnection
         try {
+            connection.instanceFollowRedirects = false
             connection.requestMethod = method
             connection.connectTimeout = 15_000
             connection.readTimeout = 20_000
@@ -96,10 +136,16 @@ class MobileWorkerApi(private val settings: WorkerSettings) {
         return IllegalStateException("HTTP ${response.code}: ${detail.take(240)}")
     }
 
+    private fun requireAcknowledgement(response: Response) {
+        check(runCatching { JSONObject(response.body).optBoolean("ok", false) }.getOrDefault(false)) {
+            "Máy chủ chưa xác nhận kết quả; giữ job để gửi lại"
+        }
+    }
+
     private fun encodePath(value: String): String =
         URLEncoder.encode(value, StandardCharsets.UTF_8.name()).replace("+", "%20")
 
     companion object {
-        private const val WORKER_VERSION = "0.2.5"
+        private const val WORKER_VERSION = "0.4.5"
     }
 }

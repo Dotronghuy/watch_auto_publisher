@@ -1,13 +1,64 @@
-import { PrismaClient } from '@prisma/client';
-
-const prisma = new PrismaClient();
+import { mobileLinkPrisma as prisma } from './mobileLinkJob.db.js';
 const DEFAULT_LEASE_MS = 5 * 60 * 1000;
+const JOB_STATUSES = new Set(['PENDING', 'PROCESSING', 'SUCCEEDED', 'FAILED']);
+const RESULT_STATUSES = new Set(['SUCCEEDED', 'FAILED']);
+const IMMUTABLE_PAYLOAD_FIELDS = [
+  'postUrl',
+  'shopeeUrl',
+  'linkName',
+  'postText',
+  'contentType',
+];
 
 const normalizeText = (value) => String(value || '').trim();
 
-const normalizeContentType = (value) => (
-  ['reel', 'reels', 'video'].includes(normalizeText(value).toLowerCase()) ? 'reel' : 'post'
+const validationError = (message) => {
+  const error = new Error(message);
+  error.code = 'MOBILE_LINK_JOB_VALIDATION';
+  return error;
+};
+
+export const normalizeMobileLinkContentType = (value) => {
+  const normalized = normalizeText(value).toLowerCase();
+  if (normalized !== 'post' && normalized !== 'reel') {
+    throw validationError('contentType must be post or reel');
+  }
+  return normalized;
+};
+
+export const mobileLinkEnqueueDisposition = (status) => {
+  if (!status) return 'CREATE';
+  const normalized = normalizeText(status).toUpperCase();
+  if (!JOB_STATUSES.has(normalized)) {
+    throw new Error(`Unsupported mobile link job status: ${normalized || '(empty)'}`);
+  }
+  if (normalized === 'PENDING') return 'REFRESH_PENDING';
+  if (normalized === 'FAILED') return 'RETRY_REQUIRED';
+  return 'IMMUTABLE';
+};
+
+export const mobileLinkCompletionDisposition = (currentStatus, requestedStatus) => {
+  const current = normalizeText(currentStatus).toUpperCase();
+  const requested = normalizeText(requestedStatus).toUpperCase();
+  if (!RESULT_STATUSES.has(requested)) {
+    throw validationError('status must be SUCCEEDED or FAILED');
+  }
+  if (current === 'PROCESSING') return 'COMPLETE';
+  if (current === requested) return 'IDEMPOTENT';
+  return 'CONFLICT';
+};
+
+export const mobileLinkPayloadMatches = (existing, payload) => (
+  IMMUTABLE_PAYLOAD_FIELDS.every((field) => normalizeText(existing?.[field]) === payload[field])
 );
+
+const normalizeAttempt = (value) => {
+  const attempt = Number(value);
+  if (!Number.isInteger(attempt) || attempt < 1) {
+    throw validationError('attempt must be a positive integer');
+  }
+  return attempt;
+};
 
 export const facebookObjectIdFromPostId = (postId) => {
   const normalized = normalizeText(postId);
@@ -17,9 +68,16 @@ export const facebookObjectIdFromPostId = (postId) => {
 
 export const fallbackFacebookPostUrl = (postId, contentType = 'post') => {
   const normalized = normalizeText(postId);
-  if (normalizeContentType(contentType) === 'reel') {
+  if (normalizeMobileLinkContentType(contentType) === 'reel') {
     const reelId = facebookObjectIdFromPostId(normalized);
-    return reelId ? `https://www.facebook.com/reel/${encodeURIComponent(reelId)}` : '';
+    // Include the Page as well as the video in a constructed fallback. This is
+    // an alternate direct route; URL shape alone does not prove what the app displays.
+    const owner = normalized.match(/^(\d+)_\d+$/)?.[1];
+    return reelId
+      ? (owner
+        ? `https://www.facebook.com/${encodeURIComponent(owner)}/videos/${encodeURIComponent(reelId)}`
+        : `https://www.facebook.com/reel/${encodeURIComponent(reelId)}`)
+      : '';
   }
   const separator = normalized.indexOf('_');
   if (separator > 0) {
@@ -27,7 +85,51 @@ export const fallbackFacebookPostUrl = (postId, contentType = 'post') => {
     const storyId = normalized.slice(separator + 1);
     return `https://www.facebook.com/permalink.php?story_fbid=${encodeURIComponent(storyId)}&id=${encodeURIComponent(pageId)}`;
   }
-  return normalized ? `https://www.facebook.com/reel/${encodeURIComponent(normalized)}` : '';
+  // A plain object ID does not contain enough information to construct the
+  // owning Page post URL. Never turn a regular-post job into a Reel URL.
+  return '';
+};
+
+// Parse only exact object routes. A numeric segment inside an arbitrary path or
+// a duplicate query field is not evidence of the destination Facebook will open.
+const facebookDirectRoute = (value) => {
+  try {
+    const url = new URL(value);
+    const host = url.hostname.toLowerCase();
+    if (url.protocol !== 'https:' || url.username || url.password || url.port
+      || !(host === 'facebook.com' || host.endsWith('.facebook.com'))) return null;
+    if (['id', 'story_fbid', 'v'].some((key) => url.searchParams.getAll(key).length > 1)) return null;
+    const pathname = decodeURIComponent(url.pathname);
+    const postPath = pathname.match(/^\/([^/]+)\/posts\/(\d+|pfbid[A-Za-z0-9]+)\/?$/);
+    const videoPath = pathname.match(/^\/(?:([^/]+)\/)?(?:reel|reels|videos)\/(\d+)\/?$/);
+    if (pathname === '/permalink.php' || pathname === '/story.php') {
+      return { kind: 'post', pageId: url.searchParams.get('id'), objectId: url.searchParams.get('story_fbid') };
+    }
+    if (postPath || videoPath) {
+      const match = postPath || videoPath;
+      return {
+        kind: postPath ? 'post' : 'video',
+        pageId: /^\d+$/.test(match[1] || '') ? match[1] : null,
+        objectId: match[2],
+      };
+    }
+    return /^\/watch\/?$/.test(pathname)
+      ? { kind: 'video', pageId: null, objectId: url.searchParams.get('v') } : null;
+  } catch {
+    return null;
+  }
+};
+
+const facebookRouteMatchesOwner = (route, postId) => {
+  const expectedPage = normalizeText(postId).match(/^(\d+)_\d+$/)?.[1];
+  return Boolean(route) && !(expectedPage && route.pageId && route.pageId !== expectedPage);
+};
+
+export const facebookUrlReferencesPostId = (value, postId) => {
+  const expectedObjectId = facebookObjectIdFromPostId(postId);
+  const route = facebookDirectRoute(value);
+  return Boolean(expectedObjectId && facebookRouteMatchesOwner(route, postId)
+    && route.objectId === expectedObjectId);
 };
 
 /**
@@ -37,11 +139,8 @@ export const fallbackFacebookPostUrl = (postId, contentType = 'post') => {
  * the trusted backend process.
  */
 export const normalizeFacebookPostUrl = (value, postId, { contentType = 'post' } = {}) => {
-  const normalizedContentType = normalizeContentType(contentType);
+  const normalizedContentType = normalizeMobileLinkContentType(contentType);
   const fallback = fallbackFacebookPostUrl(postId, normalizedContentType);
-  // Graph permalink_url for Reels is not stable in the Android Facebook app.
-  // Always persist a deterministic /reel/{videoId} route for mobile jobs.
-  if (normalizedContentType === 'reel') return fallback;
   let candidate = normalizeText(value);
   if (!candidate) return fallback;
 
@@ -55,12 +154,27 @@ export const normalizeFacebookPostUrl = (value, postId, { contentType = 'post' }
 
   try {
     const url = new URL(candidate);
-    const hostname = url.hostname.toLowerCase();
-    const isFacebookHost = hostname === 'facebook.com'
-      || hostname.endsWith('.facebook.com')
-      || hostname === 'fb.watch';
-    if (!isFacebookHost || !['http:', 'https:'].includes(url.protocol)) return fallback;
+    if (!['http:', 'https:'].includes(url.protocol)) return fallback;
     url.protocol = 'https:';
+    const route = facebookDirectRoute(url.toString());
+    if (!facebookRouteMatchesOwner(route, postId)) return fallback;
+    if (normalizedContentType === 'post') {
+      if (route.kind !== 'post') return fallback;
+      // Opaque pfbid permalinks returned by Graph cannot be compared numerically.
+      // Preserve those, but never accept a known mismatched numeric post/Page URL.
+      const opaqueStory = /^pfbid[A-Za-z0-9]+$/.test(route.objectId || '');
+      if (/^\d+(?:_\d+)?$/.test(normalizeText(postId))
+        && !opaqueStory && !facebookUrlReferencesPostId(url.toString(), postId)) return fallback;
+    }
+    // A Reel job is allowed to open only a permalink that contains the exact
+    // video object ID returned by the upload. Share/Page URLs without that ID can
+    // degrade to a generic Reels feed and expose an unrelated video on Android.
+    if (
+      normalizedContentType === 'reel'
+      && !facebookUrlReferencesPostId(url.toString(), postId)
+    ) {
+      return fallback;
+    }
     return url.toString();
   } catch {
     return fallback;
@@ -82,58 +196,93 @@ export const isAllowedShopeeUrl = (value) => {
   }
 };
 
+export const normalizeMobileLinkJobPayload = ({
+  postId,
+  postUrl,
+  shopeeUrl,
+  linkName = 'Mua ở đây',
+  postText,
+  contentType,
+}) => {
+  const normalizedPostId = normalizeText(postId);
+  const normalizedContentType = normalizeMobileLinkContentType(contentType);
+  const normalizedShopeeUrl = normalizeText(shopeeUrl);
+  const normalizedPostText = normalizeText(postText);
+
+  if (!normalizedPostId) throw validationError('postId is required');
+  // Caption is optional metadata for older clients, never a prerequisite for
+  // opening a validated direct post/video URL.
+  if (normalizedContentType === 'reel' && !/^\d+_\d+$/.test(normalizedPostId)) {
+    throw validationError('Reel postId must use PAGE_ID_VIDEO_ID');
+  }
+
+  const normalizedPostUrl = normalizeFacebookPostUrl(postUrl, normalizedPostId, {
+    contentType: normalizedContentType,
+  });
+  if (!normalizedPostUrl) throw validationError('postUrl is required');
+  if (!/^https:\/\//i.test(normalizedPostUrl)) {
+    throw validationError('postUrl must use HTTPS');
+  }
+  if (!isAllowedShopeeUrl(normalizedShopeeUrl)) {
+    throw validationError('shopeeUrl must be a valid Shopee Vietnam HTTPS URL');
+  }
+
+  return {
+    postId: normalizedPostId,
+    postUrl: normalizedPostUrl,
+    shopeeUrl: normalizedShopeeUrl,
+    linkName: normalizeText(linkName) || 'Mua ở đây',
+    postText: normalizedPostText,
+    contentType: normalizedContentType,
+  };
+};
+
 export const enqueueMobileLinkJob = async ({
   postId,
   postUrl,
   shopeeUrl,
   linkName = 'Mua ở đây',
-  force = false,
+  postText,
   contentType = 'post',
 }) => {
-  const normalizedPostId = normalizeText(postId);
-  const normalizedShopeeUrl = normalizeText(shopeeUrl);
-
-  if (!normalizedPostId) throw new Error('postId is required');
-  const normalizedPostUrl = normalizeFacebookPostUrl(postUrl, normalizedPostId, { contentType });
-  if (!normalizedPostUrl) throw new Error('postUrl is required');
-  if (!/^https:\/\//i.test(normalizedPostUrl)) throw new Error('postUrl must use HTTPS');
-  if (!isAllowedShopeeUrl(normalizedShopeeUrl)) {
-    throw new Error('shopeeUrl must be a valid Shopee Vietnam HTTPS URL');
-  }
-
-  const existing = await prisma.mobileLinkJob.findUnique({
-    where: { postId: normalizedPostId },
+  const payload = normalizeMobileLinkJobPayload({
+    postId,
+    postUrl,
+    shopeeUrl,
+    linkName,
+    postText,
+    contentType,
   });
 
-  if (!force && existing && ['PENDING', 'PROCESSING', 'SUCCEEDED'].includes(existing.status)) {
-    return existing;
-  }
-
-  if (existing) {
-    return prisma.mobileLinkJob.update({
-      where: { id: existing.id },
-      data: {
-        postUrl: normalizedPostUrl,
-        shopeeUrl: normalizedShopeeUrl,
-        linkName: normalizeText(linkName) || 'Mua ở đây',
-        status: 'PENDING',
-        deviceId: null,
-        claimedAt: null,
-        leaseExpiresAt: null,
-        completedAt: null,
-        errorMessage: null,
-        resultMessage: null,
-      },
+  return prisma.$transaction(async (tx) => {
+    const existing = await tx.mobileLinkJob.findUnique({
+      where: { postId: payload.postId },
     });
-  }
+    const disposition = mobileLinkEnqueueDisposition(existing?.status);
 
-  return prisma.mobileLinkJob.create({
-    data: {
-      postId: normalizedPostId,
-      postUrl: normalizedPostUrl,
-      shopeeUrl: normalizedShopeeUrl,
-      linkName: normalizeText(linkName) || 'Mua ở đây',
-    },
+    if (disposition === 'CREATE') {
+      return tx.mobileLinkJob.create({ data: payload });
+    }
+    if (disposition === 'REFRESH_PENDING') {
+      return tx.mobileLinkJob.update({
+        where: { id: existing.id },
+        data: payload,
+      });
+    }
+    if (disposition === 'IMMUTABLE') {
+      if (mobileLinkPayloadMatches(existing, payload)) return existing;
+      const error = new Error(
+        `Mobile link job ${existing.id} is ${existing.status}; its payload is immutable`,
+      );
+      error.code = 'MOBILE_LINK_JOB_PAYLOAD_CONFLICT';
+      throw error;
+    }
+
+    const error = new Error(
+      `Mobile link job ${existing.id} has FAILED; retry it explicitly`,
+    );
+    error.code = 'MOBILE_LINK_JOB_RETRY_REQUIRED';
+    throw error;
   });
 };
 
@@ -170,44 +319,70 @@ export const claimNextMobileLinkJob = async ({
       },
       orderBy: { claimedAt: 'asc' },
     });
-    if (activeJob) return activeJob;
+    // Quarantine malformed destination/type/product payloads before Android
+    // parses them. A legacy job with no caption is still runnable.
+    const isRunnable = async (job) => {
+      try {
+        const payload = normalizeMobileLinkJobPayload(job);
+        if (!mobileLinkPayloadMatches(job, payload)) {
+          throw validationError('Stored job payload is not canonical');
+        }
+        return true;
+      } catch (error) {
+        if (error.code !== 'MOBILE_LINK_JOB_VALIDATION') throw error;
+        await tx.mobileLinkJob.update({
+          where: { id: job.id },
+          data: {
+            status: 'FAILED',
+            completedAt: now,
+            leaseExpiresAt: null,
+            errorMessage: `Invalid stored mobile job; repair before retry: ${error.message}`,
+          },
+        });
+        return false;
+      }
+    };
+    if (activeJob && await isRunnable(activeJob)) return activeJob;
 
-    const pendingJob = await tx.mobileLinkJob.findFirst({
-      where: { status: 'PENDING' },
-      orderBy: { createdAt: 'asc' },
-    });
-    if (!pendingJob) return null;
+    for (let skipped = 0; skipped < 25; skipped += 1) {
+      const pendingJob = await tx.mobileLinkJob.findFirst({
+        where: { status: 'PENDING' },
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      });
+      if (!pendingJob) return null;
+      if (!(await isRunnable(pendingJob))) continue;
 
-    const claimed = await tx.mobileLinkJob.updateMany({
-      where: {
-        id: pendingJob.id,
-        status: 'PENDING',
-      },
-      data: {
-        status: 'PROCESSING',
-        deviceId: normalizedDeviceId,
-        claimedAt: now,
-        leaseExpiresAt,
-        attempt: { increment: 1 },
-        errorMessage: null,
-      },
-    });
-    if (claimed.count !== 1) return null;
-
-    return tx.mobileLinkJob.findUnique({ where: { id: pendingJob.id } });
+      const claimed = await tx.mobileLinkJob.updateMany({
+        where: { id: pendingJob.id, status: 'PENDING' },
+        data: {
+          status: 'PROCESSING',
+          deviceId: normalizedDeviceId,
+          claimedAt: now,
+          leaseExpiresAt,
+          attempt: { increment: 1 },
+          errorMessage: null,
+        },
+      });
+      if (claimed.count !== 1) return null;
+      return tx.mobileLinkJob.findUnique({ where: { id: pendingJob.id } });
+    }
+    return null;
   });
 };
 
 export const heartbeatMobileLinkJob = async ({
   jobId,
   deviceId,
+  attempt,
   leaseMs = DEFAULT_LEASE_MS,
 }) => {
+  const normalizedAttempt = normalizeAttempt(attempt);
   const leaseExpiresAt = new Date(Date.now() + leaseMs);
   const updated = await prisma.mobileLinkJob.updateMany({
     where: {
       id: normalizeText(jobId),
       deviceId: normalizeText(deviceId),
+      attempt: normalizedAttempt,
       status: 'PROCESSING',
     },
     data: { leaseExpiresAt },
@@ -218,29 +393,44 @@ export const heartbeatMobileLinkJob = async ({
 export const completeMobileLinkJob = async ({
   jobId,
   deviceId,
-  success,
+  attempt,
+  status,
   message,
 }) => {
-  const existing = await prisma.mobileLinkJob.findFirst({
-    where: {
-      id: normalizeText(jobId),
-      deviceId: normalizeText(deviceId),
-    },
-  });
-  if (!existing) return null;
+  const normalizedJobId = normalizeText(jobId);
+  const normalizedDeviceId = normalizeText(deviceId);
+  const normalizedAttempt = normalizeAttempt(attempt);
+  const requestedStatus = normalizeText(status).toUpperCase();
+  mobileLinkCompletionDisposition('PROCESSING', requestedStatus);
 
-  if (existing.status === 'SUCCEEDED') return existing;
-  if (existing.status !== 'PROCESSING') return null;
+  if (!normalizedJobId) throw validationError('jobId is required');
+  if (!normalizedDeviceId) throw validationError('deviceId is required');
 
-  return prisma.mobileLinkJob.update({
-    where: { id: existing.id },
-    data: {
-      status: success ? 'SUCCEEDED' : 'FAILED',
-      completedAt: new Date(),
-      leaseExpiresAt: null,
-      resultMessage: success ? normalizeText(message) : null,
-      errorMessage: success ? null : normalizeText(message) || 'Android worker failed',
-    },
+  return prisma.$transaction(async (tx) => {
+    const existing = await tx.mobileLinkJob.findFirst({
+      where: {
+        id: normalizedJobId,
+        deviceId: normalizedDeviceId,
+        attempt: normalizedAttempt,
+      },
+    });
+    if (!existing) return null;
+
+    const disposition = mobileLinkCompletionDisposition(existing.status, requestedStatus);
+    if (disposition === 'IDEMPOTENT') return existing;
+    if (disposition === 'CONFLICT') return null;
+
+    const succeeded = requestedStatus === 'SUCCEEDED';
+    return tx.mobileLinkJob.update({
+      where: { id: existing.id },
+      data: {
+        status: requestedStatus,
+        completedAt: new Date(),
+        leaseExpiresAt: null,
+        resultMessage: succeeded ? normalizeText(message) : null,
+        errorMessage: succeeded ? null : normalizeText(message) || 'Android worker failed',
+      },
+    });
   });
 };
 
@@ -257,15 +447,59 @@ export const listMobileLinkJobs = async (limit = 50) => prisma.mobileLinkJob.fin
   orderBy: { createdAt: 'desc' },
 });
 
-export const retryMobileLinkJob = async (jobId) => prisma.mobileLinkJob.update({
-  where: { id: normalizeText(jobId) },
-  data: {
-    status: 'PENDING',
-    deviceId: null,
-    claimedAt: null,
-    leaseExpiresAt: null,
-    completedAt: null,
-    errorMessage: null,
-    resultMessage: null,
-  },
+export const getMobileLinkJob = async (jobId) => {
+  const normalizedJobId = normalizeText(jobId);
+  if (!normalizedJobId) return null;
+  return prisma.mobileLinkJob.findUnique({ where: { id: normalizedJobId } });
+};
+
+export const getLatestFailedMobileLinkJob = async () => prisma.mobileLinkJob.findFirst({
+  where: { status: 'FAILED' },
+  orderBy: [
+    { completedAt: 'desc' },
+    { createdAt: 'desc' },
+  ],
 });
+
+export const retryMobileLinkJob = async (jobId, repair = {}) => {
+  const normalizedJobId = normalizeText(jobId);
+  if (!normalizedJobId) throw validationError('jobId is required');
+  if (!repair || typeof repair !== 'object' || Array.isArray(repair)) {
+    throw validationError('repair payload must be an object');
+  }
+
+  return prisma.$transaction(async (tx) => {
+    const existing = await tx.mobileLinkJob.findUnique({
+      where: { id: normalizedJobId },
+    });
+    if (!existing || existing.status !== 'FAILED') return null;
+
+    const repairedPayload = normalizeMobileLinkJobPayload({
+      postId: existing.postId,
+      postUrl: Object.hasOwn(repair, 'postUrl') ? repair.postUrl : existing.postUrl,
+      shopeeUrl: Object.hasOwn(repair, 'shopeeUrl') ? repair.shopeeUrl : existing.shopeeUrl,
+      linkName: Object.hasOwn(repair, 'linkName') ? repair.linkName : existing.linkName,
+      postText: Object.hasOwn(repair, 'postText') ? repair.postText : existing.postText,
+      contentType: Object.hasOwn(repair, 'contentType')
+        ? repair.contentType
+        : existing.contentType,
+    });
+    const { postId: _postId, ...mutablePayload } = repairedPayload;
+
+    const updated = await tx.mobileLinkJob.updateMany({
+      where: { id: existing.id, status: 'FAILED' },
+      data: {
+        ...mutablePayload,
+        status: 'PENDING',
+        deviceId: null,
+        claimedAt: null,
+        leaseExpiresAt: null,
+        completedAt: null,
+        errorMessage: null,
+        resultMessage: null,
+      },
+    });
+    if (updated.count !== 1) return null;
+    return tx.mobileLinkJob.findUnique({ where: { id: existing.id } });
+  });
+};

@@ -133,6 +133,15 @@ export const createMobileWorkerGateway = ({
         headers,
         timeout: requestTimeoutMs,
       }, (proxyResponse) => {
+        // pipe() does not close the downstream response when the upstream ends
+        // mid-body. Fail promptly so Android can retry instead of hanging until
+        // its full read timeout (or accepting a truncated acknowledgement).
+        proxyResponse.on('aborted', () => res.destroy());
+        proxyResponse.on('error', () => res.destroy());
+        if (res.destroyed) {
+          proxyResponse.destroy();
+          return;
+        }
         const responseHeaders = {
           'cache-control': 'no-store',
           'content-type': String(proxyResponse.headers['content-type'] || 'application/json; charset=utf-8'),
@@ -140,6 +149,10 @@ export const createMobileWorkerGateway = ({
         };
         res.writeHead(proxyResponse.statusCode || 502, responseHeaders);
         proxyResponse.pipe(res);
+      });
+
+      res.on('close', () => {
+        if (!res.writableEnded) proxyRequest.destroy();
       });
 
       proxyRequest.on('timeout', () => {

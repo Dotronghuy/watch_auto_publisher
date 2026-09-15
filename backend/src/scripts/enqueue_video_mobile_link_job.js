@@ -1,4 +1,3 @@
-import crypto from 'node:crypto';
 import process from 'node:process';
 import { createInterface } from 'node:readline/promises';
 
@@ -44,26 +43,6 @@ const validateFacebookUrl = (value) => {
   }
 };
 
-const derivePostId = (postUrl, explicitPostId) => {
-  if (normalize(explicitPostId)) return normalize(explicitPostId);
-
-  const url = new URL(postUrl);
-  const queryId = normalize(url.searchParams.get('v'));
-  if (queryId) return queryId;
-
-  const segments = url.pathname.split('/').filter(Boolean);
-  const markerIndex = segments.findIndex((part) => (
-    ['reel', 'reels', 'videos', 'posts'].includes(part.toLowerCase())
-  ));
-  const markerId = markerIndex >= 0 ? normalize(segments[markerIndex + 1]) : '';
-  if (markerId) return markerId;
-
-  const numericId = [...segments].reverse().find((part) => /^\d{6,}$/.test(part));
-  if (numericId) return numericId;
-
-  return `manual-video-${crypto.createHash('sha256').update(postUrl).digest('hex').slice(0, 20)}`;
-};
-
 const printHelp = () => {
   console.log(`
 Tạo tác vụ gắn link Shopee cho một video/Reels Facebook đã đăng.
@@ -74,6 +53,8 @@ Cách chạy tương tác:
 Hoặc truyền đủ tham số:
   node --env-file=.env src/scripts/enqueue_video_mobile_link_job.js ^
     --post-url "https://www.facebook.com/reel/VIDEO_ID" ^
+    --post-id "PAGE_ID_VIDEO_ID" ^
+    --post-text "Caption đúng của video vừa đăng" ^
     --sku "751L-T8" ^
     --link-name "Mua ở đây"
 
@@ -97,13 +78,27 @@ const main = async () => {
       throw new Error('URL video phải là HTTPS của facebook.com hoặc fb.watch.');
     }
 
+    const postId = normalize(args['post-id']) || normalize(await terminal.question(
+      'Nhập Post ID dạng PAGE_ID_VIDEO_ID do Facebook Graph API trả về: ',
+    ));
+    if (!/^\d+_\d+$/.test(postId)) {
+      throw new Error('Post ID video phải có dạng PAGE_ID_VIDEO_ID để mở đúng Fanpage.');
+    }
+
+    const postText = normalize(args['post-text']) || normalize(await terminal.question(
+      'Dán đúng caption của video vừa đăng: ',
+    ));
+    if (!postText) {
+      throw new Error('Caption là bắt buộc để xác nhận đúng thẻ video trên Fanpage.');
+    }
+
     const sku = normalize(args.sku) || normalize(await terminal.question(
       'Nhập đúng SKU của video (để lấy link từ Sheet Products): ',
     ));
 
     let shopeeUrl = normalize(args['shopee-url']);
     if (!shopeeUrl && sku) {
-      const productInfo = await getProductInfoBySku(sku);
+      const productInfo = await getProductInfoBySku(sku, { force: true });
       shopeeUrl = getShopeeLinkFromProductInfo(productInfo);
       if (shopeeUrl) {
         console.log(`Đã lấy link Shopee của SKU ${sku} từ Sheet.`);
@@ -122,14 +117,14 @@ const main = async () => {
       'Tên liên kết [Mua ở đây]: ',
     ));
     const linkName = requestedName || 'Mua ở đây';
-    const postId = derivePostId(postUrl, args['post-id']);
 
     const job = await enqueueMobileLinkJob({
       postId,
       postUrl,
       shopeeUrl,
       linkName,
-      force: true,
+      postText,
+      contentType: 'reel',
     });
 
     console.log('\nĐÃ TẠO TÁC VỤ VIDEO THÀNH CÔNG');

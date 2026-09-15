@@ -7,8 +7,8 @@ import { readJsonFileSync } from '../utils/json-file.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Dùng cùng file credentials với Google Drive, Products Sheet và màn hình cài đặt.
-// Bản cũ từng đọc nhầm backend/config nên máy chỉ có file đã upload ở src/config sẽ lỗi riêng SKU_STATUS.
+// DÃ¹ng cÃ¹ng file credentials vá»›i Google Drive, Products Sheet vÃ  mÃ n hÃ¬nh cÃ i Ä‘áº·t.
+// Báº£n cÅ© tá»«ng Ä‘á»c nháº§m backend/config nÃªn mÃ¡y chá»‰ cÃ³ file Ä‘Ã£ upload á»Ÿ src/config sáº½ lá»—i riÃªng SKU_STATUS.
 const PRIMARY_KEYFILEPATH = path.join(__dirname, '../config/credentials.json');
 const LEGACY_KEYFILEPATH = path.join(__dirname, '../../config/credentials.json');
 const KEYFILEPATH = fs.existsSync(PRIMARY_KEYFILEPATH) ? PRIMARY_KEYFILEPATH : LEGACY_KEYFILEPATH;
@@ -22,9 +22,9 @@ const auth = new google.auth.GoogleAuth({
 
 const sheets = google.sheets({ version: 'v4', auth });
 const SHEET_NAME = 'Sheet1';
-const FOCUS_HEADER = 'Tập Trung';
+const FOCUS_HEADER = 'Táº­p Trung';
 
-const getSkuValue = (item = {}) => item['Mã SKU'] ?? item['Ma_SKU'] ?? '';
+const getSkuValue = (item = {}) => item['MÃ£ SKU'] ?? item['Ma_SKU'] ?? '';
 const normalizeSkuKey = (sku) => String(sku ?? '').trim().toUpperCase();
 const normalizeFocusValue = (value) => {
   const normalized = String(value ?? '').trim();
@@ -52,7 +52,7 @@ const fetchRawSheetRows = async (spreadsheetId) => {
   return response.data.values || [];
 };
 
-// Cột "Tập Trung" luôn được gắn theo khóa SKU, không phụ thuộc vị trí dòng.
+// Cá»™t "Táº­p Trung" luÃ´n Ä‘Æ°á»£c gáº¯n theo khÃ³a SKU, khÃ´ng phá»¥ thuá»™c vá»‹ trÃ­ dÃ²ng.
 export const prepareRowsWithFocusBySku = (dataArray = [], currentData = []) => {
   const focusBySku = new Map();
 
@@ -89,58 +89,58 @@ const getSheetId = () => {
     if (fs.existsSync(settingsPath)) {
       const settings = readJsonFileSync(settingsPath);
       if (settings.skuStatusSheetId) return settings.skuStatusSheetId;
-      if (settings.googleSheetId) return settings.googleSheetId; // Tương thích cấu hình cũ
+      if (settings.googleSheetId) return settings.googleSheetId; // TÆ°Æ¡ng thÃ­ch cáº¥u hÃ¬nh cÅ©
     }
   } catch (e) {
-    console.error('Lỗi lấy Google Sheet ID:', e.message);
+    console.error('Lá»—i láº¥y Google Sheet ID:', e.message);
   }
   return process.env.SKU_STATUS_SHEET_ID || DEFAULT_SKU_STATUS_SHEET_ID;
 };
 
-// Đọc dữ liệu từ Google Sheet
+// Äá»c dá»¯ liá»‡u tá»« Google Sheet
 export const readFromSheet = async () => {
   const spreadsheetId = getSheetId();
   if (!spreadsheetId) {
-    console.log('Chưa cấu hình Google Sheet ID. Debug ID:', getSheetId());
+    console.log('ChÆ°a cáº¥u hÃ¬nh Google Sheet ID. Debug ID:', getSheetId());
     return [];
   }
 
   try {
     const rows = await fetchRawSheetRows(spreadsheetId);
     if (!rows || rows.length === 0) {
-      console.log('Không tìm thấy dữ liệu trong Google Sheet.');
+      console.log('KhÃ´ng tÃ¬m tháº¥y dá»¯ liá»‡u trong Google Sheet.');
       return [];
     }
 
     return rowsToObjects(rows);
   } catch (error) {
     const detail = error.response?.data?.error?.message || error.message;
-    console.error(`❌ [SKU_STATUS] Không đọc được Sheet ${spreadsheetId}: ${detail}`);
+    console.error(`âŒ [SKU_STATUS] KhÃ´ng Ä‘á»c Ä‘Æ°á»£c Sheet ${spreadsheetId}: ${detail}`);
     return [];
   }
 };
 
-// Ghi dữ liệu lên Google Sheet
+// Ghi dá»¯ liá»‡u lÃªn Google Sheet
 export const writeToSheet = async (dataArray) => {
   const spreadsheetId = getSheetId();
   if (!spreadsheetId) {
-    console.log('Chưa cấu hình Google Sheet ID.');
+    console.log('ChÆ°a cáº¥u hÃ¬nh Google Sheet ID.');
     return;
   }
 
   try {
-    // 1. Lấy sheetId của Sheet1
+    // 1. Láº¥y sheetId cá»§a Sheet1
     const spreadsheet = await sheets.spreadsheets.get({ spreadsheetId });
     const sheet = spreadsheet.data.sheets.find(s => s.properties.title === 'Sheet1') || spreadsheet.data.sheets[0];
     const sheetId = sheet.properties.sheetId;
     const currentRowCount = sheet.properties.gridProperties.rowCount || 1000;
 
-    // 2. Đọc trạng thái hiện tại trước khi ghi để "Tập Trung" luôn đi theo đúng SKU.
-    // Nếu bước đọc thất bại, hàm sẽ dừng trước khi thay đổi dữ liệu trên Sheet.
+    // 2. Äá»c tráº¡ng thÃ¡i hiá»‡n táº¡i trÆ°á»›c khi ghi Ä‘á»ƒ "Táº­p Trung" luÃ´n Ä‘i theo Ä‘Ãºng SKU.
+    // Náº¿u bÆ°á»›c Ä‘á»c tháº¥t báº¡i, hÃ m sáº½ dá»«ng trÆ°á»›c khi thay Ä‘á»•i dá»¯ liá»‡u trÃªn Sheet.
     const currentRows = await fetchRawSheetRows(spreadsheetId);
     const currentData = rowsToObjects(currentRows);
     const preparedData = prepareRowsWithFocusBySku(dataArray, currentData);
-    const neededRowCount = preparedData.length + 50; // Dự phòng 50 dòng
+    const neededRowCount = preparedData.length + 50; // Dá»± phÃ²ng 50 dÃ²ng
     const targetRowCount = Math.max(currentRowCount, neededRowCount);
 
     if (currentRowCount < neededRowCount) {
@@ -160,15 +160,15 @@ export const writeToSheet = async (dataArray) => {
       });
     }
 
-    // 3. Chuẩn bị rows cho batchUpdate
-    const headers = ['Mã SKU', '0_Anh_AVT', '1_Anh_Hang', '2_Anh_Tu_Chup', '3_Video_Doc', '4_Video_Ngang', 'Kết Quả', FOCUS_HEADER];
+    // 3. Chuáº©n bá»‹ rows cho batchUpdate
+    const headers = ['MÃ£ SKU', '0_Anh_AVT', '1_Anh_Hang', '2_Anh_Tu_Chup', '3_Video_Doc', '4_Video_Ngang', 'Káº¿t Quáº£', FOCUS_HEADER];
     const rows = [];
 
     // Header
     const headerCells = headers.map(header => ({
       userEnteredValue: { stringValue: header },
       userEnteredFormat: {
-        backgroundColor: { red: 0.25, green: 0.32, blue: 0.71 }, // Màu xanh dương đậm
+        backgroundColor: { red: 0.25, green: 0.32, blue: 0.71 }, // MÃ u xanh dÆ°Æ¡ng Ä‘áº­m
         textFormat: { bold: true, foregroundColor: { red: 1, green: 1, blue: 1 } },
         horizontalAlignment: "CENTER",
         verticalAlignment: "MIDDLE"
@@ -185,7 +185,7 @@ export const writeToSheet = async (dataArray) => {
         item['2_Anh_Tu_Chup'] || '',
         item['3_Video_Doc'] || '',
         item['4_Video_Ngang'] || '',
-        item['Kết Quả'] || item['Ket_Qua'] || '',
+        item['Káº¿t Quáº£'] || item['Ket_Qua'] || '',
         item[FOCUS_HEADER]
       ].map((val, colIndex) => {
         const stringValue = String(val ?? '');
@@ -194,11 +194,11 @@ export const writeToSheet = async (dataArray) => {
         let bold = false;
 
         if (stringValue === 'OK') {
-          bgColor = { red: 0.85, green: 0.93, blue: 0.83 }; // Xanh lá nhạt
+          bgColor = { red: 0.85, green: 0.93, blue: 0.83 }; // Xanh lÃ¡ nháº¡t
           fgColor = { red: 0.1, green: 0.5, blue: 0.1 };
           bold = true;
         } else if (stringValue === 'KHONG CO ANH' || stringValue === 'CO LOI') {
-          bgColor = { red: 0.98, green: 0.89, blue: 0.88 }; // Đỏ nhạt
+          bgColor = { red: 0.98, green: 0.89, blue: 0.88 }; // Äá» nháº¡t
           fgColor = { red: 0.8, green: 0, blue: 0 };
           bold = true;
         } else if (colIndex === 0) {
@@ -221,7 +221,7 @@ export const writeToSheet = async (dataArray) => {
       rows.push({ values: rowCells });
     }
 
-    // 4. Gửi batchUpdate
+    // 4. Gá»­i batchUpdate
     await sheets.spreadsheets.batchUpdate({
       spreadsheetId,
       resource: {
@@ -262,8 +262,9 @@ export const writeToSheet = async (dataArray) => {
       }
     });
 
-    console.log(`✅ Đã cập nhật và format thành công ${preparedData.length} dòng lên Google Sheets (giữ Tập Trung theo SKU).`);
+    console.log(`âœ… ÄÃ£ cáº­p nháº­t vÃ  format thÃ nh cÃ´ng ${preparedData.length} dÃ²ng lÃªn Google Sheets (giá»¯ Táº­p Trung theo SKU).`);
   } catch (error) {
-    console.error('Lỗi khi ghi và format lên Google Sheet:', error.message);
+    console.error('Lá»—i khi ghi vÃ  format lÃªn Google Sheet:', error.message);
   }
 };
+

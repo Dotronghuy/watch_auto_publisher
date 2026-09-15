@@ -25,6 +25,15 @@ const SHOPEE_LINK_HEADERS = new Set([
   'url shopee',
   'link sản phẩm shopee',
 ]);
+const PRODUCT_INFO_CACHE_TTL_MS = Math.max(
+  60_000,
+  Number.parseInt(process.env.PRODUCT_INFO_CACHE_TTL_MS || '900000', 10)
+);
+let productInfoCache = {
+  expiresAt: 0,
+  bySku: new Map()
+};
+let productInfoLoadPromise = null;
 
 const auth = new google.auth.GoogleAuth({
   keyFile: KEYFILEPATH,
@@ -55,52 +64,85 @@ export const getShopeeLinkFromProductInfo = (productInfo) => {
   return '';
 };
 
-export const getProductInfoBySku = async (sku) => {
-  try {
-    console.log(`Đang tra cứu thông tin SKU ${sku} trên Google Sheets...`);
+const buildProductInfoMap = (rows) => {
+  if (!rows || rows.length === 0) return new Map();
+  const headers = rows[0];
+  const skuIndex = headers.findIndex(
+    header => normalizeHeader(header) === normalizeHeader('Mã sản phẩm')
+  );
+  if (skuIndex === -1) return new Map();
+
+  const bySku = new Map();
+  for (let index = 1; index < rows.length; index++) {
+    const row = rows[index];
+    const sku = normalizeSku(row?.[skuIndex]);
+    if (!sku) continue;
+
+    const productInfo = {};
+    headers.forEach((header, columnIndex) => {
+      if (header && row[columnIndex]) {
+        productInfo[header] = row[columnIndex];
+      }
+    });
+    bySku.set(sku, productInfo);
+  }
+  return bySku;
+};
+
+const loadProductInfoMap = async ({ force = false } = {}) => {
+  if (
+    !force
+    && productInfoCache.bySku.size > 0
+    && productInfoCache.expiresAt > Date.now()
+  ) {
+    return productInfoCache.bySku;
+  }
+  if (productInfoLoadPromise) return productInfoLoadPromise;
+
+  productInfoLoadPromise = (async () => {
     const res = await sheets.spreadsheets.values.get({
       spreadsheetId: getSheetId(),
-      // Link shoppe đang nằm ở cột AL trong tab Products.
       range: PRODUCT_SHEET_RANGE,
     });
-
-    const rows = res.data.values;
-    if (!rows || rows.length === 0) {
-      console.log('Không tìm thấy dữ liệu trong bảng tính.');
-      return null;
+    const bySku = buildProductInfoMap(res.data.values);
+    if (bySku.size === 0) {
+      throw new Error('Không tìm thấy cột Mã sản phẩm hoặc dữ liệu Product.');
     }
+    productInfoCache = {
+      expiresAt: Date.now() + PRODUCT_INFO_CACHE_TTL_MS,
+      bySku
+    };
+    return bySku;
+  })().finally(() => {
+    productInfoLoadPromise = null;
+  });
 
-    const headers = rows[0];
-    const skuIndex = headers.findIndex(
-      (header) => normalizeHeader(header) === normalizeHeader('Mã sản phẩm'),
-    );
-    
-    if (skuIndex === -1) {
-      console.log('Không tìm thấy cột "Mã sản phẩm" trong Sheet.');
-      return null;
-    }
+  return productInfoLoadPromise;
+};
 
-    // Tìm dòng có SKU tương ứng
-    for (let i = 1; i < rows.length; i++) {
-      const row = rows[i];
-      if (normalizeSku(row[skuIndex]) === normalizeSku(sku)) {
-        const productInfo = {};
-        headers.forEach((header, index) => {
-          if (header && row[index]) {
-            productInfo[header] = row[index];
-          }
-        });
-        console.log(`✅ Đã lấy thành công thông tin cho SKU ${sku} từ Sheet!`);
-        return productInfo;
-      }
+export const warmProductInfoCache = async () => {
+  const bySku = await loadProductInfoMap();
+  console.log(`✅ Đã làm nóng cache Product: ${bySku.size} SKU.`);
+  return bySku.size;
+};
+
+export const getProductInfoBySku = async (sku, { force = false } = {}) => {
+  try {
+    const bySku = await loadProductInfoMap({ force });
+    const productInfo = bySku.get(normalizeSku(sku)) || null;
+    if (productInfo) {
+      console.log(`✅ Đã lấy thông tin SKU ${sku} từ cache Product.`);
+      return productInfo;
     }
-    
     console.log(`⚠️ Không tìm thấy SKU ${sku} trong Sheet.`);
     return null;
   } catch (error) {
     const detail = error.response?.data?.error?.message || error.message;
     console.error(`❌ [PRODUCTS] Không đọc được Sheet ${getSheetId()}: ${detail}`);
-    return null;
+    // A forced read is used immediately before creating a mobile Shopee-link job.
+    // Falling back to cache here can attach an older URL after the Sheet was edited.
+    // Fail closed for that path; ordinary callers may still use the last good cache.
+    return force ? null : productInfoCache.bySku.get(normalizeSku(sku)) || null;
   }
 };
 
@@ -233,6 +275,13 @@ export const syncProductCatalog = async () => {
 
     const rows = res.data.values;
     if (!rows || rows.length === 0) return false;
+    const refreshedProductInfo = buildProductInfoMap(rows);
+    if (refreshedProductInfo.size > 0) {
+      productInfoCache = {
+        expiresAt: Date.now() + PRODUCT_INFO_CACHE_TTL_MS,
+        bySku: refreshedProductInfo
+      };
+    }
 
     const headers = rows[0];
     const skuIndex = headers.indexOf('Mã sản phẩm');

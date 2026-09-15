@@ -1,66 +1,129 @@
 package vn.zenwatch.mobileworker
 
 import android.accessibilityservice.AccessibilityService
+import android.accessibilityservice.AccessibilityServiceInfo
 import android.accessibilityservice.GestureDescription
-import android.graphics.Bitmap
 import android.graphics.Path
-import android.graphics.PointF
 import android.graphics.Rect
-import android.os.Build
 import android.os.Bundle
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
-import android.view.Display
+import android.os.SystemClock
+import android.util.DisplayMetrics
+import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
-import kotlin.math.abs
-import kotlin.math.max
 
 class ShopeeAccessibilityService : AccessibilityService() {
     private val handler = Handler(Looper.getMainLooper())
-    private val processRunnable = Runnable { processCurrentStep() }
-    private val menuSemanticTapAttempts = mutableMapOf<String, Int>()
-    private val menuFallbackTapAttempts = mutableMapOf<String, Int>()
+    private val tickGate = AutomationTickGate()
+    private val processRunnable = Runnable {
+        tickGate.reset()
+        processCurrentStep()
+    }
+    private var trackedAttemptKey: String? = null
+    private val saveConfirmations = mutableSetOf<String>()
+    private val menuTapBudgets = mutableMapOf<String, MenuTapBudget>()
     private val menuTapDispatched = mutableSetOf<String>()
-    private val linkManagerTapAttempts = mutableMapOf<String, Int>()
-    private val reelScreenshotAttempts = mutableMapOf<String, Int>()
-    private val reelScreenshotInFlight = mutableSetOf<String>()
-    private val reelOptionsScrollAttempts = mutableMapOf<String, Int>()
-    private val affiliateProductTapAttempts = mutableMapOf<String, Int>()
-    private val saveFallbackAttempts = mutableSetOf<String>()
+    private val linkManagerNavigationProof = mutableSetOf<String>()
+    private val saveRetryAttempts = mutableSetOf<String>()
     private val exactPostReopenTargets = mutableMapOf<String, Int>()
     private val exactPostLastLaunchAt = mutableMapOf<String, Long>()
+    private val menuScreenshotGate = MenuScreenshotGate()
+    private var visualMenuStatus = ""
+    private val visualMenuTapped = mutableSetOf<String>()
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event?.packageName?.toString() != FACEBOOK_PACKAGE) return
-        if (JobStore.load(this) == null) return
-        handler.removeCallbacks(processRunnable)
-        handler.postDelayed(processRunnable, EVENT_SETTLE_MS)
+        if (!MobileWorkerService.isRunning) return
+        val active = JobStore.load(this) ?: return
+        if (active.step == AutomationStep.REPORTING) return
+        if (active.step == AutomationStep.VERIFY && MobileWorkerService.canAutomate(active.job)) {
+            val labels = event.text.map { it.toString() } + listOfNotNull(event.contentDescription?.toString())
+            if (ProductLinkUiPolicy.hasExactLabel(labels, PRODUCT_LINK_SUCCESS_HINTS)) {
+                saveConfirmations.add(active.job.attemptKey)
+            }
+        }
+        // Do not push an existing tick back on every animation/content event.
+        if (tickGate.request()) handler.postDelayed(processRunnable, EVENT_SETTLE_MS)
     }
 
     override fun onInterrupt() = Unit
 
     override fun onServiceConnected() {
         super.onServiceConnected()
-        handler.postDelayed(processRunnable, EVENT_SETTLE_MS)
+        connectedService = this
+        serviceInfo = serviceInfo.apply {
+            flags = flags or AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS
+        }
+        clearAttemptState()
+        MobileWorkerService.automationSession.pause()
+        JobStore.load(this)?.let { active ->
+            if (active.step != AutomationStep.REPORTING) {
+                JobStore.restartNavigation(this)
+            }
+        }
+        scheduleNext(EVENT_SETTLE_MS)
     }
 
     override fun onDestroy() {
+        if (connectedService === this) connectedService = null
         handler.removeCallbacks(processRunnable)
+        tickGate.reset()
+        MobileWorkerService.automationSession.pause()
+        clearAttemptState()
         super.onDestroy()
     }
 
+    private fun clearAttemptState() {
+        saveConfirmations.clear()
+        menuTapBudgets.clear()
+        menuTapDispatched.clear()
+        linkManagerNavigationProof.clear()
+        saveRetryAttempts.clear()
+        exactPostReopenTargets.clear()
+        exactPostLastLaunchAt.clear()
+        menuScreenshotGate.reset()
+        visualMenuStatus = ""
+        visualMenuTapped.clear()
+    }
+
     private fun processCurrentStep() {
-        val active = JobStore.load(this) ?: return
-        if (active.step == AutomationStep.REPORTING) return
+        if (!MobileWorkerService.isRunning) {
+            pauseReason = "Worker đã dừng"
+            clearAttemptState()
+            trackedAttemptKey = null
+            return
+        }
+        val active = JobStore.load(this)
+        if (active == null || active.step == AutomationStep.REPORTING) {
+            pauseReason = if (active == null) "Không có job đang xử lý" else "Đang gửi kết quả"
+            clearAttemptState()
+            trackedAttemptKey = null
+            return
+        }
+        if (trackedAttemptKey != active.job.attemptKey) {
+            clearAttemptState()
+            trackedAttemptKey = active.job.attemptKey
+            lastUiStatus = ""
+        }
+        if (!MobileWorkerService.canAutomate(active.job)) {
+            pauseReason = "Chờ Worker xác nhận quyền xử lý/kết nối máy chủ"
+            clearAttemptState()
+            scheduleNext(ROOT_RETRY_MS)
+            return
+        }
         val root = rootInActiveWindow
-        if (root == null) {
+        if (root == null || root.packageName?.toString() != FACEBOOK_PACKAGE) {
+            pauseReason = "Chờ giao diện Facebook ở phía trước"
             // Facebook can open before Android has exposed its accessibility tree.
             // Keep polling so the flow does not depend on receiving another UI event.
             scheduleNext(ROOT_RETRY_MS)
             return
         }
 
+        pauseReason = ""
         try {
             when (active.step) {
                 AutomationStep.OPEN_POST -> openExactPost(root, active)
@@ -81,236 +144,254 @@ class ShopeeAccessibilityService : AccessibilityService() {
         }
     }
 
-    /**
-     * Safety gate for every job. No menu or form interaction may run until the
-     * exact Facebook object opened by [FacebookPostLauncher] is visible as a
-     * dedicated post/Reel screen. In particular, an old product-link form is
-     * treated as stale UI and can never be reused by a new SKU.
-     */
+    /** Open the job's direct URL and wait for the post/video menu surface; no caption comparison. */
     private fun openExactPost(root: AccessibilityNodeInfo, active: ActiveJob) {
-        val fallbackKey = "${active.job.id}:${active.job.attempt}"
+        val key = active.job.attemptKey
+        if (elapsedInStep(active) < DIRECT_OPEN_SETTLE_MS) {
+            scheduleNext(DIRECT_OPEN_SETTLE_MS - elapsedInStep(active))
+            return
+        }
         val staleProductUi = hasProductLinkSurface(root) || isReelOptionsMenuVisible(root)
-        val homeFeed = looksLikeFacebookHomeFeed(root)
+        val wrongDestination = looksLikeFacebookHomeFeed(root) || looksLikeProfileTimeline(root)
+        val boostPostUi = looksLikeBoostPostScreen(root)
+        val currentTarget = exactPostReopenTargets[key] ?: 0
+        val menu = findDirectMenuControl(root, active)
 
-        if (!staleProductUi && !homeFeed && looksLikeExactPostDetail(root, active)) {
-            exactPostReopenTargets.remove(fallbackKey)
-            exactPostLastLaunchAt.remove(fallbackKey)
-            menuSemanticTapAttempts.remove(fallbackKey)
-            menuFallbackTapAttempts.remove(fallbackKey)
-            menuTapDispatched.remove(fallbackKey)
-            linkManagerTapAttempts.remove(fallbackKey)
-            reelScreenshotAttempts.remove(fallbackKey)
-            reelOptionsScrollAttempts.remove(fallbackKey)
+        if (!staleProductUi && !wrongDestination && !boostPostUi &&
+            menu != null) {
+            updateUiStatus(active, "Đã nhận diện nút ba chấm (${menu.target.evidence})")
+            menuTapBudgets.remove(key)
+            menuTapDispatched.remove(key)
+            linkManagerNavigationProof.remove(key)
+            saveRetryAttempts.remove("$key:verify-save")
             JobStore.setStep(this, AutomationStep.OPEN_MENU)
             scheduleNext(350)
             return
         }
-
+        if (!staleProductUi && !wrongDestination && !boostPostUi && tryVisualPostMenu(root, active)) return
+        updateUiStatus(active, "Chờ nhận diện ba chấm; stale=$staleProductUi " +
+            "wrong=$wrongDestination boost=$boostPostUi; ${navigationDiagnostics(root, active)}; $visualMenuStatus")
         if (elapsedInStep(active) < EXACT_POST_FIRST_RETRY_MS) {
             scheduleNext(500)
             return
         }
-
-        val sinceLastLaunch = System.currentTimeMillis() -
-            (exactPostLastLaunchAt[fallbackKey] ?: 0L)
+        val sinceLastLaunch = System.currentTimeMillis() - (exactPostLastLaunchAt[key] ?: 0L)
         if (sinceLastLaunch < EXACT_POST_REOPEN_SETTLE_MS) {
             scheduleNext(EXACT_POST_REOPEN_SETTLE_MS - sinceLastLaunch)
             return
         }
-
-        val currentTarget = exactPostReopenTargets[fallbackKey] ?: 0
         val nextTarget = currentTarget + 1
         if (nextTarget < FacebookPostLauncher.targetCount(active.job)) {
-            exactPostReopenTargets[fallbackKey] = nextTarget
+            exactPostReopenTargets[key] = nextTarget
+            menuTapDispatched.remove(key)
+            linkManagerNavigationProof.remove(key)
             if (FacebookPostLauncher.launch(this, active.job, nextTarget)) {
-                exactPostLastLaunchAt[fallbackKey] = System.currentTimeMillis()
+                exactPostLastLaunchAt[key] = System.currentTimeMillis()
                 scheduleNext(EXACT_POST_REOPEN_SETTLE_MS)
                 return
             }
         }
-
         val reason = when {
             staleProductUi -> "Facebook vẫn hiển thị menu/form của bài cũ"
-            homeFeed -> "Facebook vẫn đang ở News Feed"
-            else -> "Facebook chưa hiển thị màn hình chi tiết đúng bài/Reel"
+            wrongDestination -> "Link đích bị Facebook chuyển về Feed/profile"
+            boostPostUi -> "Facebook mở nhầm màn Quảng bá bài viết"
+            else -> "Đã mở link đích nhưng chưa nhận diện được nút ba chấm của bài/video"
         }
-        failStepAfter(
-            active,
-            EXACT_POST_FAIL_TIMEOUT_MS,
-            "$reason; Worker đã dừng để tránh gắn nhầm link",
-        )
+        failStepAfter(active, EXACT_POST_FAIL_TIMEOUT_MS,
+            "$reason; chưa mở được quản lý sản phẩm. ${navigationDiagnostics(root, active)}")
     }
 
+    private fun restartDirectNavigation(active: ActiveJob) {
+        menuScreenshotGate.reset()
+        visualMenuStatus = ""
+        visualMenuTapped.remove(active.job.attemptKey)
+        val key = active.job.attemptKey
+        menuTapDispatched.remove(key)
+        menuTapBudgets.remove(key)
+        linkManagerNavigationProof.remove(key)
+        exactPostReopenTargets.remove(key)
+        exactPostLastLaunchAt[key] = System.currentTimeMillis()
+        JobStore.restartNavigation(this)
+        FacebookPostLauncher.launch(this, active.job)
+        scheduleNext(EXACT_POST_REOPEN_SETTLE_MS)
+    }
+
+    private fun visualNavigationKey(active: ActiveJob): String =
+        "${active.job.attemptKey}:${active.stepStartedAt}:${exactPostReopenTargets[active.job.attemptKey] ?: 0}"
+
+    @Suppress("DEPRECATION")
+    private fun physicalDisplaySize(): DisplayMetrics = DisplayMetrics().also {
+        getSystemService(WindowManager::class.java).defaultDisplay.getRealMetrics(it)
+    }
+
+    /** A live pixel fallback, never a cached coordinate or caption match. */
+    private fun tryVisualPostMenu(root: AccessibilityNodeInfo, active: ActiveJob): Boolean {
+        if (isVideoJob(active) || FacebookPostLauncher.targetCount(active.job) == 0) return false
+        if (Build.VERSION.SDK_INT < 30) {
+            visualMenuStatus = "Nhận diện ảnh ba chấm cần Android 11 trở lên"
+            return false
+        }
+        val size = physicalDisplaySize()
+        val snapshot = screenNodes(root).second
+        val region = PostMenuVisualPolicy.region(snapshot, size.widthPixels, size.heightPixels)
+        if (region == null) {
+            val headers = FacebookScreenPolicy.headerCenters(snapshot, size.widthPixels.toFloat(), size.heightPixels.toFloat())
+            visualMenuStatus = "Chưa có vùng đầu bài phù hợp để đọc ảnh; headerY=${headers.map { it.toInt() }} " +
+                "screen=${size.widthPixels}x${size.heightPixels}"
+            return false
+        }
+        val bounds = Rect().also(root::getBoundsInScreen)
+        // No split-screen, background window, or fullscreen video action rail.
+        if (bounds.width() < size.widthPixels * 0.9f || bounds.height() < size.heightPixels * 0.7f ||
+            FacebookScreenPolicy.hasVideoSurface(snapshot, size.heightPixels.toFloat()) ||
+            windows.none { it.id == root.windowId && it.isActive && it.isFocused }) {
+            visualMenuStatus = "Chưa đọc ảnh: Facebook không toàn màn hình/không focus hoặc đang ở màn video"
+            return false
+        }
+        val navigation = visualNavigationKey(active)
+        val now = SystemClock.uptimeMillis()
+        if (menuScreenshotGate.waiting(navigation, now)) {
+            scheduleNext(350)
+            return true
+        }
+        val token = menuScreenshotGate.begin(navigation, now) ?: return false
+        val windowId = root.windowId
+        // Compare geometry only. No caption comparison and no screen content in diagnostics.
+        val geometry = headerGeometry(snapshot, region)
+        updateUiStatus(active, "Đang nhận diện ảnh ba chấm trong vùng đầu bài")
+        try {
+            MenuScreenshotReader.request(this, region, size.widthPixels, size.heightPixels) { target, status ->
+              try {
+                if (menuScreenshotGate.finish(navigation, token, SystemClock.uptimeMillis())) {
+                    val current = JobStore.load(this)
+                    val freshRoot = rootInActiveWindow
+                    val freshSize = physicalDisplaySize()
+                    if (current != null && current.step == AutomationStep.OPEN_POST && current.reportStatus == null &&
+                        current.job.attemptKey == active.job.attemptKey && visualNavigationKey(current) == navigation &&
+                        MobileWorkerService.isRunning && MobileWorkerService.canAutomate(current.job) &&
+                        freshRoot?.packageName?.toString() == FACEBOOK_PACKAGE && freshRoot.windowId == windowId &&
+                        windows.any { it.id == windowId && it.isActive && it.isFocused } &&
+                        freshSize.widthPixels == size.widthPixels && freshSize.heightPixels == size.heightPixels) {
+                        val freshSnapshot = screenNodes(freshRoot).second
+                        val unchanged = PostMenuVisualPolicy.region(freshSnapshot, size.widthPixels, size.heightPixels) == region &&
+                            headerGeometry(freshSnapshot, region) == geometry &&
+                            !looksLikeFacebookHomeFeed(freshRoot) && !looksLikeProfileTimeline(freshRoot) &&
+                            !looksLikeBoostPostScreen(freshRoot) && !hasProductLinkSurface(freshRoot) &&
+                            !isReelOptionsMenuVisible(freshRoot)
+                        visualMenuStatus = if (!unchanged) "Đầu bài đã thay đổi; bỏ ảnh cũ" else status
+                        if (unchanged && target != null) {
+                            if (FacebookScreenPolicy.isMenuPointUnobstructed(freshSnapshot, target,
+                                    size.widthPixels.toFloat(), size.heightPixels.toFloat()) && tapMenuTarget(current, target)) {
+                                menuTapBudgets.getOrPut(current.job.attemptKey) { MenuTapBudget() }.record(true)
+                                menuTapDispatched.add(current.job.attemptKey)
+                                visualMenuTapped.add(current.job.attemptKey)
+                                JobStore.setStep(this, AutomationStep.OPEN_MENU)
+                                visualMenuStatus = "Đã chạm ba chấm nhận diện từ ảnh; chờ menu sản phẩm"
+                            } else visualMenuStatus = "Chưa gửi được cú chạm ba chấm từ ảnh; sẽ nhận diện lại"
+                        }
+                        updateUiStatus(current, visualMenuStatus)
+                    }
+                }
+              } catch (_: Exception) {
+                // Android can invalidate window nodes between callback and traversal.
+                // Discard this capture instead of crashing the accessibility service.
+                visualMenuStatus = "Cây giao diện đã thay đổi khi đọc ảnh; sẽ kiểm tra lại"
+              } finally {
+                scheduleNext(700)
+              }
+            }
+        } catch (_: Exception) {
+            menuScreenshotGate.finish(navigation, token, SystemClock.uptimeMillis())
+            visualMenuStatus = "Android chưa cho phép nhận diện ảnh; kiểm tra quyền Trợ năng"
+        }
+        scheduleNext(500)
+        return true
+    }
+
+    private fun headerGeometry(nodes: List<FacebookScreenNode>, region: MenuImageRegion): List<List<Float>> =
+        nodes.filter { it.centerY in 0f..region.bottom.toFloat() }
+            .map { listOf(it.left, it.top, it.right, it.bottom) }.distinct()
+            .sortedWith(compareBy<List<Float>> { it[1] }.thenBy { it[0] }.thenBy { it[2] }.thenBy { it[3] })
+
     private fun openPostMenu(root: AccessibilityNodeInfo, active: ActiveJob) {
-        // OPEN_MENU is reachable only after OPEN_POST has verified the detail
-        // screen. If Facebook jumps elsewhere, fail closed instead of reusing a
-        // product surface that may belong to an older post.
-        if (hasProductLinkForm(root)) {
-            JobStore.restartNavigation(this)
-            FacebookPostLauncher.launch(this, active.job)
-            scheduleNext(EXACT_POST_REOPEN_SETTLE_MS)
+        val key = active.job.attemptKey
+        if (looksLikeBoostPostScreen(root) || hasProductLinkForm(root) ||
+            looksLikeFacebookHomeFeed(root) || looksLikeProfileTimeline(root)) {
+            restartDirectNavigation(active)
             return
         }
-        val fallbackKey = "${active.job.id}:${active.job.attempt}"
-
-        // Home must be rejected before examining any menu labels: a bottom sheet
-        // left by an older post can temporarily be exposed on top of News Feed.
-        if (looksLikeFacebookHomeFeed(root)) {
-            JobStore.restartNavigation(this)
-            FacebookPostLauncher.launch(this, active.job)
-            scheduleNext(EXACT_POST_REOPEN_SETTLE_MS)
-            return
-        }
-
-        val linkManagerAlreadyVisible = findBestNode(
-            root,
-            listOf(
-                "Quản lý liên kết đến sản phẩm",
-                "Thêm liên kết sản phẩm",
-                "Quản lý sản phẩm",
-                "Thêm sản phẩm liên kết tiếp thị",
-                "Manage product links",
-                "Add product link",
-                "Manage products",
-                "Add affiliate product",
-            ),
-            visibleOnly = true,
-        )
+        val linkManagerAlreadyVisible = findExactNode(root, PRODUCT_MANAGER_LABELS, visibleOnly = true)
         if (linkManagerAlreadyVisible != null) {
-            if (!menuTapDispatched.contains(fallbackKey)) {
-                JobStore.restartNavigation(this)
-                FacebookPostLauncher.launch(this, active.job)
-                scheduleNext(EXACT_POST_REOPEN_SETTLE_MS)
+            if (key !in menuTapDispatched) {
+                restartDirectNavigation(active)
                 return
             }
             JobStore.setStep(this, AutomationStep.OPEN_LINK_MANAGER)
+            updateUiStatus(active, "Menu sản phẩm đã mở")
             scheduleNext(250)
             return
         }
-
-        // Never attach a link to whichever post happens to be first in News Feed.
-        // If Facebook interpreted an exact permalink as Home, retry the next
-        // exact target. After all targets are exhausted, fail safely instead of
-        // touching a potentially unrelated post.
-        // Full-screen Reels opens a tall bottom sheet. The product-management row
-        // is below the first viewport, so scroll the already-open sheet instead of
-        // tapping another three-dot button behind it.
-        val priorReelScrollAttempts = reelOptionsScrollAttempts[fallbackKey] ?: 0
-        if (isReelOptionsMenuVisible(root) || priorReelScrollAttempts > 0) {
-            val scrollAttempts = priorReelScrollAttempts
-            if (scrollAttempts < REEL_OPTIONS_SCROLL_LIMIT) {
-                reelOptionsScrollAttempts[fallbackKey] = scrollAttempts + 1
-                if (swipeReelOptionsUp()) {
-                    scheduleNext(1_200)
-                    return
-                }
+        // A menu opened by THIS attempt is valid, but it may not offer product linking.
+        // Never reinterpret its Save/Share controls as the post options button.
+        if (isReelOptionsMenuVisible(root)) {
+            if (key !in menuTapDispatched) {
+                restartDirectNavigation(active)
+            } else {
+                failStepAfter(active, 35_000,
+                    "Menu của video đã mở nhưng chưa có mục quản lý sản phẩm; chưa gắn link")
             }
-            failStepAfter(
-                active,
-                45_000,
-                "Đã mở tùy chọn Reels nhưng không tìm thấy mục Quản lý sản phẩm sau khi cuộn",
-            )
             return
         }
-
-        val semanticTapAttempts = menuSemanticTapAttempts[fallbackKey] ?: 0
-        val fallbackTapAttempts = menuFallbackTapAttempts[fallbackKey] ?: 0
-        val fullscreenReel = isVideoJob(active) || looksLikeFullscreenReel(root)
-        val anchorYFraction = findPostHeaderAnchorYFraction(root)
-        val tapTargets = postMenuTapTargets(anchorYFraction)
-
-        // Facebook does not reliably expose the lower Reel ellipsis as an
-        // accessibility node. Coordinate guesses can hit the bookmark/save button
-        // above it, so locate the three bright dots from a temporary screenshot and
-        // tap the detected centre instead. Never sweep guessed Reel coordinates.
-        if (
-            fullscreenReel
-            && elapsedInStep(active) >= 900
-        ) {
-            val screenshotAttempts = reelScreenshotAttempts[fallbackKey] ?: 0
-            if (
-                Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
-                && screenshotAttempts < REEL_SCREENSHOT_TAP_LIMIT
-            ) {
-                if (reelScreenshotInFlight.add(fallbackKey)) {
-                    reelScreenshotAttempts[fallbackKey] = screenshotAttempts + 1
-                    captureAndTapReelMenu(fallbackKey)
-                }
-                scheduleNext(REEL_SCREENSHOT_SETTLE_MS)
-                return
-            }
-        }
-
-        val button = findFullscreenReelMenuButton(root) ?: if (!fullscreenReel) {
-            findBestNode(root, POST_MENU_BUTTON_KEYWORDS)
-        } else {
-            // In Reels there is also a page-level three-dot button at the top.
-            // If the lower post button is absent from the accessibility tree, use
-            // the measured lower-right coordinate rather than clicking the top one.
-            null
-        }
-        if (button != null && semanticTapAttempts < POST_MENU_SEMANTIC_TAP_LIMIT) {
-            // Facebook can report ACTION_CLICK as accepted without actually opening
-            // the menu. Dispatch a real accessibility gesture at the detected node
-            // first, and retry it before using screen-coordinate fallbacks.
-            val gestureDispatched = tapNodeByGesture(button)
-            val clicked = if (!gestureDispatched) click(button) else false
-            menuSemanticTapAttempts[fallbackKey] = semanticTapAttempts + 1
-            if (gestureDispatched || clicked) {
-                menuTapDispatched.add(fallbackKey)
-            }
-            scheduleNext(if (gestureDispatched || clicked) 1_000 else 450)
+        val button = findDirectMenuControl(root, active)
+        // A visual target is single-use. Never re-tap a coordinate from a previous screenshot.
+        if (key in visualMenuTapped) {
+            failStepAfter(active, 35_000, "Đã chạm ba chấm nhận diện từ ảnh nhưng chưa thấy menu quản lý sản phẩm")
             return
         }
-
-        if (
-            !fullscreenReel
-            && elapsedInStep(active) >= 1_500
-            && fallbackTapAttempts < tapTargets.size
-        ) {
-            val geometryButton = if (fallbackTapAttempts == 0 && !fullscreenReel) {
-                findPostMenuByGeometry(root, anchorYFraction, fullscreenReel)
+        if (button == null) {
+            // After a tap, give the menu time to populate; the detail surface may be hidden.
+            if (key in menuTapDispatched) {
+                failStepAfter(active, 35_000, "Đã mở tùy chọn nhưng không thấy mục quản lý sản phẩm")
             } else {
-                null
+                restartDirectNavigation(active)
             }
-            val geometryGestureDispatched = geometryButton?.let { tapNodeByGesture(it) } == true
-            val geometryClicked = if (!geometryGestureDispatched) {
-                geometryButton?.let { click(it) } == true
-            } else {
-                false
-            }
-            val coordinateGestureDispatched = if (!geometryGestureDispatched && !geometryClicked) {
-                tapPostMenuByGesture(tapTargets[fallbackTapAttempts])
-            } else {
-                false
-            }
-            menuFallbackTapAttempts[fallbackKey] = fallbackTapAttempts + 1
-            if (geometryGestureDispatched || geometryClicked || coordinateGestureDispatched) {
-                menuTapDispatched.add(fallbackKey)
-                scheduleNext(1_200)
-                return
-            }
+            return
         }
-
-        failStepAfter(
-            active,
-            35_000,
-            "Không tìm thấy nút ba chấm của bài viết. ${postMenuDiagnostics(root)}",
-        )
+        val budget = menuTapBudgets.getOrPut(key) { MenuTapBudget() }
+        if (budget.canAttempt(button.target.evidence)) {
+            // Only a semantic menu node may receive ACTION_CLICK, never its Page/card
+            // ancestor. Unknown header icons go straight to their exact tap location.
+            val clicked = FacebookMenuTapPolicy.preferNodeClick(button.target.evidence, budget.acceptedTaps) &&
+                button.node?.let(::clickMenuNode) == true
+            val dispatched = if (!clicked) tapMenuTarget(active, button.target) else false
+            val accepted = dispatched || clicked
+            budget.record(accepted)
+            if (accepted) menuTapDispatched.add(key)
+            updateUiStatus(active, if (accepted) {
+                "Android nhận bấm ba chấm (${button.target.evidence}); chờ menu"
+            } else {
+                "Android chưa nhận cú bấm (${budget.rejectedDispatches}/3); thử lại"
+            })
+            scheduleNext(if (dispatched || clicked) 1_000 else 450)
+            return
+        }
+        if (budget.rejectedDispatches >= 3) {
+            JobStore.markForReport(this, false,
+                "Android từ chối gửi thao tác bấm ba chấm 3 lần; kiểm tra kết nối dịch vụ Trợ năng")
+            return
+        }
+        failStepAfter(active, 35_000,
+            "Không mở được tùy chọn của đúng bài/video. ${navigationDiagnostics(root, active)}")
     }
 
     private fun openLinkManager(root: AccessibilityNodeInfo, active: ActiveJob) {
         val navigationKey = "${active.job.id}:${active.job.attempt}"
-        val urlFormAlreadyVisible = findEditableNodes(root).any {
-            nodeLabel(it).contains("url", ignoreCase = true)
-        }
+        val urlFormAlreadyVisible = hasProductLinkForm(root)
         if (urlFormAlreadyVisible) {
             // A URL form left open by an older job is not evidence that this job
             // opened its own product manager. Never paste a new SKU into it.
-            if ((linkManagerTapAttempts[navigationKey] ?: 0) <= 0) {
-                JobStore.restartNavigation(this)
-                FacebookPostLauncher.launch(this, active.job)
-                scheduleNext(EXACT_POST_REOPEN_SETTLE_MS)
+            if (navigationKey !in linkManagerNavigationProof) {
+                restartDirectNavigation(active)
                 return
             }
             JobStore.setStep(this, AutomationStep.FILL_URL)
@@ -321,50 +402,43 @@ class ShopeeAccessibilityService : AccessibilityService() {
         // Video/Reels has a second screen. Prefer its affiliate-product row before
         // looking for the first-level menu item, otherwise Facebook can expose the
         // page title as a misleading click candidate and the worker loops here.
-        val affiliateProductButton = findBestNode(
+        val affiliateProductButton = findExactNode(
             root,
             listOf(
                 "Thêm sản phẩm liên kết tiếp thị",
                 "Add affiliate product",
             ),
-            exactFirst = true,
             visibleOnly = true,
         )
         if (affiliateProductButton != null) {
             val gestureDispatched = tapNodeByGesture(affiliateProductButton)
             val clicked = if (!gestureDispatched) click(affiliateProductButton) else false
             if (gestureDispatched || clicked) {
+                linkManagerNavigationProof.add(navigationKey)
                 scheduleNext(1_200)
                 return
             }
         }
 
-        val addProductPageVisible = findBestNode(
+        val addProductPageVisible = findExactNode(
             root,
             listOf(
                 "Thêm sản phẩm",
                 "Add product",
             ),
-            exactFirst = true,
             visibleOnly = true,
         ) != null
         if (addProductPageVisible) {
-            // Some Facebook versions draw the affiliate row but omit it from the
-            // accessibility tree. Tap the stable row position as a bounded fallback.
-            val fallbackKey = "${active.job.id}:${active.job.attempt}:affiliate-product"
-            val attempts = affiliateProductTapAttempts[fallbackKey] ?: 0
-            if (elapsedInStep(active) >= 1_500 && attempts < AFFILIATE_PRODUCT_TAP_LIMIT) {
-                affiliateProductTapAttempts[fallbackKey] = attempts + 1
-                if (tapAffiliateProductRowByGesture()) {
-                    scheduleNext(1_500)
-                    return
-                }
-            }
-            scheduleNext(1_200)
+            // Do not guess a fixed coordinate when Facebook omits the affiliate row.
+            failStepAfter(
+                active,
+                40_000,
+                "Không mở được mục Thêm sản phẩm liên kết tiếp thị",
+            )
             return
         }
 
-        val linkManagerButton = findBestNode(
+        val linkManagerButton = findExactNode(
             root,
             listOf(
                 "Quản lý liên kết đến sản phẩm",
@@ -374,15 +448,13 @@ class ShopeeAccessibilityService : AccessibilityService() {
                 "Add product link",
                 "Manage products",
             ),
-            exactFirst = true,
             visibleOnly = true,
         )
         if (linkManagerButton != null) {
             val gestureDispatched = tapNodeByGesture(linkManagerButton)
             val clicked = if (!gestureDispatched) click(linkManagerButton) else false
             if (gestureDispatched || clicked) {
-                linkManagerTapAttempts[navigationKey] =
-                    (linkManagerTapAttempts[navigationKey] ?: 0) + 1
+                linkManagerNavigationProof.add(navigationKey)
                 scheduleNext(1_200)
                 return
             }
@@ -397,48 +469,62 @@ class ShopeeAccessibilityService : AccessibilityService() {
 
     private fun fillUrl(root: AccessibilityNodeInfo, active: ActiveJob) {
         val inputs = findEditableNodes(root)
-        val urlInput = inputs.firstOrNull { nodeLabel(it).contains("url", ignoreCase = true) }
-            ?: inputs.firstOrNull()
-        if (urlInput != null && setText(urlInput, active.job.shopeeUrl)) {
-            JobStore.setStep(this, AutomationStep.FILL_NAME)
-            scheduleNext(800)
+        val urlInput = findProductField(inputs, listOf("url"), active.job.shopeeUrl)
+        if (urlInput == null) {
+            failStepAfter(active, 20_000, "Không tìm thấy đúng ô URL")
             return
         }
-        failStepAfter(active, 20_000, "Không tìm thấy ô URL")
+        if (fieldContainsExpectedValue(urlInput, active.job.shopeeUrl)) {
+            JobStore.setStep(this, AutomationStep.FILL_NAME)
+            scheduleNext(350)
+            return
+        }
+        if (setText(urlInput, active.job.shopeeUrl)) {
+            scheduleNext(600)
+            return
+        }
+        failStepAfter(active, 20_000, "Không nhập hoặc xác nhận được URL Shopee")
     }
 
     private fun fillName(root: AccessibilityNodeInfo, active: ActiveJob) {
         val inputs = findEditableNodes(root)
-        val nameInput = inputs.firstOrNull {
-            val label = nodeLabel(it)
-            label.contains("Tên liên kết", ignoreCase = true)
-                || label.contains("Link name", ignoreCase = true)
-        } ?: inputs.firstOrNull {
-            it.text?.toString() != active.job.shopeeUrl
-                && !nodeLabel(it).contains("url", ignoreCase = true)
-        }
+        val nameInput = findProductField(inputs, listOf("Tên liên kết", "Link name"), active.job.linkName)
 
-        if (nameInput == null || setText(nameInput, active.job.linkName)) {
+        if (nameInput == null) {
+            failStepAfter(active, 15_000, "Không tìm thấy đúng ô Tên liên kết")
+            return
+        }
+        if (fieldContainsExpectedValue(nameInput, active.job.linkName)) {
             JobStore.setStep(this, AutomationStep.SAVE)
-            scheduleNext(800)
+            scheduleNext(350)
+            return
+        }
+        if (setText(nameInput, active.job.linkName)) {
+            scheduleNext(600)
             return
         }
         failStepAfter(active, 15_000, "Không nhập được tên liên kết")
     }
 
     private fun saveLink(root: AccessibilityNodeInfo, active: ActiveJob) {
-        val saveButton = findBestNode(root, listOf("Lưu", "Save"), exactFirst = true)
-        if (saveButton != null && click(saveButton)) {
-            JobStore.setStep(this, AutomationStep.VERIFY)
-            scheduleNext(2_000)
+        val inputs = findEditableNodes(root)
+        val urlInput = findProductField(inputs, listOf("url"), active.job.shopeeUrl)
+        val nameInput = findProductField(inputs, listOf("Tên liên kết", "Link name"), active.job.linkName)
+        if (urlInput == null || nameInput == null || urlInput == nameInput ||
+            !fieldContainsExpectedValue(urlInput, active.job.shopeeUrl) ||
+            !fieldContainsExpectedValue(nameInput, active.job.linkName)) {
+            failStepAfter(active, 25_000, "Nội dung URL/tên liên kết đã thay đổi trước khi Lưu")
             return
         }
-
-        val fallbackKey = "${active.job.id}:${active.job.attempt}"
-        if (elapsedInStep(active) >= 2_000 && saveFallbackAttempts.add(fallbackKey)) {
-            val gestureDispatched = saveButton?.let { tapNodeByGesture(it) }
-                ?: tapSaveByGesture()
-            if (gestureDispatched) {
+        val saveButton = findExactNode(
+            root,
+            listOf("Lưu", "Save"),
+            visibleOnly = true,
+        )
+        if (saveButton != null) {
+            val clicked = click(saveButton)
+            val gestureDispatched = if (!clicked) tapNodeByGesture(saveButton) else false
+            if (clicked || gestureDispatched) {
                 JobStore.setStep(this, AutomationStep.VERIFY)
                 scheduleNext(2_000)
                 return
@@ -459,6 +545,7 @@ class ShopeeAccessibilityService : AccessibilityService() {
                 "Invalid link",
                 "Something went wrong",
             ),
+            visibleOnly = true,
         )
         if (error != null) {
             JobStore.markForReport(this, false, "Facebook báo lỗi: ${nodeLabel(error)}")
@@ -473,39 +560,54 @@ class ShopeeAccessibilityService : AccessibilityService() {
             listOf("Lưu", "Save"),
             visibleOnly = true,
         ) != null
-        val saveStillVisible = exactSaveButtonVisible
-        val formStillVisible = saveStillVisible || findEditableNodes(root).any { node ->
+        val formStillVisible = exactSaveButtonVisible || findEditableNodes(root).any { node ->
             val label = nodeLabel(node)
             label.contains("url", ignoreCase = true)
                 || label.contains("Tên liên kết", ignoreCase = true)
                 || label.contains("Link name", ignoreCase = true)
                 || node.text?.toString() == active.job.shopeeUrl
         }
-        val returnedToProductPage = !formStillVisible && findBestNode(
+        val successConfirmationVisible = findBestNode(
             root,
-            listOf(
-                "Thêm sản phẩm",
-                "Quản lý sản phẩm",
-                "Add product",
-                "Manage products",
-            ),
-            exactFirst = true,
+            PRODUCT_LINK_SUCCESS_HINTS,
+            visibleOnly = true,
         ) != null
+        val productLinkSurfaceVisible = hasProductLinkSurface(root)
+        if (successConfirmationVisible) saveConfirmations.add(active.job.attemptKey)
+        val savedLinkEvidenceVisible = productLinkSurfaceVisible && findExactNode(
+            root, listOf(active.job.shopeeUrl), visibleOnly = true,
+        ) != null
+        val positiveSaveEvidence = ProductLinkUiPolicy.saved(
+            formStillVisible, active.job.attemptKey in saveConfirmations, savedLinkEvidenceVisible,
+        )
 
         val verifyFallbackKey = "${active.job.id}:${active.job.attempt}:verify-save"
         if (
             formStillVisible
             && elapsedInStep(active) >= 3_000
-            && saveFallbackAttempts.add(verifyFallbackKey)
+            && saveRetryAttempts.add(verifyFallbackKey)
         ) {
+            val inputs = findEditableNodes(root)
+            val urlInput = findProductField(inputs, listOf("url"), active.job.shopeeUrl)
+            val nameInput = findProductField(inputs, listOf("Tên liên kết", "Link name"), active.job.linkName)
+            if (urlInput == null || nameInput == null || urlInput == nameInput ||
+                !fieldContainsExpectedValue(urlInput, active.job.shopeeUrl) ||
+                !fieldContainsExpectedValue(nameInput, active.job.linkName)) {
+                JobStore.markForReport(this, false, "Form không còn đúng URL/tên liên kết khi thử Lưu lại")
+                return
+            }
             val saveButton = findExactNode(
                 root,
                 listOf("Lưu", "Save"),
                 visibleOnly = true,
             )
-            val gestureDispatched = saveButton?.let { tapNodeByGesture(it) }
-                ?: tapSaveByGesture()
-            if (gestureDispatched) {
+            val clicked = saveButton?.let { click(it) } == true
+            val gestureDispatched = if (!clicked) {
+                saveButton?.let { tapNodeByGesture(it) } == true
+            } else {
+                false
+            }
+            if (clicked || gestureDispatched) {
                 scheduleNext(2_000)
                 return
             }
@@ -513,15 +615,16 @@ class ShopeeAccessibilityService : AccessibilityService() {
 
         if (
             !formStillVisible
+            && positiveSaveEvidence
             && elapsedInStep(active) >= VERIFY_FORM_CLOSED_SUCCESS_MS
         ) {
             JobStore.markForReport(
                 this,
                 success = true,
-                message = if (returnedToProductPage) {
-                    "Đã gắn link Shopee và lưu cho bài video trên Facebook"
+                message = if (active.job.attemptKey in saveConfirmations) {
+                    "Facebook xác nhận đã lưu link Shopee"
                 } else {
-                    "Đã gắn link Shopee và lưu trên Facebook"
+                    "Đã thấy link Shopee vừa lưu trên Facebook"
                 },
             )
             return
@@ -534,7 +637,7 @@ class ShopeeAccessibilityService : AccessibilityService() {
                 message = if (formStillVisible) {
                     "Facebook vẫn hiển thị form sau khi bấm Lưu"
                 } else {
-                    "Facebook đã đóng form nhưng chưa xác nhận liên kết được lưu"
+                    "Facebook đã đóng form nhưng không có bằng chứng liên kết được lưu"
                 },
             )
         } else {
@@ -554,7 +657,7 @@ class ShopeeAccessibilityService : AccessibilityService() {
         if (exactFirst) {
             nodes.firstOrNull { node ->
                 (!visibleOnly || node.isVisibleToUser)
-                    && keywords.any { keyword -> nodeLabel(node).trim().equals(keyword, true) }
+                    && ProductLinkUiPolicy.hasExactLabel(nodeTextLabels(node), keywords)
             }?.let { return it }
         }
 
@@ -581,7 +684,7 @@ class ShopeeAccessibilityService : AccessibilityService() {
         collectNodes(root, nodes)
         return nodes.firstOrNull { node ->
             (!visibleOnly || node.isVisibleToUser)
-                && keywords.any { keyword -> nodeLabel(node).trim().equals(keyword, true) }
+                && ProductLinkUiPolicy.hasExactLabel(nodeTextLabels(node), keywords)
         }
     }
 
@@ -589,56 +692,63 @@ class ShopeeAccessibilityService : AccessibilityService() {
         val nodes = mutableListOf<AccessibilityNodeInfo>()
         collectNodes(root, nodes)
         return nodes.filter { node ->
-            node.isEditable
+            node.isVisibleToUser && node.isEnabled && (node.isEditable
                 || node.className?.toString()?.contains("EditText", ignoreCase = true) == true
-                || node.actionList.any { it.id == AccessibilityNodeInfo.ACTION_SET_TEXT }
+                || node.actionList.any { it.id == AccessibilityNodeInfo.ACTION_SET_TEXT })
         }
     }
 
-    private fun findPostHeaderAnchorYFraction(root: AccessibilityNodeInfo): Float? {
+    private fun findProductField(
+        inputs: List<AccessibilityNodeInfo>, keywords: List<String>, expected: String,
+    ): AccessibilityNodeInfo? {
+        val fields = inputs.map { ProductLinkField(nodeTextLabels(it) + listOfNotNull(it.viewIdResourceName), it.text?.toString().orEmpty()) }
+        return ProductLinkUiPolicy.fieldIndex(fields, keywords, expected)?.let(inputs::get)
+    }
+
+    private fun fieldContainsExpectedValue(
+        node: AccessibilityNodeInfo,
+        expected: String,
+    ): Boolean = expected.isNotBlank() &&
+        node.text?.toString()?.trim() == expected.trim()
+
+    private fun screenNodes(root: AccessibilityNodeInfo): Pair<List<AccessibilityNodeInfo>, List<FacebookScreenNode>> {
         val nodes = mutableListOf<AccessibilityNodeInfo>()
         collectNodes(root, nodes)
-
-        val width = resources.displayMetrics.widthPixels
-        val height = resources.displayMetrics.heightPixels
-        if (width <= 0 || height <= 0) return null
-
-        return nodes
-            .asSequence()
-            .filter { it.isVisibleToUser }
-            .mapNotNull { node ->
-                val label = listOfNotNull(
-                    node.text?.toString(),
-                    node.contentDescription?.toString(),
-                ).joinToString(" ").trim()
-                if (
-                    label.isBlank()
-                    || label.length > 120
-                    || !POST_AGE_PATTERN.containsMatchIn(label)
-                ) {
-                    return@mapNotNull null
-                }
-
-                val bounds = Rect()
-                node.getBoundsInScreen(bounds)
-                if (
-                    bounds.isEmpty
-                    || bounds.centerX() > width * 0.78f
-                    || bounds.centerY() < height * 0.10f
-                    || bounds.centerY() > height * 0.48f
-                ) {
-                    null
-                } else {
-                    bounds.centerY().toFloat() / height
-                }
-            }
-            .minOrNull()
+        val visible = nodes.filter { it.isVisibleToUser }
+        return visible to visible.map { node ->
+            val bounds = Rect()
+            node.getBoundsInScreen(bounds)
+            FacebookScreenNode(
+                nodeTextLabels(node), bounds.left.toFloat(), bounds.top.toFloat(),
+                bounds.right.toFloat(), bounds.bottom.toFloat(),
+                node.isEnabled && (node.isClickable || node.parent?.isClickable == true ||
+                    node.actionList.any { it.id == AccessibilityNodeInfo.ACTION_CLICK } ||
+                    node.className?.toString()?.contains("Tab", true) == true ||
+                    node.className?.toString()?.contains("Button", true) == true),
+                iconLike = node.isEnabled && node.className?.toString()?.contains("Image", true) == true,
+                resourceId = node.viewIdResourceName.orEmpty(),
+            )
+        }
     }
 
-    private fun isVideoJob(active: ActiveJob): Boolean {
-        val url = active.job.postUrl.lowercase()
-        return VIDEO_URL_HINTS.any { url.contains(it) }
+    private fun profileTabIndices(nodes: List<FacebookScreenNode>): Set<Int> =
+        FacebookScreenPolicy.profileTabIndices(nodes,
+            resources.displayMetrics.widthPixels.toFloat(), resources.displayMetrics.heightPixels.toFloat())
+
+    private fun looksLikeProfileTimeline(root: AccessibilityNodeInfo): Boolean =
+        profileTabIndices(screenNodes(root).second).isNotEmpty()
+
+    private fun navigationDiagnostics(root: AccessibilityNodeInfo, active: ActiveJob): String {
+        val snapshot = screenNodes(root).second
+        val tabs = profileTabIndices(snapshot).size
+        val headers = FacebookScreenPolicy.headerCenters(snapshot,
+            resources.displayMetrics.widthPixels.toFloat(), resources.displayMetrics.heightPixels.toFloat()).size
+        // No screen content or credentials: enough to distinguish routing from a selector rejection.
+        return "type=${active.job.contentType} nodes=${snapshot.size} tabs=$tabs headers=$headers"
     }
+
+    private fun isVideoJob(active: ActiveJob): Boolean =
+        FacebookPostLauncher.isPageVideoJob(active.job)
 
     private fun hasProductLinkForm(root: AccessibilityNodeInfo): Boolean {
         val inputs = findEditableNodes(root)
@@ -675,31 +785,26 @@ class ShopeeAccessibilityService : AccessibilityService() {
         ) != null
     }
 
-    /**
-     * Verifies a dedicated detail screen, not merely a visible story in Home.
-     * The exact URI launch is the identity proof; this UI check prevents a failed
-     * deep link from silently degrading to News Feed or a stale product form.
-     */
-    private fun looksLikeExactPostDetail(
-        root: AccessibilityNodeInfo,
-        active: ActiveJob,
-    ): Boolean {
-        if (isVideoJob(active)) return looksLikeFullscreenReel(root)
+    private data class MenuControl(val target: FacebookMenuTarget, val node: AccessibilityNodeInfo?)
 
-        val hasPostAge = findPostHeaderAnchorYFraction(root) != null
-        if (!hasPostAge) return false
+    private fun findDirectMenuControl(root: AccessibilityNodeInfo, active: ActiveJob): MenuControl? {
+        if (FacebookPostLauncher.targetCount(active.job) == 0) return null
+        val (nodes, snapshot) = screenNodes(root)
+        val width = resources.displayMetrics.widthPixels.toFloat()
+        val height = resources.displayMetrics.heightPixels.toFloat()
+        if (profileTabIndices(snapshot).isNotEmpty()) return null
+        val target = if (isVideoJob(active) && FacebookScreenPolicy.hasVideoSurface(snapshot, height)) {
+            FacebookScreenPolicy.directReelMenuTarget(snapshot, width, height)
+        } else {
+            FacebookScreenPolicy.directPostMenuTarget(snapshot, width, height)
+        } ?: return null
+        return MenuControl(target, target.nodeIndex?.let(nodes::get))
+    }
 
-        val hasCommentComposer = findBestNode(
-            root,
-            COMMENT_COMPOSER_HINTS,
-            visibleOnly = true,
-        ) != null
-        val hasPostMenu = findBestNode(
-            root,
-            POST_MENU_BUTTON_KEYWORDS,
-            visibleOnly = true,
-        ) != null
-        return hasCommentComposer || hasPostMenu
+    private fun looksLikeBoostPostScreen(root: AccessibilityNodeInfo): Boolean {
+        val title = findBestNode(root, BOOST_POST_SCREEN_TITLES, visibleOnly = true)
+        val action = findBestNode(root, BOOST_POST_SCREEN_ACTIONS, visibleOnly = true)
+        return title != null && action != null
     }
 
     private fun looksLikeFacebookHomeFeed(root: AccessibilityNodeInfo): Boolean {
@@ -741,144 +846,6 @@ class ShopeeAccessibilityService : AccessibilityService() {
             (hasFacebookHeader && bottomNavigationLabels.isNotEmpty())
     }
 
-    private fun postMenuTapTargets(anchorYFraction: Float?): List<Float> {
-        val targets = mutableListOf<Float>()
-        if (anchorYFraction != null) {
-            listOf(-0.035f, 0f, 0.035f, 0.07f).forEach { offset ->
-                targets += (anchorYFraction + offset).coerceIn(0.12f, 0.48f)
-            }
-        }
-        targets += MENU_TAP_Y_FRACTIONS.toList()
-        return targets.distinctBy { (it * 1000).toInt() }
-    }
-
-    private fun findPostMenuByGeometry(
-        root: AccessibilityNodeInfo,
-        anchorYFraction: Float?,
-        fullscreenReel: Boolean,
-    ): AccessibilityNodeInfo? {
-        val nodes = mutableListOf<AccessibilityNodeInfo>()
-        collectNodes(root, nodes)
-
-        val width = resources.displayMetrics.widthPixels
-        val height = resources.displayMetrics.heightPixels
-        val targetX = width * 0.93f
-        val targetY = height * when {
-            fullscreenReel -> REEL_MENU_PRIMARY_Y_FRACTION
-            else -> anchorYFraction ?: 0.22f
-        }
-
-        return nodes
-            .asSequence()
-            .filter { it.isVisibleToUser }
-            .mapNotNull { node ->
-                val bounds = Rect()
-                node.getBoundsInScreen(bounds)
-                if (
-                    bounds.isEmpty
-                    || bounds.centerX() < width * 0.75f
-                    || bounds.top < height * 0.08f
-                    || (!fullscreenReel && bounds.bottom > height * 0.52f)
-                    || (fullscreenReel && bounds.centerY() < height * 0.62f)
-                    || bounds.bottom > height * 0.92f
-                    || bounds.width() > width * 0.26f
-                    || bounds.height() > height * 0.14f
-                ) {
-                    null
-                } else {
-                    val className = node.className?.toString().orEmpty()
-                    val label = nodeLabel(node)
-                    val normalizedLabel = label.lowercase()
-                    val excluded = POST_MENU_EXCLUDED_LABELS.any {
-                        normalizedLabel.contains(it)
-                    }
-                    val looksInteractive = node.isClickable
-                        || node.parent?.isClickable == true
-                        || className.contains("Button", ignoreCase = true)
-                        || className.contains("ImageView", ignoreCase = true)
-                    if (!looksInteractive || excluded) {
-                        null
-                    } else {
-                        val semanticMatch = POST_MENU_LABEL_HINTS.any {
-                            normalizedLabel.contains(it)
-                        }
-                        val score = kotlin.math.abs(bounds.centerX() - targetX)
-                            + (kotlin.math.abs(bounds.centerY() - targetY) * 1.8f)
-                            + when {
-                                semanticMatch -> -250f
-                                label.isBlank() -> 0f
-                                else -> 60f
-                            }
-                        node to score
-                    }
-                }
-            }
-            .minByOrNull { it.second }
-            ?.first
-    }
-
-    private fun findFullscreenReelMenuButton(
-        root: AccessibilityNodeInfo,
-    ): AccessibilityNodeInfo? {
-        val nodes = mutableListOf<AccessibilityNodeInfo>()
-        collectNodes(root, nodes)
-
-        val width = resources.displayMetrics.widthPixels
-        val height = resources.displayMetrics.heightPixels
-        if (width <= 0 || height <= 0) return null
-
-        return nodes
-            .asSequence()
-            .filter { it.isVisibleToUser }
-            .mapNotNull { node ->
-                val bounds = Rect()
-                node.getBoundsInScreen(bounds)
-                val label = nodeLabel(node).lowercase()
-                val semanticMatch = REEL_MENU_LABEL_HINTS.any { label.contains(it) }
-                if (
-                    bounds.isEmpty
-                    || bounds.centerX() < width * 0.86f
-                    || bounds.centerY() < height * 0.62f
-                    || bounds.centerY() > height * 0.92f
-                    || bounds.width() > width * 0.20f
-                    || bounds.height() > height * 0.10f
-                    || !semanticMatch
-                ) {
-                    null
-                } else {
-                    node
-                }
-            }
-            .maxByOrNull { node ->
-                val bounds = Rect()
-                node.getBoundsInScreen(bounds)
-                bounds.centerY()
-            }
-    }
-
-    private fun looksLikeFullscreenReel(root: AccessibilityNodeInfo): Boolean {
-        val nodes = mutableListOf<AccessibilityNodeInfo>()
-        collectNodes(root, nodes)
-
-        val height = resources.displayMetrics.heightPixels
-        if (height <= 0) return false
-
-        return nodes.any { node ->
-            if (!node.isVisibleToUser) return@any false
-            val label = nodeLabel(node).lowercase()
-            if (REEL_SCREEN_LABEL_HINTS.any { label.contains(it) }) {
-                return@any true
-            }
-
-            val bounds = Rect()
-            node.getBoundsInScreen(bounds)
-            bounds.centerY() > height * 0.62f && (
-                label.contains("xem thêm")
-                    || label.contains("see more")
-            )
-        }
-    }
-
     private fun isReelOptionsMenuVisible(root: AccessibilityNodeInfo): Boolean {
         val nodes = mutableListOf<AccessibilityNodeInfo>()
         collectNodes(root, nodes)
@@ -889,308 +856,46 @@ class ShopeeAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun postMenuDiagnostics(root: AccessibilityNodeInfo): String {
-        val nodes = mutableListOf<AccessibilityNodeInfo>()
-        collectNodes(root, nodes)
-
-        val width = resources.displayMetrics.widthPixels
-        val height = resources.displayMetrics.heightPixels
-        val candidates = nodes
-            .asSequence()
-            .filter { it.isVisibleToUser }
-            .mapNotNull { node ->
-                val bounds = Rect()
-                node.getBoundsInScreen(bounds)
-                if (
-                    bounds.isEmpty
-                    || bounds.centerX() < width * 0.68f
-                    || bounds.centerY() < height * 0.08f
-                    || bounds.centerY() > height * 0.55f
-                    || bounds.width() > width * 0.32f
-                ) {
-                    return@mapNotNull null
-                }
-
-                val label = nodeLabel(node).trim().replace(Regex("\\s+"), " ")
-                val safeLabel = if (label.isBlank()) "<không nhãn>" else label.take(50)
-                "$safeLabel@${bounds.centerX()},${bounds.centerY()}"
-            }
-            .distinct()
-            .take(6)
-            .toList()
-
-        return if (candidates.isEmpty()) {
-            "Không có nút ứng viên ở mép phải."
-        } else {
-            "Ứng viên: ${candidates.joinToString(" | ")}"
-        }
-    }
-
-    private fun tapPostMenuByGesture(yFraction: Float): Boolean {
-        val width = resources.displayMetrics.widthPixels.toFloat()
-        val height = resources.displayMetrics.heightPixels.toFloat()
-        return tapScreenPoint(width * POST_MENU_X_FRACTION, height * yFraction)
-    }
-
-    private fun tapScreenPoint(x: Float, y: Float): Boolean {
-        val path = Path().apply { moveTo(x, y) }
-        val gesture = GestureDescription.Builder()
-            .addStroke(GestureDescription.StrokeDescription(path, 0, 120))
-            .build()
-        return dispatchGesture(gesture, null, null)
-    }
-
-    private fun captureAndTapReelMenu(fallbackKey: String) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
-            reelScreenshotInFlight.remove(fallbackKey)
-            return
-        }
-
-        takeScreenshot(
-            Display.DEFAULT_DISPLAY,
-            mainExecutor,
-            object : TakeScreenshotCallback {
-                override fun onSuccess(screenshot: ScreenshotResult) {
-                    reelScreenshotInFlight.remove(fallbackKey)
-                    val hardwareBuffer = screenshot.hardwareBuffer
-                    val bitmap = try {
-                        Bitmap.wrapHardwareBuffer(hardwareBuffer, screenshot.colorSpace)
-                            ?.copy(Bitmap.Config.ARGB_8888, false)
-                    } finally {
-                        hardwareBuffer.close()
-                    }
-
-                    if (bitmap == null) {
-                        scheduleNext(REEL_SCREENSHOT_RETRY_MS)
-                        return
-                    }
-
-                    val target = try {
-                        findReelEllipsisCenter(bitmap)
-                    } finally {
-                        bitmap.recycle()
-                    }
-
-                    if (target != null && tapScreenPoint(target.x, target.y)) {
-                        menuTapDispatched.add(fallbackKey)
-                        scheduleNext(1_200)
-                    } else {
-                        scheduleNext(REEL_SCREENSHOT_RETRY_MS)
-                    }
-                }
-
-                override fun onFailure(errorCode: Int) {
-                    reelScreenshotInFlight.remove(fallbackKey)
-                    scheduleNext(REEL_SCREENSHOT_RETRY_MS)
-                }
-            },
-        )
-    }
-
-    private data class BrightBlob(
-        val centerX: Float,
-        val centerY: Float,
-        val width: Int,
-        val height: Int,
-        val area: Int,
-    )
-
-    /**
-     * Finds the three separate bright circles used by Facebook's lower Reel menu.
-     * The crop excludes the top page menu and the vertical reaction controls. A
-     * bookmark outline is one large component, so it cannot satisfy the triple-dot
-     * shape and will never be selected as the target.
-     */
-    private fun findReelEllipsisCenter(bitmap: Bitmap): PointF? {
-        val screenWidth = bitmap.width
-        val screenHeight = bitmap.height
-        if (screenWidth <= 0 || screenHeight <= 0) return null
-
-        val cropLeft = (screenWidth * REEL_ELLIPSIS_CROP_LEFT).toInt()
-        val cropTop = (screenHeight * REEL_ELLIPSIS_CROP_TOP).toInt()
-        val cropRight = (screenWidth * REEL_ELLIPSIS_CROP_RIGHT).toInt()
-        val cropBottom = (screenHeight * REEL_ELLIPSIS_CROP_BOTTOM).toInt()
-        val cropWidth = cropRight - cropLeft
-        val cropHeight = cropBottom - cropTop
-        if (cropWidth <= 0 || cropHeight <= 0) return null
-
-        val pixels = IntArray(cropWidth * cropHeight)
-        bitmap.getPixels(pixels, 0, cropWidth, cropLeft, cropTop, cropWidth, cropHeight)
-        val visited = BooleanArray(pixels.size)
-        val queue = IntArray(pixels.size)
-        val blobs = mutableListOf<BrightBlob>()
-        val minDotArea = max(4, screenWidth / 180)
-        val maxDotArea = max(180, screenWidth * screenHeight / 2_500)
-        val maxDotDiameter = max(16, screenWidth / 28)
-
-        fun isBright(index: Int): Boolean {
-            val color = pixels[index]
-            val alpha = color ushr 24 and 0xff
-            val red = color ushr 16 and 0xff
-            val green = color ushr 8 and 0xff
-            val blue = color and 0xff
-            return alpha >= 200 && red >= 205 && green >= 205 && blue >= 205
-        }
-
-        pixels.indices.forEach { start ->
-            if (visited[start] || !isBright(start)) return@forEach
-            visited[start] = true
-            var queueHead = 0
-            var queueTail = 0
-            queue[queueTail++] = start
-            var area = 0
-            var minX = cropWidth
-            var maxX = 0
-            var minY = cropHeight
-            var maxY = 0
-            var sumX = 0L
-            var sumY = 0L
-
-            while (queueHead < queueTail) {
-                val current = queue[queueHead++]
-                val x = current % cropWidth
-                val y = current / cropWidth
-                area += 1
-                sumX += x
-                sumY += y
-                minX = minOf(minX, x)
-                maxX = maxOf(maxX, x)
-                minY = minOf(minY, y)
-                maxY = maxOf(maxY, y)
-
-                for (dy in -1..1) {
-                    for (dx in -1..1) {
-                        if (dx == 0 && dy == 0) continue
-                        val nextX = x + dx
-                        val nextY = y + dy
-                        if (nextX !in 0 until cropWidth || nextY !in 0 until cropHeight) continue
-                        val next = nextY * cropWidth + nextX
-                        if (!visited[next] && isBright(next)) {
-                            visited[next] = true
-                            queue[queueTail++] = next
-                        }
-                    }
-                }
-            }
-
-            val blobWidth = maxX - minX + 1
-            val blobHeight = maxY - minY + 1
-            if (
-                area in minDotArea..maxDotArea
-                && blobWidth <= maxDotDiameter
-                && blobHeight <= maxDotDiameter
-            ) {
-                blobs += BrightBlob(
-                    centerX = cropLeft + sumX.toFloat() / area,
-                    centerY = cropTop + sumY.toFloat() / area,
-                    width = blobWidth,
-                    height = blobHeight,
-                    area = area,
-                )
-            }
-        }
-
-        val candidates = blobs
-            .filter {
-                it.centerX >= screenWidth * REEL_ELLIPSIS_MIN_X
-                    && it.centerY >= screenHeight * REEL_ELLIPSIS_MIN_Y
-                    && it.centerY <= screenHeight * REEL_ELLIPSIS_MAX_Y
-            }
-            .sortedBy { it.centerX }
-        val yTolerance = max(7f, screenHeight * 0.008f)
-        val minGap = max(4f, screenWidth * 0.006f)
-        val maxGap = max(28f, screenWidth * 0.045f)
-        val gapTolerance = max(6f, screenWidth * 0.012f)
-        var bestTarget: PointF? = null
-        var bestScore = Float.MAX_VALUE
-
-        for (firstIndex in 0 until candidates.size - 2) {
-            for (secondIndex in firstIndex + 1 until candidates.size - 1) {
-                for (thirdIndex in secondIndex + 1 until candidates.size) {
-                    val first = candidates[firstIndex]
-                    val second = candidates[secondIndex]
-                    val third = candidates[thirdIndex]
-                    val minY = minOf(first.centerY, second.centerY, third.centerY)
-                    val maxY = maxOf(first.centerY, second.centerY, third.centerY)
-                    if (maxY - minY > yTolerance) continue
-
-                    val firstGap = second.centerX - first.centerX
-                    val secondGap = third.centerX - second.centerX
-                    if (firstGap !in minGap..maxGap || secondGap !in minGap..maxGap) continue
-                    if (abs(firstGap - secondGap) > gapTolerance) continue
-
-                    val centerX = (first.centerX + second.centerX + third.centerX) / 3f
-                    val centerY = (first.centerY + second.centerY + third.centerY) / 3f
-                    val sizeDifference = abs(first.area - second.area) + abs(second.area - third.area)
-                    val score = abs(centerY - screenHeight * REEL_ELLIPSIS_EXPECTED_Y)
-                        + abs(centerX - screenWidth * REEL_ELLIPSIS_EXPECTED_X) * 0.4f
-                        + abs(firstGap - secondGap) * 2f
-                        + sizeDifference * 0.15f
-                    if (score < bestScore) {
-                        bestScore = score
-                        bestTarget = PointF(centerX, centerY)
-                    }
-                }
-            }
-        }
-        return bestTarget
-    }
-
-    private fun tapSaveByGesture(): Boolean {
-        val width = resources.displayMetrics.widthPixels.toFloat()
-        val height = resources.displayMetrics.heightPixels.toFloat()
-        val path = Path().apply {
-            moveTo(width * 0.93f, height * 0.09f)
-        }
-        val gesture = GestureDescription.Builder()
-            .addStroke(GestureDescription.StrokeDescription(path, 0, 120))
-            .build()
-        return dispatchGesture(gesture, null, null)
-    }
-
-    private fun tapAffiliateProductRowByGesture(): Boolean {
-        val width = resources.displayMetrics.widthPixels.toFloat()
-        val height = resources.displayMetrics.heightPixels.toFloat()
-        val path = Path().apply {
-            moveTo(width * 0.50f, height * 0.245f)
-        }
-        val gesture = GestureDescription.Builder()
-            .addStroke(GestureDescription.StrokeDescription(path, 0, 120))
-            .build()
-        return dispatchGesture(gesture, null, null)
-    }
-
-    private fun swipeReelOptionsUp(): Boolean {
-        val width = resources.displayMetrics.widthPixels.toFloat()
-        val height = resources.displayMetrics.heightPixels.toFloat()
-        val path = Path().apply {
-            // A controlled upward finger swipe moves the bottom-sheet contents just
-            // enough to reveal "Quản lý sản phẩm" without skipping past the row.
-            moveTo(width * 0.50f, height * 0.82f)
-            lineTo(width * 0.50f, height * 0.50f)
-        }
-        val gesture = GestureDescription.Builder()
-            .addStroke(GestureDescription.StrokeDescription(path, 0, 480))
-            .build()
-        return dispatchGesture(gesture, null, null)
-    }
-
     private fun tapNodeByGesture(node: AccessibilityNodeInfo): Boolean {
+        if (!automationAllowed() || !node.isVisibleToUser || !node.isEnabled) return false
         val bounds = Rect()
         node.getBoundsInScreen(bounds)
         if (bounds.isEmpty) return false
 
-        val path = Path().apply {
-            moveTo(bounds.exactCenterX(), bounds.exactCenterY())
-        }
+        return tapAt(bounds.exactCenterX(), bounds.exactCenterY())
+    }
+
+    private fun tapMenuTarget(active: ActiveJob, target: FacebookMenuTarget): Boolean =
+        tapAt(target.x, target.y, object : GestureResultCallback() {
+            override fun onCompleted(gestureDescription: GestureDescription?) {
+                if (isCurrentMenuStep(active)) {
+                    updateUiStatus(active, "Cú chạm ba chấm hoàn tất; đang chờ menu sản phẩm")
+                }
+            }
+
+            override fun onCancelled(gestureDescription: GestureDescription?) {
+                if (isCurrentMenuStep(active)) {
+                    updateUiStatus(active, "Android đã hủy cú chạm ba chấm")
+                }
+            }
+        })
+
+    private fun isCurrentMenuStep(active: ActiveJob): Boolean {
+        val current = JobStore.load(this) ?: return false
+        return current.job.attemptKey == active.job.attemptKey &&
+            current.step == AutomationStep.OPEN_MENU && current.reportStatus == null
+    }
+
+    private fun tapAt(x: Float, y: Float, callback: GestureResultCallback? = null): Boolean {
+        if (!automationAllowed() || x !in 0f..resources.displayMetrics.widthPixels.toFloat() ||
+            y !in 0f..resources.displayMetrics.heightPixels.toFloat()) return false
+        if (rootInActiveWindow?.packageName?.toString() != FACEBOOK_PACKAGE) return false
+        val path = Path().apply { moveTo(x, y) }
         val gesture = GestureDescription.Builder()
             .addStroke(GestureDescription.StrokeDescription(path, 0, 120))
             .build()
-        return dispatchGesture(gesture, null, null)
+        return dispatchGesture(gesture, callback, handler)
     }
-
-    private fun activate(node: AccessibilityNodeInfo): Boolean =
-        click(node) || tapNodeByGesture(node)
 
     private fun collectNodes(
         node: AccessibilityNodeInfo,
@@ -1202,14 +907,29 @@ class ShopeeAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun nodeLabel(node: AccessibilityNodeInfo): String = listOfNotNull(
+    private fun nodeTextLabels(node: AccessibilityNodeInfo): List<String> = listOfNotNull(
         node.text?.toString(),
         node.contentDescription?.toString(),
         node.hintText?.toString(),
-        node.viewIdResourceName,
-    ).joinToString(" ")
+    ).map(String::trim).filter(String::isNotBlank).distinct()
+
+    private fun nodeLabel(node: AccessibilityNodeInfo): String =
+        (nodeTextLabels(node) + listOfNotNull(node.viewIdResourceName)).joinToString(" ")
+
+    private fun automationAllowed(): Boolean {
+        val current = JobStore.load(this) ?: return false
+        return current.reportStatus == null && MobileWorkerService.canAutomate(current.job)
+    }
+
+    private fun clickMenuNode(node: AccessibilityNodeInfo): Boolean {
+        if (!automationAllowed() || !node.isVisibleToUser || !node.isEnabled) return false
+        if (!node.isClickable &&
+            node.actionList.none { it.id == AccessibilityNodeInfo.ACTION_CLICK }) return false
+        return node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+    }
 
     private fun click(node: AccessibilityNodeInfo): Boolean {
+        if (!automationAllowed() || !node.isVisibleToUser || !node.isEnabled) return false
         var current: AccessibilityNodeInfo? = node
         repeat(5) {
             if (current?.isClickable == true) {
@@ -1221,6 +941,7 @@ class ShopeeAccessibilityService : AccessibilityService() {
     }
 
     private fun setText(node: AccessibilityNodeInfo, value: String): Boolean {
+        if (!automationAllowed()) return false
         node.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
         val arguments = Bundle().apply {
             putCharSequence(
@@ -1242,38 +963,55 @@ class ShopeeAccessibilityService : AccessibilityService() {
     private fun elapsedInStep(active: ActiveJob): Long =
         System.currentTimeMillis() - active.stepStartedAt
 
+    private fun updateUiStatus(active: ActiveJob, message: String) {
+        lastUiStatus = "${active.step.name}: $message"
+    }
+
     private fun scheduleNext(delayMs: Long) {
         handler.removeCallbacks(processRunnable)
-        handler.postDelayed(processRunnable, delayMs)
+        tickGate.reset()
+        if (tickGate.request()) handler.postDelayed(processRunnable, delayMs)
     }
 
     companion object {
-        private const val POST_MENU_SEMANTIC_TAP_LIMIT = 3
-        private const val REEL_SCREENSHOT_TAP_LIMIT = 4
-        private const val REEL_OPTIONS_SCROLL_LIMIT = 5
-        private const val AFFILIATE_PRODUCT_TAP_LIMIT = 3
-        private const val EXACT_POST_FIRST_RETRY_MS = 1_200L
-        private const val EXACT_POST_REOPEN_SETTLE_MS = 2_000L
-        private const val EXACT_POST_FAIL_TIMEOUT_MS = 20_000L
+        @Volatile
+        private var connectedService: ShopeeAccessibilityService? = null
+
+        val isConnected: Boolean get() = connectedService != null
+
+        @Volatile
+        var lastUiStatus: String = ""
+            private set
+
+        @Volatile
+        var pauseReason: String = ""
+            private set
+
+        /** Job/heartbeat confirmation must wake processing even if Facebook emits no UI event. */
+        internal fun requestProcessing() {
+            val service = connectedService ?: return
+            service.handler.post {
+                if (connectedService !== service) return@post
+                // Preserve any existing action/settle deadline; heartbeat must not postpone it.
+                if (service.tickGate.request()) {
+                    service.handler.postDelayed(service.processRunnable, EVENT_SETTLE_MS)
+                }
+            }
+        }
+
+        private const val DIRECT_OPEN_SETTLE_MS = 2_000L
+        private const val EXACT_POST_FIRST_RETRY_MS = 6_000L
+        private const val EXACT_POST_REOPEN_SETTLE_MS = 6_000L
+        private const val EXACT_POST_FAIL_TIMEOUT_MS = 65_000L
         private const val VERIFY_FORM_CLOSED_SUCCESS_MS = 5_000L
         private const val FACEBOOK_PACKAGE = "com.facebook.katana"
         private const val EVENT_SETTLE_MS = 600L
         private const val ROOT_RETRY_MS = 500L
-        private const val REEL_SCREENSHOT_SETTLE_MS = 1_800L
-        private const val REEL_SCREENSHOT_RETRY_MS = 450L
-        private const val POST_MENU_X_FRACTION = 0.936f
-        private const val REEL_MENU_PRIMARY_Y_FRACTION = 0.80f
-        private const val REEL_ELLIPSIS_CROP_LEFT = 0.84f
-        private const val REEL_ELLIPSIS_CROP_RIGHT = 0.995f
-        private const val REEL_ELLIPSIS_CROP_TOP = 0.65f
-        private const val REEL_ELLIPSIS_CROP_BOTTOM = 0.91f
-        private const val REEL_ELLIPSIS_MIN_X = 0.86f
-        private const val REEL_ELLIPSIS_MIN_Y = 0.69f
-        private const val REEL_ELLIPSIS_MAX_Y = 0.89f
-        private const val REEL_ELLIPSIS_EXPECTED_X = 0.936f
-        private const val REEL_ELLIPSIS_EXPECTED_Y = 0.80f
-        private val MENU_TAP_Y_FRACTIONS =
-            floatArrayOf(0.16f, 0.20f, 0.24f, 0.28f, 0.32f, 0.36f, 0.40f)
+        private val PRODUCT_MANAGER_LABELS = listOf(
+            "Quản lý liên kết đến sản phẩm", "Thêm liên kết sản phẩm", "Quản lý sản phẩm",
+            "Thêm sản phẩm liên kết tiếp thị", "Manage product links", "Add product link",
+            "Manage products", "Add affiliate product",
+        )
         private val HOME_FEED_BOTTOM_NAV_HINTS = listOf(
             "trang ch\u1ee7",
             "b\u1ea3ng \u0111i\u1ec1u khi\u1ec3n chuy\u00ean nghi\u1ec7p",
@@ -1289,56 +1027,6 @@ class ShopeeAccessibilityService : AccessibilityService() {
             "notifications",
             "profile",
         )
-        private val COMMENT_COMPOSER_HINTS = listOf(
-            "Bình luận dưới tên",
-            "Viết bình luận",
-            "Write a comment",
-            "Comment as",
-        )
-        private val POST_MENU_BUTTON_KEYWORDS = listOf(
-            "Lựa chọn khác cho bài viết",
-            "Lựa chọn khác",
-            "Tùy chọn khác",
-            "Tùy chọn bài viết",
-            "Hành động đối với bài viết",
-            "More options",
-            "Actions for this post",
-            "Post options",
-            "feed_story_header_more",
-            "story_header_more",
-            "post_header_more",
-            "more_button",
-        )
-        private val REEL_MENU_LABEL_HINTS = listOf(
-            "lựa chọn khác",
-            "tùy chọn",
-            "more options",
-            "actions for this post",
-            "post options",
-            "feed_story_header_more",
-            "story_header_more",
-            "post_header_more",
-            "more_button",
-        )
-        private val REEL_SCREEN_LABEL_HINTS = listOf(
-            "tiếp theo:",
-            "up next:",
-            "lưu thước phim",
-            "save reel",
-            "remix thước phim",
-            "remix this reel",
-        )
-        private val VIDEO_URL_HINTS = listOf(
-            "/reel/",
-            "/reels/",
-            "/videos/",
-            "/watch/",
-            "watch?v=",
-            "video.php",
-            "fb.watch/",
-            "/share/r/",
-            "/share/v/",
-        )
         private val REEL_OPTIONS_LABEL_HINTS = listOf(
             "Lưu thước phim",
             "Save reel",
@@ -1349,34 +1037,24 @@ class ShopeeAccessibilityService : AccessibilityService() {
             "Xếp hạng trải nghiệm phát lại video",
             "Rate video playback experience",
         )
-        private val POST_AGE_PATTERN = Regex(
-            """(?i)(^|\s)(vừa xong|\d+\s*(giây|phút|giờ|ngày|tuần|tháng|năm|sec|secs|min|mins|hr|hrs|day|days|week|weeks|month|months|year|years|s|m|h|d|w|y))(\s|[·•]|$)""",
+        private val BOOST_POST_SCREEN_TITLES = listOf(
+            "Quảng bá bài viết",
+            "Boost post",
+            "Promote post",
         )
-        private val POST_MENU_LABEL_HINTS = listOf(
-            "lựa chọn khác",
-            "tùy chọn",
-            "hành động đối với bài viết",
-            "more options",
-            "actions for this post",
-            "post options",
-            "xem thêm",
-            "feed_story_header_more",
-            "story_header_more",
-            "post_header_more",
-            "more_button",
+        private val BOOST_POST_SCREEN_ACTIONS = listOf(
+            "Quảng cáo bài viết ngay",
+            "Bắt đầu xác thực",
+            "Boost post now",
+            "Start verification",
         )
-        private val POST_MENU_EXCLUDED_LABELS = listOf(
-            "tìm kiếm",
-            "search",
-            "quay lại",
-            "back",
-            "đóng",
-            "close",
-            "messenger",
-            "thông báo",
-            "notification",
-            "chia sẻ",
-            "share",
+        private val PRODUCT_LINK_SUCCESS_HINTS = listOf(
+            "Đã lưu liên kết",
+            "Đã thêm liên kết sản phẩm",
+            "Liên kết sản phẩm đã được lưu",
+            "Product link saved",
+            "Product link added",
+            "Link saved",
         )
     }
 }

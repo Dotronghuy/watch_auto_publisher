@@ -1,12 +1,20 @@
-import { connectToSheet } from './googleSheets.service.js';
+import {
+  ALL_BRANDS_VALUE,
+  connectToSheet,
+  filterRowsByBrand,
+  findBrandHeader,
+  readBrandFromRow,
+} from './googleSheets.service.js';
 import { buildPriceMap } from './excel.service.js';
 import {
   createWatchScraper,
   scrapeWatchSpecs,
   generateMarketingContent,
   detectStrapFromSku,
+  findCatalogDialColor,
+  normalizeDialColor,
 } from './productEnrichment.service.js';
-import { createChatGPTTextSession } from '../playwright.service.js';
+import { createChatGPTTextSession, createGeminiTextSession } from '../playwright.service.js';
 import fs from 'fs';
 import path from 'path';
 
@@ -17,7 +25,13 @@ export function stopAutoFill() {
 }
 
 export async function runAutoFill(config, sendLog) {
-  const { sheetUrl, excelPath, credentialsPath, aiTone } = config;
+  const {
+    sheetUrl,
+    excelPath,
+    credentialsPath,
+    aiTone,
+    selectedBrand,
+  } = config;
 
   isStopRequested = false;
 
@@ -39,9 +53,23 @@ export async function runAutoFill(config, sendLog) {
   const doc = await connectToSheet(sheetUrl, credentials);
   const sheet = doc.sheetsByIndex[0];
   await sheet.loadHeaderRow();
-  const rows = await sheet.getRows();
-  sendLog(`[Sheets] ✅ Kết nối thành công! Tìm thấy ${rows.length} dòng dữ liệu.`);
+  const allRows = await sheet.getRows();
+  const brandHeader = findBrandHeader(sheet.headerValues);
+  const rows = filterRowsByBrand(allRows, selectedBrand, brandHeader);
+  sendLog(`[Sheets] ✅ Kết nối thành công! Tìm thấy ${allRows.length} dòng dữ liệu.`);
   sendLog(`[Sheets] ℹ️ Các cột hiện có: ${sheet.headerValues.join(', ')}`);
+
+  if (selectedBrand === ALL_BRANDS_VALUE) {
+    sendLog(`[Filter] ⚠️ Đã chọn TẤT CẢ THƯƠNG HIỆU: ${rows.length}/${allRows.length} dòng được đưa vào lượt chạy.`);
+  } else {
+    if (!brandHeader) {
+      throw new Error('Không tìm thấy cột "Thương hiệu" trong tab đầu tiên của Google Sheet.');
+    }
+    if (rows.length === 0) {
+      throw new Error(`Không tìm thấy SKU nào thuộc thương hiệu "${selectedBrand}".`);
+    }
+    sendLog(`[Filter] 🎯 Chỉ cào thương hiệu "${selectedBrand}": ${rows.length}/${allRows.length} dòng.`);
+  }
 
   let processed = 0;
   let skipped = 0;
@@ -49,14 +77,82 @@ export async function runAutoFill(config, sendLog) {
   const aiSharedCache = new Map();
   let scraperSession = null;
   let chatGptSession = null;
+  let geminiSession = null;
+  let sheetWriteQueue = Promise.resolve();
+  const pendingAiJobs = [];
+  const engineWorkers = [];
 
-  // Biến lưu model number cũ để biết khi nào chuyển sang model mới
-  let lastModelNumber = null;
+  const enqueueSheetWrite = (task) => {
+    const queued = sheetWriteQueue.then(task, task);
+    sheetWriteQueue = queued.catch(() => {});
+    return queued;
+  };
+
+  const createEngineWorker = (name, session) => ({
+    name,
+    session,
+    queue: Promise.resolve(),
+    pending: 0,
+    disabled: false,
+  });
+
+  const enqueueEngineJob = (worker, task) => {
+    worker.pending++;
+    const queued = worker.queue.then(() => task(worker));
+    worker.queue = queued.catch(() => {}).finally(() => {
+      worker.pending--;
+    });
+    return queued;
+  };
+
+  const getLeastBusyWorker = () => engineWorkers
+    .filter((worker) => !worker.disabled)
+    .sort((left, right) => left.pending - right.pending)[0] || null;
 
   try {
     sendLog('[Playwright] Đang khởi động trình cào dữ liệu tối ưu...');
     scraperSession = await createWatchScraper();
     sendLog('[Playwright] ✅ Trình cào Zenwatch đã sẵn sàng và sẽ được tái sử dụng cho toàn bộ danh sách.');
+
+    const hasPendingAiRows = rows.some((row) => {
+      const sku = (row.get('Mã sản phẩm') || row.get('SKU') || row.get('Mã SKU') || row.get('sản phẩm') || '').toString().trim();
+      const shortDescription = row.get('Mô tả ngắn') || row.get('mo_ta_ngan') || '';
+      return Boolean(sku && !shortDescription.toString().trim());
+    });
+
+    if (hasPendingAiRows) {
+      sendLog('[AI] Đang khởi động song song ChatGPT và Gemini bằng hai profile Playwright riêng...');
+      const [chatGptResult, geminiResult] = await Promise.allSettled([
+        createChatGPTTextSession({
+          log: sendLog,
+          checkStop: () => isStopRequested,
+          rateLimitStrategy: 'throw',
+        }),
+        createGeminiTextSession({
+          log: sendLog,
+          checkStop: () => isStopRequested,
+        }),
+      ]);
+
+      if (chatGptResult.status === 'fulfilled') {
+        chatGptSession = chatGptResult.value;
+        engineWorkers.push(createEngineWorker('ChatGPT', chatGptSession));
+      } else {
+        sendLog(`[ChatGPT] ⚠️ Không thể khởi động: ${chatGptResult.reason?.message || chatGptResult.reason}`);
+      }
+
+      if (geminiResult.status === 'fulfilled') {
+        geminiSession = geminiResult.value;
+        engineWorkers.push(createEngineWorker('Gemini', geminiSession));
+      } else {
+        sendLog(`[Gemini] ⚠️ Không thể khởi động: ${geminiResult.reason?.message || geminiResult.reason}`);
+      }
+
+      if (engineWorkers.length === 0) {
+        throw new Error('Không thể khởi động ChatGPT hoặc Gemini. Hãy đăng nhập lại hai tài khoản trong phần Cài đặt AI.');
+      }
+      sendLog(`[AI] ✅ Đã sẵn sàng ${engineWorkers.length} engine: ${engineWorkers.map((worker) => worker.name).join(' + ')}.`);
+    }
 
     for (let i = 0; i < rows.length; i++) {
     if (isStopRequested) {
@@ -68,20 +164,13 @@ export async function runAutoFill(config, sendLog) {
     const sku = (row.get('Mã sản phẩm') || row.get('SKU') || row.get('Mã SKU') || row.get('sản phẩm') || '').toString().trim();
     if (!sku) continue;
 
-    const brand = (row.get('Thương hiệu') || row.get('thương hiệu') || '').toString().trim();
+    const brand = readBrandFromRow(row, brandHeader);
     
     const generalSku = sku.replace(/\d+$/, '');
     const baseModelCode = generalSku.split('-')[0];
     const matchNumber = baseModelCode.match(/\d+/);
     const modelNumber = matchNumber ? matchNumber[0] : '';
     const modelCacheKey = modelNumber || baseModelCode || generalSku;
-
-    if (lastModelNumber && lastModelNumber !== modelCacheKey) {
-      specsCache.clear();
-      aiSharedCache.clear();
-      sendLog(`[System] 🧹 Đã xóa cache khi chuyển sang mã mới: ${modelCacheKey}`);
-    }
-    lastModelNumber = modelCacheKey;
 
     let salePriceRaw = row.get('Giá sale') || '';
     if (priceMap.has(sku)) {
@@ -100,37 +189,55 @@ export async function runAutoFill(config, sendLog) {
       }
     }
 
+    const firstImagePath = row.get('Link ảnh sản phẩm') || null;
     const moTaNgan = row.get('Mô tả ngắn') || row.get('mo_ta_ngan') || '';
     
     if (moTaNgan.toString().trim()) {
       const phanKhuc = row.get('Phân khúc giá') || '';
+      const quickUpdates = {};
+
       if (!phanKhuc.toString().trim() && calculatedSegment) {
-        const quickUpdates = { 'Phân khúc giá': calculatedSegment };
+        quickUpdates['Phân khúc giá'] = calculatedSegment;
         if (priceMap.has(sku)) {
           const p = priceMap.get(sku);
           if (p.salePrice) quickUpdates['Giá sale'] = p.salePrice;
           if (p.originalPrice) quickUpdates['Giá gốc'] = p.originalPrice;
         }
-        
+      }
+
+      const knownDialColor = findCatalogDialColor(sku, firstImagePath);
+      const currentDialColor = normalizeDialColor(row.get('Màu mặt số'));
+      if (knownDialColor && currentDialColor !== knownDialColor) {
+        quickUpdates['Màu mặt số'] = knownDialColor;
+        sendLog(
+          `[Color] 🔧 Sửa màu cũ của ${sku}: `
+          + `"${row.get('Màu mặt số') || '(trống)'}" → "${knownDialColor}" `
+          + `(đối chiếu đúng SKU + URL ảnh đã đồng bộ).`
+        );
+      }
+
+      if (Object.keys(quickUpdates).length > 0) {
         try {
-          const rowIndex = row.rowNumber - 1;
-          await sheet.loadCells({
-            startRowIndex: rowIndex,
-            endRowIndex: rowIndex + 1,
-            startColumnIndex: 0,
-            endColumnIndex: sheet.headerValues.length
-          });
-          for (const [key, value] of Object.entries(quickUpdates)) {
-            const colIndex = sheet.headerValues.indexOf(key);
-            if (colIndex !== -1) {
-              const cell = sheet.getCell(rowIndex, colIndex);
-              cell.value = value;
+          await enqueueSheetWrite(async () => {
+            const rowIndex = row.rowNumber - 1;
+            await sheet.loadCells({
+              startRowIndex: rowIndex,
+              endRowIndex: rowIndex + 1,
+              startColumnIndex: 0,
+              endColumnIndex: sheet.headerValues.length
+            });
+            for (const [key, value] of Object.entries(quickUpdates)) {
+              const colIndex = sheet.headerValues.indexOf(key);
+              if (colIndex !== -1) {
+                const cell = sheet.getCell(rowIndex, colIndex);
+                cell.value = value;
+              }
             }
-          }
-          await sheet.saveUpdatedCells();
-          sendLog(`[Sheets] ⚡ Đã bổ sung Phân khúc giá cho SKU: ${sku}`);
+            await sheet.saveUpdatedCells();
+          });
+          sendLog(`[Sheets] ⚡ Đã cập nhật nhanh dữ liệu xác minh cho SKU: ${sku}`);
         } catch (err) {
-          sendLog(`[Sheets] ⚠️ Lỗi khi bổ sung giá cho ${sku}: ${err.message}`);
+          sendLog(`[Sheets] ⚠️ Lỗi cập nhật nhanh cho ${sku}: ${err.message}`);
         }
       }
 
@@ -157,7 +264,6 @@ export async function runAutoFill(config, sendLog) {
     else sendLog(`[SKU] ℹ️ Không có suffix dây nhận dạng được cho SKU: ${sku}`);
 
     const updates = {};
-    const firstImagePath = row.get('Link ảnh sản phẩm') || null;
 
     if (isStopRequested) {
       sendLog('[System] 🛑 Tiến trình đã được dừng bởi người dùng.');
@@ -288,76 +394,6 @@ export async function runAutoFill(config, sendLog) {
       break;
     }
     
-    try {
-      const sheetSpecs = {
-        'Kích thước mặt': row.get('Kích thước mặt') || updates['Kích thước mặt'] || '',
-        'Độ dày': row.get('Độ dày') || updates['Độ dày'] || '',
-        'Loại máy': row.get('Loại máy') || updates['Loại máy'] || '',
-        'Xuất xứ máy': row.get('Xuất xứ máy') || updates['Xuất xứ máy'] || '',
-        'Mô tả bộ máy': row.get('Mô tả bộ máy') || updates['Mô tả bộ máy'] || '',
-        'Chất liệu vỏ': row.get('Chất liệu vỏ') || updates['Chất liệu vỏ'] || '',
-        'Chất liệu dây': row.get('Chất liệu dây') || updates['Chất liệu dây'] || '',
-        'Chất liệu kính': row.get('Chất liệu kính') || updates['Chất liệu kính'] || '',
-        'Mô tả kính': row.get('Mô tả kính') || updates['Mô tả kính'] || '',
-        'Độ chịu nước': row.get('Độ chịu nước') || updates['Độ chịu nước'] || '',
-        'Mô tả độ chịu nước': row.get('Mô tả độ chịu nước') || updates['Mô tả độ chịu nước'] || ''
-      };
-
-      if (!chatGptSession) {
-        chatGptSession = await createChatGPTTextSession({
-          log: sendLog,
-          checkStop: () => isStopRequested,
-        });
-      }
-
-      const aiData = await generateMarketingContent(
-        sku,
-        firstImagePath,
-        specs,
-        sendLog,
-        () => isStopRequested,
-        sheetSpecs,
-        chatGptSession,
-        aiTone
-      );
-
-      if (!aiSharedCache.has(modelCacheKey)) {
-        aiSharedCache.set(modelCacheKey, {
-          phong_cach: aiData.phong_cach || '',
-          muc_do_luxury: aiData.muc_do_luxury || '',
-          lay_cam_hung_tu: aiData.lay_cam_hung_tu || '',
-          phu_hop_voi_ai: aiData.phu_hop_voi_ai || '',
-          dip_su_dung: aiData.dip_su_dung || '',
-          tinh_cach_phu_hop: aiData.tinh_cach_phu_hop || ''
-        });
-        sendLog(`[ChatGPT] 💾 Đã lưu cache thông tin chung cho model: ${modelCacheKey}`);
-      }
-
-      const sharedFields = aiSharedCache.get(modelCacheKey);
-
-      Object.assign(updates, {
-        'Màu mặt số': aiData.mau_mat_so || '',
-        'Mô tả ngắn': aiData.mo_ta_ngan || '',
-        'Mô tả đầy đủ': aiData.mo_ta_day_du || '',
-        'Phong cách': sharedFields.phong_cach,
-        'Mức độ luxury': sharedFields.muc_do_luxury,
-        'Lấy cảm hứng từ': sharedFields.lay_cam_hung_tu,
-        'Phù hợp với ai': sharedFields.phu_hop_voi_ai,
-        'Dịp sử dụng': sharedFields.dip_su_dung,
-        'Tính cách phù hợp': sharedFields.tinh_cach_phu_hop,
-        'Phối đồ': aiData.phoi_do || '',
-      });
-
-      sendLog(`[ChatGPT] ✅ Sinh nội dung xong cho SKU: ${sku}`);
-    } catch (err) {
-      if (err.message === 'STOP_REQUESTED') break;
-      if (err.code === 'CHATGPT_HISTORY_RATE_LIMIT') {
-        sendLog(`[ChatGPT] ⏸️ Tạm dừng tại SKU ${sku}: ${err.message}`);
-        throw err;
-      }
-      sendLog(`[ChatGPT] ❌ Lỗi sinh content cho ${sku}: ${err.message}`);
-    }
-
     if (priceMap.has(sku)) {
       const p = priceMap.get(sku);
       if (p.salePrice) updates['Giá sale'] = p.salePrice;
@@ -367,45 +403,196 @@ export async function runAutoFill(config, sendLog) {
       updates['Phân khúc giá'] = calculatedSegment;
     }
 
-    if (isStopRequested) {
-      sendLog('[System] 🛑 Tiến trình đã được dừng bởi người dùng.');
-      break;
+    const sheetSpecs = {
+      'Kích thước mặt': row.get('Kích thước mặt') || updates['Kích thước mặt'] || '',
+      'Độ dày': row.get('Độ dày') || updates['Độ dày'] || '',
+      'Loại máy': row.get('Loại máy') || updates['Loại máy'] || '',
+      'Xuất xứ máy': row.get('Xuất xứ máy') || updates['Xuất xứ máy'] || '',
+      'Mô tả bộ máy': row.get('Mô tả bộ máy') || updates['Mô tả bộ máy'] || '',
+      'Chất liệu vỏ': row.get('Chất liệu vỏ') || updates['Chất liệu vỏ'] || '',
+      'Chất liệu dây': row.get('Chất liệu dây') || updates['Chất liệu dây'] || '',
+      'Chất liệu kính': row.get('Chất liệu kính') || updates['Chất liệu kính'] || '',
+      'Mô tả kính': row.get('Mô tả kính') || updates['Mô tả kính'] || '',
+      'Độ chịu nước': row.get('Độ chịu nước') || updates['Độ chịu nước'] || '',
+      'Mô tả độ chịu nước': row.get('Mô tả độ chịu nước') || updates['Mô tả độ chịu nước'] || ''
+    };
+
+    const savePreparedRow = async () => {
+      if (isStopRequested) throw new Error('STOP_REQUESTED');
+      try {
+        await enqueueSheetWrite(async () => {
+          const rowIndex = row.rowNumber - 1;
+          await sheet.loadCells({
+            startRowIndex: rowIndex,
+            endRowIndex: rowIndex + 1,
+            startColumnIndex: 0,
+            endColumnIndex: sheet.headerValues.length
+          });
+
+          const technicalFields = new Set([
+            'Kích thước mặt', 'Độ dày', 'Loại máy', 'Chất liệu vỏ', 'Chất liệu dây',
+            'Chất liệu kính', 'Mặt kính', 'Độ chịu nước', 'Mô tả độ chịu nước', 'Bảo hành',
+            'Xuất xứ máy', 'Mô tả bộ máy', 'Mô tả kính'
+          ]);
+
+          for (const [key, value] of Object.entries(updates)) {
+            const colIndex = sheet.headerValues.indexOf(key);
+            if (colIndex === -1) continue;
+            const currentValue = row.get(key);
+            if (technicalFields.has(key) && currentValue?.toString().trim()) continue;
+            sheet.getCell(rowIndex, colIndex).value = value;
+          }
+          await sheet.saveUpdatedCells();
+        });
+        processed++;
+        sendLog(`[Sheets] ✅ Đã lưu thành công SKU: ${sku} (${processed} đã xong)`);
+      } catch (err) {
+        if (err.message === 'STOP_REQUESTED') throw err;
+        sendLog(`[Sheets] ❌ Lỗi lưu dòng ${sku}: ${err.message}`);
+      }
+    };
+
+    const processWithEngine = async (worker) => {
+      try {
+        const aiData = await generateMarketingContent(
+          sku,
+          firstImagePath,
+          specs,
+          sendLog,
+          () => isStopRequested,
+          sheetSpecs,
+          worker.session,
+          aiTone
+        );
+
+        if (!aiSharedCache.has(modelCacheKey)) {
+          aiSharedCache.set(modelCacheKey, {
+            phong_cach: aiData.phong_cach || '',
+            muc_do_luxury: aiData.muc_do_luxury || '',
+            lay_cam_hung_tu: aiData.lay_cam_hung_tu || '',
+            phu_hop_voi_ai: aiData.phu_hop_voi_ai || '',
+            dip_su_dung: aiData.dip_su_dung || '',
+            tinh_cach_phu_hop: aiData.tinh_cach_phu_hop || ''
+          });
+          sendLog(`[${worker.name}] 💾 Đã lưu cache thông tin chung cho model: ${modelCacheKey}`);
+        }
+
+        const sharedFields = aiSharedCache.get(modelCacheKey);
+        Object.assign(updates, {
+          // Chỉ sửa màu khi bộ đọc pixel có kết quả tin cậy.
+          // Nếu ảnh không đủ rõ, giữ nguyên dữ liệu đang có thay vì xóa/đoán.
+          'Màu mặt số': aiData.mau_mat_so || row.get('Màu mặt số') || '',
+          'Mô tả ngắn': aiData.mo_ta_ngan || '',
+          'Mô tả đầy đủ': aiData.mo_ta_day_du || '',
+          'Phong cách': sharedFields.phong_cach,
+          'Mức độ luxury': sharedFields.muc_do_luxury,
+          'Lấy cảm hứng từ': sharedFields.lay_cam_hung_tu,
+          'Phù hợp với ai': sharedFields.phu_hop_voi_ai,
+          'Dịp sử dụng': sharedFields.dip_su_dung,
+          'Tính cách phù hợp': sharedFields.tinh_cach_phu_hop,
+          'Phối đồ': aiData.phoi_do || '',
+        });
+        sendLog(`[${worker.name}] ✅ Sinh nội dung xong cho SKU: ${sku}`);
+      } catch (err) {
+        if (err.message === 'STOP_REQUESTED') throw err;
+        if (
+          err.code === 'CHATGPT_HISTORY_RATE_LIMIT'
+          || err.code === 'CHATGPT_UPLOAD_LIMIT'
+          || err.code === 'GEMINI_RATE_LIMIT'
+          || err.code === 'CHATGPT_SESSION_UNAVAILABLE'
+          || err.code === 'GEMINI_SESSION_UNAVAILABLE'
+          || err.code === 'CHATGPT_SEND_FAILED'
+          || err.code === 'GEMINI_SEND_FAILED'
+        ) throw err;
+        sendLog(`[${worker.name}] ❌ Lỗi sinh content cho ${sku}: ${err.message}`);
+      }
+
+      await savePreparedRow();
+    };
+
+    const selectedWorker = getLeastBusyWorker();
+    if (!selectedWorker) {
+      sendLog(`[AI] ⚠️ Không còn engine khả dụng; chỉ lưu giá và thông số kỹ thuật cho SKU: ${sku}.`);
+      pendingAiJobs.push(savePreparedRow().catch((err) => {
+        if (err.message !== 'STOP_REQUESTED') sendLog(`[System] ❌ Lỗi xử lý SKU ${sku}: ${err.message}`);
+      }));
+      continue;
     }
-    
-    try {
-      const rowIndex = row.rowNumber - 1;
-      await sheet.loadCells({
-        startRowIndex: rowIndex,
-        endRowIndex: rowIndex + 1,
-        startColumnIndex: 0,
-        endColumnIndex: sheet.headerValues.length
-      });
 
-      const technicalFields = new Set([
-        'Kích thước mặt', 'Độ dày', 'Loại máy', 'Chất liệu vỏ', 'Chất liệu dây', 
-        'Chất liệu kính', 'Mặt kính', 'Độ chịu nước', 'Mô tả độ chịu nước', 'Bảo hành',
-        'Xuất xứ máy', 'Mô tả bộ máy', 'Mô tả kính'
-      ]);
+    sendLog(`[AI] ➡️ Đã giao SKU ${sku} cho worker ${selectedWorker.name} (hàng đợi: ${selectedWorker.pending + 1}).`);
+    const aiJob = enqueueEngineJob(selectedWorker, async (worker) => {
+      if (worker.disabled) {
+        const fallbackWorker = engineWorkers.find((candidate) => candidate.name === 'Gemini' && !candidate.disabled);
+        if (worker.name === 'ChatGPT' && fallbackWorker) {
+          sendLog(`[Failover] 🔄 SKU ${sku} trong hàng đợi ChatGPT được chuyển sang Gemini.`);
+          await enqueueEngineJob(fallbackWorker, (candidate) => (
+            candidate.disabled ? savePreparedRow() : processWithEngine(candidate)
+          ));
+        } else {
+          await savePreparedRow();
+        }
+        return;
+      }
 
-      for (const [key, value] of Object.entries(updates)) {
-        const colIndex = sheet.headerValues.indexOf(key);
-        if (colIndex !== -1) {
-          // Thông số cào chỉ điền vào ô trống, không ghi đè dữ liệu đã được kiểm duyệt.
-          const currentValue = row.get(key);
-          if (technicalFields.has(key) && currentValue?.toString().trim()) continue;
-          const cell = sheet.getCell(rowIndex, colIndex);
-          cell.value = value;
+      try {
+        await processWithEngine(worker);
+      } catch (err) {
+        if (err.message === 'STOP_REQUESTED') throw err;
+        if (
+          worker.name === 'Gemini'
+          && ['GEMINI_RATE_LIMIT', 'GEMINI_SESSION_UNAVAILABLE', 'GEMINI_SEND_FAILED'].includes(err.code)
+        ) {
+          worker.disabled = true;
+          const reason = err.code === 'GEMINI_RATE_LIMIT'
+            ? 'đang bị giới hạn'
+            : err.code === 'GEMINI_SEND_FAILED'
+              ? 'không xác nhận được thao tác gửi'
+              : 'chưa sẵn sàng hoặc chưa đăng nhập';
+          sendLog(`[Gemini] ⚠️ Gemini ${reason}; tạm ngừng worker Gemini trong lượt chạy này.`);
+          await savePreparedRow();
+          return;
+        }
+        if (
+          worker.name !== 'ChatGPT'
+          || ![
+            'CHATGPT_HISTORY_RATE_LIMIT',
+            'CHATGPT_UPLOAD_LIMIT',
+            'CHATGPT_SESSION_UNAVAILABLE',
+            'CHATGPT_SEND_FAILED',
+          ].includes(err.code)
+        ) throw err;
+
+        worker.disabled = true;
+        const reason = err.code === 'CHATGPT_UPLOAD_LIMIT'
+          ? 'đã hết lượt tải ảnh'
+          : err.code === 'CHATGPT_HISTORY_RATE_LIMIT'
+            ? 'bị giới hạn gửi yêu cầu'
+            : err.code === 'CHATGPT_SEND_FAILED'
+              ? 'không xác nhận được thao tác gửi'
+              : 'chưa sẵn sàng hoặc chưa đăng nhập';
+        sendLog(`[ChatGPT] ⚠️ ${reason} tại SKU ${sku}; đã ngừng giao việc mới cho ChatGPT trong lượt chạy này.`);
+        const geminiWorker = engineWorkers.find((candidate) => candidate.name === 'Gemini' && !candidate.disabled);
+        if (geminiWorker) {
+          sendLog(`[Failover] 🔄 Chuyển SKU ${sku} và toàn bộ việc còn lại sang Gemini.`);
+          await enqueueEngineJob(geminiWorker, (candidate) => (
+            candidate.disabled ? savePreparedRow() : processWithEngine(candidate)
+          ));
+        } else {
+          sendLog(`[Failover] ⚠️ Gemini không khả dụng; chỉ lưu giá và thông số kỹ thuật cho SKU ${sku}.`);
+          await savePreparedRow();
         }
       }
-      await sheet.saveUpdatedCells();
-      processed++;
-      sendLog(`[Sheets] ✅ Đã lưu thành công SKU: ${sku} (${processed} đã xong)`);
-    } catch (err) {
-      sendLog(`[Sheets] ❌ Lỗi lưu dòng ${sku}: ${err.message}`);
+    }).catch((err) => {
+      if (err.message !== 'STOP_REQUESTED') sendLog(`[System] ❌ Lỗi xử lý SKU ${sku}: ${err.message}`);
+    });
+    pendingAiJobs.push(aiJob);
     }
-    }
+
+    await Promise.allSettled(pendingAiJobs);
+    await sheetWriteQueue;
   } finally {
     if (chatGptSession) await chatGptSession.close();
+    if (geminiSession) await geminiSession.close();
     if (scraperSession) await scraperSession.close();
     sendLog('[Playwright] Đã đóng các phiên trình duyệt an toàn.');
   }

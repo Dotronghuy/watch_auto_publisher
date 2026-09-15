@@ -37,6 +37,7 @@ import {
   isAllowedShopeeUrl,
   normalizeFacebookPostUrl,
 } from './mobileLinkJob.service.js';
+import { createFacebookPermalinkResolver } from './facebookPermalink.service.js';
 import { buildPerformanceMultipliers, getToneInstructionText, selectContentTone } from './content-tone.service.js';
 
 export { getToneInstructionText };
@@ -1331,9 +1332,13 @@ export const trainContentOnly = async () => {
   }
 };
 
-export const autoPublishRoutine = async (retryContext = null) => {
+export const autoPublishRoutine = async (retryContext = null, runOptions = {}) => {
   const isRootAttempt = retryContext === null;
   const context = retryContext || { failedAiSkus: new Set() };
+  const forcedContentKind = ['video', 'post'].includes(runOptions?.forceContentKind)
+    ? runOptions.forceContentKind
+    : null;
+  const ignoreCooldown = runOptions?.ignoreCooldown === true;
 
   if (isRootAttempt) {
     if (isRoutineRunning) {
@@ -1420,7 +1425,7 @@ export const autoPublishRoutine = async (retryContext = null) => {
 
       const productInfo = allProductsInfo.find(p => p.sku === skuFolder.name);
 
-      if (productInfo && productInfo.postDate) {
+      if (!ignoreCooldown && productInfo && productInfo.postDate) {
         const lastPostTime = parseVietnameseDate(productInfo.postDate);
         // Tính theo phút (minutes) thay vì ngày như yêu cầu test của user
         const cycleMs = productInfo.cycleMinutes * 60 * 1000;
@@ -1451,7 +1456,11 @@ export const autoPublishRoutine = async (retryContext = null) => {
     // Áp dụng Smart Filter để ưu tiên
     const shuffledSkus = await getSmartFilteredSkus(eligibleSkus, []);
 
-    const folderTypes = ['0_Anh_AVT', '1_Anh_Hang', '2_Anh_Tu_Chup', '3_Video_Doc'];
+    const folderTypes = forcedContentKind === 'video'
+      ? ['3_Video_Doc']
+      : forcedContentKind === 'post'
+        ? ['0_Anh_AVT', '1_Anh_Hang', '2_Anh_Tu_Chup']
+        : ['0_Anh_AVT', '1_Anh_Hang', '2_Anh_Tu_Chup', '3_Video_Doc'];
     let selectedImages = [];
     let selectedSku = null;
     let postMode = 'SINGLE'; // SINGLE (AI), ALBUM, hoặc REELS
@@ -1459,6 +1468,7 @@ export const autoPublishRoutine = async (retryContext = null) => {
     // Tìm ảnh/video chưa đăng
     for (const skuFolder of shuffledSkus) {
       if (skuFolder.name.toUpperCase().includes('DAILY VLOG')) {
+        if (forcedContentKind) continue;
         const mediaFiles = await getVideosInFolder(skuFolder.id);
         const freshMedia = mediaFiles.filter(item => !postedIds.includes(item.id));
         if (freshMedia.length > 0) {
@@ -1980,6 +1990,7 @@ export const autoPublishRoutine = async (retryContext = null) => {
                       sku: selectedSku.name,
                       productInfo,
                       contentType: 'reel',
+                      postText: postContent,
                     });
                   } catch (linkError) {
                     console.error('Lỗi khi xếp hàng tác vụ Android Worker cho video/Reels:', linkError);
@@ -2060,6 +2071,7 @@ export const autoPublishRoutine = async (retryContext = null) => {
                       pageToken,
                       sku: selectedSku.name,
                       productInfo,
+                      postText: postContent,
                     });
                   } catch (e) {
                     console.error('Lỗi khi xếp hàng tác vụ Android Worker:', e);
@@ -2154,6 +2166,7 @@ export const autoPublishRoutine = async (retryContext = null) => {
                       pageToken,
                       sku: selectedSku.name,
                       productInfo,
+                      postText: postContent,
                     });
                   } catch (e) {
                     console.error('Lỗi khi xếp hàng tác vụ Android Worker:', e);
@@ -2268,7 +2281,7 @@ export const autoPublishRoutine = async (retryContext = null) => {
         'warning',
         'System',
       );
-      return await autoPublishRoutine(context);
+      return await autoPublishRoutine(context, runOptions);
     }
 
     console.error('❌ Tiến trình tự động thất bại:', error.response?.data || error.message);
@@ -2280,42 +2293,24 @@ export const autoPublishRoutine = async (retryContext = null) => {
   }
 }
 
-const resolveFacebookPostUrl = async (postId, pageToken, { contentType = 'post' } = {}) => {
-  if (contentType === 'reel') {
-    return normalizeFacebookPostUrl('', postId, { contentType });
-  }
-  // Prefer Facebook's own permalink for both Page posts and Reels. On some
-  // Android Facebook builds, the canonical story_fbid URL silently opens Home;
-  // the Graph permalink is much more likely to enter the dedicated detail view.
-  // The composite-ID URL remains the bounded fallback when Graph is unavailable.
-  if (pageToken) {
-    try {
-      const response = await axios.get(`https://graph.facebook.com/v21.0/${postId}`, {
-        params: {
-          fields: 'permalink_url',
-          access_token: pageToken,
-        },
-        timeout: 15000,
-      });
-      if (response.data?.permalink_url) {
-        return normalizeFacebookPostUrl(response.data.permalink_url, postId, { contentType });
-      }
-    } catch (error) {
-      liveLog(
-        `[Android Worker] Khong lay duoc permalink tu Graph API, dung URL du phong: ${error.message}`,
-        'warning',
-        'Facebook',
-      );
-    }
-  }
-  return normalizeFacebookPostUrl(fallbackFacebookPostUrl(postId, contentType), postId, { contentType });
-};
+const resolveFacebookPostUrl = createFacebookPermalinkResolver({
+  requestGraph: (url, options) => axios.get(url, options),
+  normalizePostUrl: normalizeFacebookPostUrl,
+  fallbackPostUrl: fallbackFacebookPostUrl,
+  logFallback: ({ postId, reason }) => {
+    liveLog(
+      `[Android Worker] Chưa lấy được permalink cho ${postId} (${reason}); dùng link trực tiếp theo ID.`,
+      'warning',
+      'Facebook',
+    );
+  },
+});
 
 export async function dispatchShopeeLinkMobile(
   postId,
   shopeeLinkToAttach,
   pageToken,
-  { contentType = 'post' } = {},
+  { contentType = 'post', postText = '' } = {},
 ) {
   const mode = String(process.env.MOBILE_SHOPEE_LINK_MODE || 'android_worker')
     .trim()
@@ -2332,6 +2327,7 @@ export async function dispatchShopeeLinkMobile(
     postUrl,
     shopeeUrl: shopeeLinkToAttach,
     linkName: process.env.MOBILE_SHOPEE_LINK_NAME || 'Mua ở đây',
+    postText,
     contentType,
   });
 
@@ -2349,6 +2345,7 @@ async function dispatchShopeeLinkForProduct({
   sku,
   productInfo,
   contentType = 'post',
+  postText = '',
 }) {
   const normalizedSku = String(sku || '').trim();
   // The Shopee URL is commonly edited after the product cache has already been
@@ -2382,5 +2379,8 @@ async function dispatchShopeeLinkForProduct({
     'typing',
     'Facebook',
   );
-  return dispatchShopeeLinkMobile(postId, shopeeLinkToAttach, pageToken, { contentType });
+  return dispatchShopeeLinkMobile(postId, shopeeLinkToAttach, pageToken, {
+    contentType,
+    postText,
+  });
 }

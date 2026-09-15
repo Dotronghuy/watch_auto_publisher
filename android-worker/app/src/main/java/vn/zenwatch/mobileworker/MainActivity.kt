@@ -120,9 +120,12 @@ class MainActivity : Activity() {
         AlertDialog.Builder(this)
             .setTitle("Quyền Trợ năng được dùng thế nào?")
             .setMessage(
-                "App chỉ đọc các nhãn nút đang hiển thị trong ứng dụng Facebook " +
+                "App đọc các nhãn nút đang hiển thị trong ứng dụng Facebook " +
                     "và thực hiện chuỗi thao tác cố định: mở menu bài viết, mở mục " +
                     "quản lý liên kết sản phẩm, nhập URL Shopee và bấm Lưu.\n\n" +
+                    "Khi thiếu nút ba chấm, app dùng ảnh màn hình tạm thời để nhận diện " +
+                    "ba dấu chấm trong vùng đầu bài. Ảnh chỉ xử lý trên điện thoại, không lưu " +
+                    "và không gửi tới máy chủ.\n\n" +
                     "App không đọc tin nhắn, mật khẩu, danh bạ hoặc nội dung của ứng dụng khác. " +
                     "Tác vụ và kết quả chỉ được gửi tới máy chủ bạn cấu hình.",
             )
@@ -138,8 +141,12 @@ class MainActivity : Activity() {
         val accessibility = WorkerConfig.isAccessibilityEnabled(this)
         val active = JobStore.load(this)
         val lines = mutableListOf<String>()
+        lines += "Phiên bản: " + packageManager.getPackageInfo(packageName, 0).versionName
         lines += if (MobileWorkerService.isRunning) "Worker: đang chạy" else "Worker: đã dừng"
         lines += if (accessibility) "Trợ năng: đã bật" else "Trợ năng: chưa bật"
+        lines += if (ShopeeAccessibilityService.isConnected) {
+            "Dịch vụ Trợ năng: đã kết nối"
+        } else "Dịch vụ Trợ năng: chưa kết nối (thử tắt/bật lại quyền)"
         lines += if (WorkerConfig.isValid(settings)) "Cấu hình: hợp lệ" else "Cấu hình: chưa hoàn tất"
         lines += "Thiết bị: ${WorkerConfig.deviceId(this)}"
         if (active != null) {
@@ -151,6 +158,12 @@ class MainActivity : Activity() {
         }
         if (MobileWorkerService.lastJobResult.isNotBlank()) {
             lines += "Kết quả gần nhất: ${MobileWorkerService.lastJobResult}"
+        }
+        if (ShopeeAccessibilityService.pauseReason.isNotBlank()) {
+            lines += "Chờ: ${ShopeeAccessibilityService.pauseReason}"
+        }
+        if (ShopeeAccessibilityService.lastUiStatus.isNotBlank()) {
+            lines += "Thao tác gần nhất: ${ShopeeAccessibilityService.lastUiStatus}"
         }
         statusText.text = lines.joinToString("\n")
     }
