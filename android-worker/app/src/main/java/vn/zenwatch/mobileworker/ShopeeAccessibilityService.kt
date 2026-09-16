@@ -26,6 +26,8 @@ class ShopeeAccessibilityService : AccessibilityService() {
     private val saveConfirmations = mutableSetOf<String>()
     private val menuTapBudgets = mutableMapOf<String, MenuTapBudget>()
     private val menuTapDispatched = mutableSetOf<String>()
+    /** Reel option sheets hide the product row below the first viewport. */
+    private val menuScrollAttempts = mutableMapOf<String, Int>()
     private val linkManagerNavigationProof = mutableSetOf<String>()
     private val saveRetryAttempts = mutableSetOf<String>()
     private val exactPostReopenTargets = mutableMapOf<String, Int>()
@@ -162,6 +164,7 @@ class ShopeeAccessibilityService : AccessibilityService() {
             updateUiStatus(active, "Đã nhận diện nút ba chấm (${menu.target.evidence})")
             menuTapBudgets.remove(key)
             menuTapDispatched.remove(key)
+            menuScrollAttempts.remove(key)
             linkManagerNavigationProof.remove(key)
             saveRetryAttempts.remove("$key:verify-save")
             JobStore.setStep(this, AutomationStep.OPEN_MENU)
@@ -207,6 +210,7 @@ class ShopeeAccessibilityService : AccessibilityService() {
         visualMenuTapped.remove(active.job.attemptKey)
         val key = active.job.attemptKey
         menuTapDispatched.remove(key)
+        menuScrollAttempts.remove(key)
         menuTapBudgets.remove(key)
         linkManagerNavigationProof.remove(key)
         exactPostReopenTargets.remove(key)
@@ -343,6 +347,8 @@ class ShopeeAccessibilityService : AccessibilityService() {
         if (isReelOptionsMenuVisible(root)) {
             if (key !in menuTapDispatched) {
                 restartDirectNavigation(active)
+            } else if (isVideoJob(active) && scrollProductMenu(root, active)) {
+                scheduleNext(900)
             } else {
                 failStepAfter(active, 35_000,
                     "Menu của video đã mở nhưng chưa có mục quản lý sản phẩm; chưa gắn link")
@@ -358,7 +364,11 @@ class ShopeeAccessibilityService : AccessibilityService() {
         if (button == null) {
             // After a tap, give the menu time to populate; the detail surface may be hidden.
             if (key in menuTapDispatched) {
-                failStepAfter(active, 35_000, "Đã mở tùy chọn nhưng không thấy mục quản lý sản phẩm")
+                if (isVideoJob(active) && scrollProductMenu(root, active)) {
+                    scheduleNext(900)
+                } else {
+                    failStepAfter(active, 35_000, "Đã mở tùy chọn nhưng không thấy mục quản lý sản phẩm")
+                }
             } else {
                 restartDirectNavigation(active)
             }
@@ -373,7 +383,10 @@ class ShopeeAccessibilityService : AccessibilityService() {
             val dispatched = if (!clicked) tapMenuTarget(active, button.target) else false
             val accepted = dispatched || clicked
             budget.record(accepted)
-            if (accepted) menuTapDispatched.add(key)
+            if (accepted) {
+                menuTapDispatched.add(key)
+                menuScrollAttempts.remove(key)
+            }
             updateUiStatus(active, if (accepted) {
                 "Android nhận bấm ba chấm (${button.target.evidence}); chờ menu"
             } else {
@@ -389,6 +402,33 @@ class ShopeeAccessibilityService : AccessibilityService() {
         }
         failStepAfter(active, 35_000,
             "Không mở được tùy chọn của đúng bài/video. ${navigationDiagnostics(root, active)}")
+    }
+
+    /** Scroll only a visible, scrollable Reel option sheet; never swipe the video itself. */
+    private fun scrollProductMenu(root: AccessibilityNodeInfo, active: ActiveJob): Boolean {
+        if (!automationAllowed() || !isVideoJob(active)) return false
+        val key = active.job.attemptKey
+        val attempts = menuScrollAttempts[key] ?: 0
+        if (attempts >= 4) return false
+        val size = physicalDisplaySize()
+        val nodes = mutableListOf<AccessibilityNodeInfo>()
+        collectNodes(root, nodes)
+        val candidate = nodes.filter { node ->
+            node.isVisibleToUser && node.isEnabled && node.isScrollable &&
+                run {
+                    val bounds = Rect()
+                    node.getBoundsInScreen(bounds)
+                    !bounds.isEmpty && bounds.width() >= size.widthPixels * 0.45f &&
+                        bounds.height() >= size.heightPixels * 0.18f && bounds.top >= size.heightPixels * 0.08f &&
+                        bounds.bottom <= size.heightPixels * 0.98f
+                }
+        }.maxByOrNull { node ->
+            val bounds = Rect(); node.getBoundsInScreen(bounds); bounds.width().toLong() * bounds.height()
+        } ?: return false
+        if (!candidate.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)) return false
+        menuScrollAttempts[key] = attempts + 1
+        updateUiStatus(active, "Đã cuộn menu video (${attempts + 1}/4), tìm Quản lý sản phẩm")
+        return true
     }
 
     private fun openLinkManager(root: AccessibilityNodeInfo, active: ActiveJob) {

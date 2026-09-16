@@ -156,11 +156,18 @@ thành công trên Facebook. Luồng video chưa được người dùng kiểm 
 - Có kiểm thử pixel bằng hai ảnh tham chiếu người dùng trên máy phát triển ở năm tỉ lệ;
   ảnh riêng không đưa vào Git. Đây chưa phải kiểm thử thao tác trên điện thoại thật.
 
-Cài đè APK **0.4.7** (không cần gỡ app), tắt/bật lại quyền Trợ năng, rồi Bắt đầu Worker.
+Cài đè APK **0.4.9** (không cần gỡ app), tắt/bật lại quyền Trợ năng, rồi Bắt đầu Worker.
 Backend không thay đổi so với 0.4.4/0.4.5; máy nhân viên đã có backend đó không cần cập nhật
 để dùng bản sửa Android này. Retry đúng job lỗi trên giao diện quản lý, không đăng lại bài.
 Nếu Android từ chối chụp ảnh hoặc không tìm thấy dấu chấm, mục Trạng thái có lý do/mã lỗi
 cụ thể. Không vượt qua cửa sổ bảo mật hay chạm tọa độ cũ khi ảnh không hợp lệ.
+
+### Reel cần cuộn menu để thấy quản lý sản phẩm (0.4.9)
+
+Sau khi mở ba chấm của Reel, Facebook có thể đặt mục **Quản lý sản phẩm** bên dưới vùng
+đang hiển thị. Worker chỉ cuộn bảng tùy chọn của Facebook (tối đa 4 lần), sau đó bấm
+**Quản lý sản phẩm** → **Thêm sản phẩm liên kết tiếp thị** rồi mới nhập URL. Worker không
+swipe lên video hoặc Feed.
 
 Bản 0.4.7 ưu tiên URL `https://www.facebook.com/{PAGE_ID}/videos/{VIDEO_ID}` cho Reel
 có `PAGE_ID_VIDEO_ID`, rồi mới dùng permalink Graph trả về. Trạng thái Worker hiển thị
