@@ -49,3 +49,26 @@ test('removes ChatGPT screen-reader prefix from final caption', () => {
     'Anh không cần thả thính — cứ để mặt xanh lên tiếng.',
   );
 });
+
+test('removes the Reels/TikTok project title when it is concatenated with the caption', () => {
+  assert.equal(
+    sanitizeGeneratedSocialContent(
+      'Caption Reels/TikTok I&W Carnival 525G-D2MUỐN OUTFIT TRÔNG “CÓ GU” HƠN? 🧥\n#iwcarnival',
+    ),
+    'MUỐN OUTFIT TRÔNG “CÓ GU” HƠN? 🧥\n#iwcarnival',
+  );
+});
+
+test('removes a separate Reels/TikTok title line without deleting body text', () => {
+  assert.equal(
+    sanitizeGeneratedSocialContent(
+      'Caption Reels/TikTok I&W Carnival 525G-D2\nMUỐN OUTFIT TRÔNG CÓ GU HƠN?\n#iwcarnival',
+    ),
+    'MUỐN OUTFIT TRÔNG CÓ GU HƠN?\n#iwcarnival',
+  );
+});
+
+test('does not remove a normal body sentence that mentions Reels/TikTok', () => {
+  const input = 'Ý tưởng cho Caption Reels/TikTok là giữ câu mở đầu thật ngắn.';
+  assert.equal(sanitizeGeneratedSocialContent(input), input);
+});

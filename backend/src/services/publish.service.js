@@ -39,6 +39,8 @@ import {
 } from './mobileLinkJob.service.js';
 import { createFacebookPermalinkResolver } from './facebookPermalink.service.js';
 import { buildPerformanceMultipliers, getToneInstructionText, selectContentTone } from './content-tone.service.js';
+import { reelPropagationDelayMs, waitForReelPropagation } from './mobile-reel-readiness.js';
+import { sanitizeGeneratedSocialContent } from './generated-content-sanitizer.js';
 
 export { getToneInstructionText };
 
@@ -749,7 +751,7 @@ If Image 2 HAS a human hand or wrist, apply these MANDATORY rules:
             if (selectedSku.name.toUpperCase().includes('DAILY VLOG')) {
                reelsPrompt = `Đây là một video Daily Vlog (hoạt động hằng ngày: đóng hàng, giao hàng, vệ sinh đồng hồ...). Hãy đóng vai nhân viên của I&W Carnival, viết một đoạn caption thật ngắn gọn, tự nhiên, vui vẻ, thân thiện. Tuyệt đối KHÔNG quảng cáo hay chèo kéo mua hàng. Chỉ dùng hashtag #iwcarnivalvietnam #iwcarnival #dailyvlog`;
             } else {
-               const reelsFallback = `Hãy đóng vai TikTok creator. Viết caption ngắn giật tít cho video Reels giới thiệu đồng hồ SKU ${selectedSku.name}. Chỉ trả về caption, dùng hashtag #iwcarnivalvietnam #iwcarnival #donghoiwcarnival và các hashtag trending.`;
+               const reelsFallback = `Hãy đóng vai TikTok creator. Viết caption ngắn giật tít cho video Reels giới thiệu đồng hồ SKU ${selectedSku.name}. Chỉ trả về caption, không thêm tiêu đề “Caption Reels/TikTok” hay tên sản phẩm ở đầu, dùng hashtag #iwcarnivalvietnam #iwcarnival #donghoiwcarnival và các hashtag trending.`;
                const toneSelection = selectToneForPrompt({
                  sku: selectedSku.name,
                  genderLabel,
@@ -1845,7 +1847,7 @@ export const autoPublishRoutine = async (retryContext = null, runOptions = {}) =
               if (selectedSku.name.toUpperCase().includes('DAILY VLOG')) {
                  reelsPrompt = `Đây là một video Daily Vlog (hoạt động hằng ngày: đóng hàng, giao hàng, vệ sinh đồng hồ...). Hãy đóng vai nhân viên của I&W Carnival, viết một đoạn caption thật ngắn gọn, tự nhiên, vui vẻ, thân thiện. Tuyệt đối KHÔNG quảng cáo hay chèo kéo mua hàng. Chỉ dùng hashtag #iwcarnivalvietnam #iwcarnival #dailyvlog`;
               } else {
-                 const reelsFallback = `Hãy đóng vai TikTok creator. Viết caption ngắn giật tít cho video Reels giới thiệu đồng hồ SKU ${selectedSku.name}. Chỉ trả về caption, dùng hashtag #iwcarnivalvietnam #iwcarnival #donghoiwcarnival và các hashtag trending.`;
+                  const reelsFallback = `Hãy đóng vai TikTok creator. Viết caption ngắn giật tít cho video Reels giới thiệu đồng hồ SKU ${selectedSku.name}. Chỉ trả về caption, không thêm tiêu đề “Caption Reels/TikTok” hay tên sản phẩm ở đầu, dùng hashtag #iwcarnivalvietnam #iwcarnival #donghoiwcarnival và các hashtag trending.`;
                  contentSelection = selectToneForPrompt({
                    sku: selectedSku.name,
                    genderLabel,
@@ -1895,6 +1897,13 @@ export const autoPublishRoutine = async (retryContext = null, runOptions = {}) =
             igContent = igContent || fbContent;
             thContent = fbContent;
             postContent = fbContent;
+
+            // Final defense before any platform API call: ChatGPT's visible
+            // project title can be concatenated with the markdown body.
+            fbContent = sanitizeGeneratedSocialContent(fbContent) || fbContent;
+            igContent = sanitizeGeneratedSocialContent(igContent) || igContent;
+            thContent = sanitizeGeneratedSocialContent(thContent) || thContent;
+            postContent = sanitizeGeneratedSocialContent(postContent) || postContent;
 
          } catch (geminiError) {
             checkAbort();
@@ -2319,6 +2328,19 @@ export async function dispatchShopeeLinkMobile(
   if (mode === 'disabled' || mode === 'off' || mode === 'none') {
     liveLog('[Android Worker] Tu dong gan link Shopee dang tat.', 'info', 'Facebook');
     return null;
+  }
+
+  // Facebook returns the Reels upload/video ID before the Page permalink and
+  // Android routing surface are ready. Give Meta a bounded propagation window
+  // before resolving the URL; ordinary photo posts stay immediate.
+  if (contentType === 'reel') {
+    const delayMs = reelPropagationDelayMs();
+    liveLog(
+      `[Android Worker] Chờ ${Math.round(delayMs / 1000)} giây để Facebook cập nhật đúng Reel ${postId} trước khi lấy permalink.`,
+      'info',
+      'Facebook',
+    );
+    await waitForReelPropagation({ signal: globalStopController.signal, delayMs });
   }
 
   const postUrl = await resolveFacebookPostUrl(postId, pageToken, { contentType });

@@ -70,3 +70,4 @@ Viết caption ngắn cho video Reels/TikTok (15–20 giây). Caption phải:
 - KHÔNG dùng: "sale sốc", "giá rẻ", "mua ngay kẻo lỡ"
 
 Chỉ trả về caption, không kèm kịch bản hình ảnh, không kèm giải thích.
+Không thêm tiêu đề hay nhãn ở đầu như “Caption Reels/TikTok”, “I&W Carnival <SKU>” hoặc “Caption:”; câu đầu tiên phải là nội dung caption để đăng.

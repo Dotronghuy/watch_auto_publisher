@@ -157,8 +157,8 @@ thành công trên Facebook. Luồng video chưa được người dùng kiểm 
   ảnh riêng không đưa vào Git. Đây chưa phải kiểm thử thao tác trên điện thoại thật.
 
 Cài đè APK **0.4.9** (không cần gỡ app), tắt/bật lại quyền Trợ năng, rồi Bắt đầu Worker.
-Backend không thay đổi so với 0.4.4/0.4.5; máy nhân viên đã có backend đó không cần cập nhật
-để dùng bản sửa Android này. Retry đúng job lỗi trên giao diện quản lý, không đăng lại bài.
+Các sửa về chờ đồng bộ Reel và làm sạch caption nằm ở backend; máy nhân viên cần trỏ tới
+backend đã cập nhật rồi retry đúng job lỗi trên giao diện quản lý, không đăng lại bài.
 Nếu Android từ chối chụp ảnh hoặc không tìm thấy dấu chấm, mục Trạng thái có lý do/mã lỗi
 cụ thể. Không vượt qua cửa sổ bảo mật hay chạm tọa độ cũ khi ảnh không hợp lệ.
 
@@ -172,6 +172,10 @@ swipe lên video hoặc Feed.
 Bản 0.4.7 ưu tiên URL `https://www.facebook.com/{PAGE_ID}/videos/{VIDEO_ID}` cho Reel
 có `PAGE_ID_VIDEO_ID`, rồi mới dùng permalink Graph trả về. Trạng thái Worker hiển thị
 cả URL đang mở để đối chiếu khi Facebook chuyển hướng sai.
+
+Backend chờ mặc định 15 giây sau khi Facebook trả về `VIDEO_ID` trước khi lấy permalink
+và xếp job cho Worker, để Facebook kịp hoàn tất việc dựng Reel. Có thể đặt
+`MOBILE_REEL_PROPAGATION_DELAY_MS`, nhưng giá trị luôn được giới hạn trong 10.000–20.000ms.
 
 Để chạy thêm các ca ảnh riêng (không bắt buộc cho CI): đặt biến môi trường
 `ZENWATCH_MENU_REFERENCE_IMAGES` thành các đường dẫn PNG, ngăn bằng dấu `;`, rồi chạy
