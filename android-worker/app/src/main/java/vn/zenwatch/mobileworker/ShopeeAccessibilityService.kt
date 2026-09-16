@@ -168,7 +168,7 @@ class ShopeeAccessibilityService : AccessibilityService() {
             scheduleNext(350)
             return
         }
-        if (!staleProductUi && !wrongDestination && !boostPostUi && tryVisualPostMenu(root, active)) return
+        if (!staleProductUi && !wrongDestination && !boostPostUi && tryVisualMenu(root, active)) return
         updateUiStatus(active, "Chờ nhận diện ba chấm; stale=$staleProductUi " +
             "wrong=$wrongDestination boost=$boostPostUi; ${navigationDiagnostics(root, active)}; $visualMenuStatus")
         if (elapsedInStep(active) < EXACT_POST_FIRST_RETRY_MS) {
@@ -225,27 +225,32 @@ class ShopeeAccessibilityService : AccessibilityService() {
     }
 
     /** A live pixel fallback, never a cached coordinate or caption match. */
-    private fun tryVisualPostMenu(root: AccessibilityNodeInfo, active: ActiveJob): Boolean {
-        if (isVideoJob(active) || FacebookPostLauncher.targetCount(active.job) == 0) return false
+    private fun tryVisualMenu(root: AccessibilityNodeInfo, active: ActiveJob): Boolean {
+        if (FacebookPostLauncher.targetCount(active.job) == 0) return false
+        val videoRail = isVideoJob(active)
         if (Build.VERSION.SDK_INT < 30) {
             visualMenuStatus = "Nhận diện ảnh ba chấm cần Android 11 trở lên"
             return false
         }
         val size = physicalDisplaySize()
         val snapshot = screenNodes(root).second
-        val region = PostMenuVisualPolicy.region(snapshot, size.widthPixels, size.heightPixels)
+        fun menuRegion(nodes: List<FacebookScreenNode>) = if (videoRail)
+            ReelMenuVisualPolicy.region(nodes, size.widthPixels, size.heightPixels)
+            else PostMenuVisualPolicy.region(nodes, size.widthPixels, size.heightPixels)
+        val region = menuRegion(snapshot)
         if (region == null) {
             val headers = FacebookScreenPolicy.headerCenters(snapshot, size.widthPixels.toFloat(), size.heightPixels.toFloat())
-            visualMenuStatus = "Chưa có vùng đầu bài phù hợp để đọc ảnh; headerY=${headers.map { it.toInt() }} " +
+            visualMenuStatus = (if (videoRail) "Chưa nhận diện được cột Thích/Bình luận/Chia sẻ/Lưu của video; "
+                else "Chưa có vùng đầu bài phù hợp để đọc ảnh; headerY=${headers.map { it.toInt() }} ") +
                 "screen=${size.widthPixels}x${size.heightPixels}"
             return false
         }
         val bounds = Rect().also(root::getBoundsInScreen)
-        // No split-screen, background window, or fullscreen video action rail.
+        // No split-screen or background window; post and video use different crops.
         if (bounds.width() < size.widthPixels * 0.9f || bounds.height() < size.heightPixels * 0.7f ||
-            FacebookScreenPolicy.hasVideoSurface(snapshot, size.heightPixels.toFloat()) ||
+            (!videoRail && FacebookScreenPolicy.hasVideoSurface(snapshot, size.heightPixels.toFloat())) ||
             windows.none { it.id == root.windowId && it.isActive && it.isFocused }) {
-            visualMenuStatus = "Chưa đọc ảnh: Facebook không toàn màn hình/không focus hoặc đang ở màn video"
+            visualMenuStatus = "Chưa đọc ảnh: cửa sổ Facebook hoặc loại màn hình chưa phù hợp"
             return false
         }
         val navigation = visualNavigationKey(active)
@@ -257,10 +262,11 @@ class ShopeeAccessibilityService : AccessibilityService() {
         val token = menuScreenshotGate.begin(navigation, now) ?: return false
         val windowId = root.windowId
         // Compare geometry only. No caption comparison and no screen content in diagnostics.
-        val geometry = headerGeometry(snapshot, region)
-        updateUiStatus(active, "Đang nhận diện ảnh ba chấm trong vùng đầu bài")
+        val geometry = menuGeometry(snapshot, region, videoRail)
+        updateUiStatus(active, if (videoRail) "Đang tìm ba chấm dưới cột thao tác video"
+            else "Đang nhận diện ảnh ba chấm trong vùng đầu bài")
         try {
-            MenuScreenshotReader.request(this, region, size.widthPixels, size.heightPixels) { target, status ->
+            MenuScreenshotReader.request(this, region, size.widthPixels, size.heightPixels, videoRail) { target, status ->
               try {
                 if (menuScreenshotGate.finish(navigation, token, SystemClock.uptimeMillis())) {
                     val current = JobStore.load(this)
@@ -273,12 +279,12 @@ class ShopeeAccessibilityService : AccessibilityService() {
                         windows.any { it.id == windowId && it.isActive && it.isFocused } &&
                         freshSize.widthPixels == size.widthPixels && freshSize.heightPixels == size.heightPixels) {
                         val freshSnapshot = screenNodes(freshRoot).second
-                        val unchanged = PostMenuVisualPolicy.region(freshSnapshot, size.widthPixels, size.heightPixels) == region &&
-                            headerGeometry(freshSnapshot, region) == geometry &&
+                        val unchanged = menuRegion(freshSnapshot) == region &&
+                            menuGeometry(freshSnapshot, region, videoRail) == geometry &&
                             !looksLikeFacebookHomeFeed(freshRoot) && !looksLikeProfileTimeline(freshRoot) &&
                             !looksLikeBoostPostScreen(freshRoot) && !hasProductLinkSurface(freshRoot) &&
                             !isReelOptionsMenuVisible(freshRoot)
-                        visualMenuStatus = if (!unchanged) "Đầu bài đã thay đổi; bỏ ảnh cũ" else status
+                        visualMenuStatus = if (!unchanged) "Bố cục menu đã thay đổi; bỏ ảnh cũ" else status
                         if (unchanged && target != null) {
                             if (FacebookScreenPolicy.isMenuPointUnobstructed(freshSnapshot, target,
                                     size.widthPixels.toFloat(), size.heightPixels.toFloat()) && tapMenuTarget(current, target)) {
@@ -308,8 +314,9 @@ class ShopeeAccessibilityService : AccessibilityService() {
         return true
     }
 
-    private fun headerGeometry(nodes: List<FacebookScreenNode>, region: MenuImageRegion): List<List<Float>> =
-        nodes.filter { it.centerY in 0f..region.bottom.toFloat() }
+    private fun menuGeometry(nodes: List<FacebookScreenNode>, region: MenuImageRegion,
+                             videoRail: Boolean): List<List<Float>> =
+        nodes.filter { it.centerY in 0f..region.bottom.toFloat() && (!videoRail || it.left >= region.left) }
             .map { listOf(it.left, it.top, it.right, it.bottom) }.distinct()
             .sortedWith(compareBy<List<Float>> { it[1] }.thenBy { it[0] }.thenBy { it[2] }.thenBy { it[3] })
 
@@ -744,7 +751,9 @@ class ShopeeAccessibilityService : AccessibilityService() {
         val headers = FacebookScreenPolicy.headerCenters(snapshot,
             resources.displayMetrics.widthPixels.toFloat(), resources.displayMetrics.heightPixels.toFloat()).size
         // No screen content or credentials: enough to distinguish routing from a selector rejection.
-        return "type=${active.job.contentType} nodes=${snapshot.size} tabs=$tabs headers=$headers"
+        val rail = FacebookScreenPolicy.videoActionRailAnchor(snapshot,
+            resources.displayMetrics.widthPixels.toFloat(), resources.displayMetrics.heightPixels.toFloat()) != null
+        return "type=${active.job.contentType} nodes=${snapshot.size} tabs=$tabs headers=$headers rail=$rail"
     }
 
     private fun isVideoJob(active: ActiveJob): Boolean =
@@ -793,7 +802,9 @@ class ShopeeAccessibilityService : AccessibilityService() {
         val width = resources.displayMetrics.widthPixels.toFloat()
         val height = resources.displayMetrics.heightPixels.toFloat()
         if (profileTabIndices(snapshot).isNotEmpty()) return null
-        val target = if (isVideoJob(active) && FacebookScreenPolicy.hasVideoSurface(snapshot, height)) {
+        val videoSurface = FacebookScreenPolicy.hasVideoSurface(snapshot, height) ||
+            FacebookScreenPolicy.videoActionRailAnchor(snapshot, width, height) != null
+        val target = if (isVideoJob(active) && videoSurface) {
             FacebookScreenPolicy.directReelMenuTarget(snapshot, width, height)
         } else {
             FacebookScreenPolicy.directPostMenuTarget(snapshot, width, height)
@@ -847,13 +858,8 @@ class ShopeeAccessibilityService : AccessibilityService() {
     }
 
     private fun isReelOptionsMenuVisible(root: AccessibilityNodeInfo): Boolean {
-        val nodes = mutableListOf<AccessibilityNodeInfo>()
-        collectNodes(root, nodes)
-        return nodes.any { node ->
-            node.isVisibleToUser && REEL_OPTIONS_LABEL_HINTS.any { keyword ->
-                nodeLabel(node).contains(keyword, ignoreCase = true)
-            }
-        }
+        return FacebookScreenPolicy.hasReelOptionsSheet(screenNodes(root).second,
+            resources.displayMetrics.widthPixels.toFloat(), resources.displayMetrics.heightPixels.toFloat())
     }
 
     private fun tapNodeByGesture(node: AccessibilityNodeInfo): Boolean {
@@ -1026,16 +1032,6 @@ class ShopeeAccessibilityService : AccessibilityService() {
             "groups",
             "notifications",
             "profile",
-        )
-        private val REEL_OPTIONS_LABEL_HINTS = listOf(
-            "Lưu thước phim",
-            "Save reel",
-            "Remix thước phim này",
-            "Remix this reel",
-            "Tại sao tôi nhìn thấy video này?",
-            "Why am I seeing this video?",
-            "Xếp hạng trải nghiệm phát lại video",
-            "Rate video playback experience",
         )
         private val BOOST_POST_SCREEN_TITLES = listOf(
             "Quảng bá bài viết",

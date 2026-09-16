@@ -26,7 +26,7 @@ internal data class FacebookMenuTarget(
 )
 
 internal object FacebookMenuTapPolicy {
-    fun attemptLimit(evidence: String): Int = if (evidence in setOf("header_row", "visual_dots")) 1 else 3
+    fun attemptLimit(evidence: String): Int = if (evidence in setOf("header_row", "visual_dots", "visual_reel_dots")) 1 else 3
 
     fun preferNodeClick(evidence: String, attempt: Int): Boolean =
         evidence in setOf("semantic_node", "video_options") && attempt % 2 == 0
@@ -163,14 +163,19 @@ internal object FacebookScreenPolicy {
     ): FacebookMenuTarget? {
         if (width <= 0 || height <= 0 || profileTabIndices(nodes, width, height).isNotEmpty()) return null
         if (headerCenters(nodes, width, height).size > 1) return null
-        val staleSheet = nodes.any { ProductLinkUiPolicy.hasExactLabel(it.labels,
-            listOf("Lưu thước phim", "Save reel", "Remix thước phim này", "Remix this reel")) }
-        if (staleSheet || !hasVideoSurface(nodes, height)) return null
+        val rail = videoActionRailAnchor(nodes, width, height)
+        if (hasReelOptionsSheet(nodes, width, height) || (!hasVideoSurface(nodes, height) && rail == null)) return null
+        val railRegion = ReelMenuVisualPolicy.region(nodes, width.toInt(), height.toInt())
         val options = nodes.indices.filter { index ->
             val node = nodes[index]
-            node.interactive && node.width in 1f..width * 0.27f &&
+            node.width in 1f..width * 0.27f &&
                 node.height in 1f..height * 0.15f &&
-                node.centerX >= width * 0.65f && node.centerY in height * 0.06f..height * 0.96f &&
+                node.left >= 0 && node.right <= width && node.top >= 0 && node.bottom <= height &&
+                node.centerX >= width * 0.65f && node.centerY in height * 0.30f..height * 0.96f &&
+                // The top-right player menu is not the Reel's product menu. When the
+                // action rail is exposed, require the options below its last action.
+                (rail == null || (railRegion != null && node.centerX in railRegion.left.toFloat()..railRegion.right.toFloat() &&
+                    node.centerY in railRegion.top.toFloat()..railRegion.bottom.toFloat())) &&
                 optionsSemantic(node, REEL_OPTIONS_LABELS)
         }
         // An unlabelled Reel action rail also contains reactions/share/audio:
@@ -179,6 +184,55 @@ internal object FacebookScreenPolicy {
             nodeTarget(it, nodes, "video_options")
         }
     }
+
+    /** Ordered, aligned actions identify fullscreen video even without a Reels title. */
+    fun videoActionRailAnchor(nodes: List<FacebookScreenNode>, width: Float, height: Float): FacebookScreenNode? {
+        if (width <= 0 || height <= 0) return null
+        val actions = nodes.mapNotNull { node ->
+            val kind = RAIL_ACTIONS.indexOfFirst { labels -> node.labels.any { actionLabel(it, labels) } }
+            if (kind >= 0 && isRailIcon(node, width, height)) node to kind else null
+        }
+        val rails = actions.map { (anchor, _) ->
+            actions.filter { (node, _) -> kotlin.math.abs(node.centerX - anchor.centerX) < width * 0.055f }
+        }.filter { group ->
+            group.map { it.second }.toSet().size >= 2 && group.any { it.second >= 2 } &&
+                group.maxOf { it.first.centerY } - group.minOf { it.first.centerY } >= height * 0.045f &&
+                group.all { (a, ak) -> group.all { (b, bk) -> ak == bk ||
+                    (if (ak < bk) a.centerY < b.centerY else a.centerY > b.centerY) } }
+        }
+        return rails.maxByOrNull { it.map { entry -> entry.second }.toSet().size }
+            ?.maxByOrNull { it.first.centerY }?.first
+    }
+
+    fun hasReelOptionsSheet(nodes: List<FacebookScreenNode>, width: Float, height: Float): Boolean =
+        nodes.any { node ->
+            node.labels.any { label -> REEL_SHEET_LABELS.any { label.contains(it, true) } } &&
+                // The bookmark in the right rail can itself be labelled "Save reel".
+                !(isRailIcon(node, width, height) && node.labels.any { actionLabel(it, RAIL_ACTIONS[3]) })
+        }
+
+    private fun isRailIcon(node: FacebookScreenNode, width: Float, height: Float): Boolean =
+        node.width in 1f..width * 0.22f && node.height in 1f..height * 0.12f &&
+            node.centerX in width * 0.82f..width && node.centerY in height * 0.35f..height * 0.93f &&
+            node.left >= 0 && node.right <= width && node.top >= 0 && node.bottom <= height
+
+    private fun actionLabel(value: String, labels: List<String>): Boolean = labels.any { label ->
+        val text = value.trim()
+        text.equals(label, true) || text.startsWith("$label,", true) ||
+            text.startsWith("$label ", true) || text.startsWith("$label…", true) || text.startsWith("$label...", true)
+    }
+
+    private val RAIL_ACTIONS = listOf(
+        listOf("Thích", "Bỏ thích", "Like", "Unlike"),
+        listOf("Bình luận", "Comment", "Comments"),
+        listOf("Chia sẻ", "Share"),
+        listOf("Lưu", "Đã lưu", "Bỏ lưu", "Save", "Saved", "Unsave"),
+    )
+    private val REEL_SHEET_LABELS = listOf(
+        "Lưu thước phim", "Save reel", "Remix thước phim này", "Remix this reel",
+        "Tại sao tôi nhìn thấy video này?", "Why am I seeing this video?",
+        "Xếp hạng trải nghiệm phát lại video", "Rate video playback experience",
+    )
 
     fun isMenuPointUnobstructed(nodes: List<FacebookScreenNode>, target: FacebookMenuTarget,
                                width: Float, height: Float): Boolean = nodes.none { node ->

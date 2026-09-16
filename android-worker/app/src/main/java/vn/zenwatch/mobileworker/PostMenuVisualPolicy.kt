@@ -20,8 +20,9 @@ internal object PostMenuVisualPolicy {
             (width * 0.99f).toInt(), minOf(height * 0.30f, header + height * 0.018f).toInt())
     }
 
-    /** Pixels are ONLY this small crop, never retained or uploaded. White-theme horizontal dots only. */
-    fun detect(pixels: IntArray, region: MenuImageRegion, screenWidth: Int): FacebookMenuTarget? {
+    /** Pixels are only the caller's small crop; bright dots are for the video rail. */
+    fun detect(pixels: IntArray, region: MenuImageRegion, screenWidth: Int,
+               brightDots: Boolean = false): FacebookMenuTarget? {
         val w = region.width
         val h = region.height
         if (w <= 0 || h <= 0 || screenWidth < 240 || pixels.size != w * h) return null
@@ -29,6 +30,7 @@ internal object PostMenuVisualPolicy {
             val r = pixel ushr 16 and 255
             val g = pixel ushr 8 and 255
             val b = pixel and 255
+            if (brightDots) return minOf(r, g, b) >= 210 && maxOf(r, g, b) - minOf(r, g, b) <= 40
             return maxOf(r, g, b) <= 185 && maxOf(r, g, b) - minOf(r, g, b) <= 32
         }
         fun white(pixel: Int): Boolean = (pixel ushr 16 and 255) >= 235 &&
@@ -78,7 +80,12 @@ internal object PostMenuVisualPolicy {
                 // Ignore the one-pixel antialias fringe; require white beyond it.
                 if (x in (left - 1)..(right + 1) && y in (top - 1)..(bottom + 1)) continue
                 ringCount++
-                if (white(pixels[y * w + x])) whiteCount++
+                val pixel = pixels[y * w + x]
+                val contrasting = if (brightDots) {
+                    ((pixel ushr 16 and 255) * 299 + (pixel ushr 8 and 255) * 587 +
+                        (pixel and 255) * 114) < 190_000
+                } else white(pixel)
+                if (contrasting) whiteCount++
             }
             if (whiteCount.toFloat() / ringCount < 0.9f) continue
             dots += Dot((left + right) / 2f, (top + bottom) / 2f, (dw + dh) / 2f)
@@ -99,7 +106,8 @@ internal object PostMenuVisualPolicy {
             groups += listOf(a, b, c)
         }
         val only = groups.singleOrNull() ?: return null
-        return FacebookMenuTarget(null, region.left + only[1].x, region.top + only[1].y, "visual_dots")
+        return FacebookMenuTarget(null, region.left + only[1].x, region.top + only[1].y,
+            if (brightDots) "visual_reel_dots" else "visual_dots")
     }
 
     private data class Dot(val x: Float, val y: Float, val size: Float)
