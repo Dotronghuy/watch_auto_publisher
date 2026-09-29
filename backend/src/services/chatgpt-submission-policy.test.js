@@ -7,6 +7,7 @@ import {
   hasNewUserMessage,
   hasRequiredAttachmentPreviews,
 } from './chatgpt-submission-policy.js';
+import { hasConfirmedChatGPTSubmission } from './chatgpt-browser.js';
 
 test('baseline and post-submit checks share both ChatGPT user-turn selectors', () => {
   assert.match(CHATGPT_USER_MESSAGE_SELECTOR, /data-message-author-role="user"/);
@@ -56,5 +57,27 @@ test('text wait can start only after a new assistant message exists', () => {
   assert.equal(
     hasNewAssistantMessage({ baselineCount: 4, observedCount: 4 }),
     false,
+  );
+});
+
+test('an empty composer is not treated as a confirmed ChatGPT submission', () => {
+  assert.equal(
+    hasConfirmedChatGPTSubmission({
+      baselineUsers: [{ id: 'u-1', text: 'old prompt' }],
+      observedUsers: [{ id: 'u-1', text: 'old prompt' }],
+      expectedText: 'new prompt',
+    }),
+    false,
+  );
+  assert.equal(
+    hasConfirmedChatGPTSubmission({
+      baselineUsers: [{ id: 'u-1', text: 'old prompt' }],
+      observedUsers: [
+        { id: 'u-1', text: 'old prompt' },
+        { id: 'u-2', text: 'new prompt' },
+      ],
+      expectedText: 'new prompt',
+    }),
+    true,
   );
 });

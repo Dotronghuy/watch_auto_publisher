@@ -8,11 +8,17 @@ import { readJsonFileSync, writeJsonFileSync } from '../utils/json-file.js';
 import sharp from 'sharp';
 import { PrismaClient } from '@prisma/client';
 import {
-    CHATGPT_ASSISTANT_MESSAGE_SELECTOR,
     CHATGPT_USER_MESSAGE_SELECTOR,
-    hasNewUserMessage,
     hasRequiredAttachmentPreviews,
 } from './chatgpt-submission-policy.js';
+import {
+    findChatGPTPrompt,
+    getChatGPTAssistantMessageCount,
+    getLatestChatGPTAssistantTextAfterBaseline,
+    isChatGPTGenerating,
+    stopChatGPTGenerationIfVisible,
+    submitChatGPTPrompt as submitVerifiedChatGPTPrompt,
+} from './chatgpt-browser.js';
 import { selectNewChatGptImageCandidate } from './chatgpt-image-detection-policy.js';
 import { isTransientChatGPTAssistantText, sanitizeGeneratedSocialContent } from './generated-content-sanitizer.js';
 
@@ -739,35 +745,6 @@ const waitForChatGPTAttachmentPreviews = async ({
     throw error;
 };
 
-const waitForNewChatGPTUserMessage = async ({
-    page,
-    baselineUserMessageCount,
-    abortSignal,
-    timeout = 20_000,
-}) => {
-    const deadline = Date.now() + timeout;
-
-    while (Date.now() < deadline) {
-        if (abortSignal?.aborted) throw new Error('Abort requested');
-
-        const userMessageCount = await page
-            .locator(CHATGPT_USER_MESSAGE_SELECTOR)
-            .count()
-            .catch(() => 0);
-        if (hasNewUserMessage({
-            baselineCount: baselineUserMessageCount,
-            observedCount: userMessageCount,
-        })) return userMessageCount;
-        await page.waitForTimeout(300);
-    }
-
-    const error = new Error(
-        'Đã nhấn gửi nhưng không thấy tin nhắn user mới xuất hiện trong cuộc trò chuyện ChatGPT.',
-    );
-    error.code = 'CHATGPT_USER_MESSAGE_NOT_CONFIRMED';
-    throw error;
-};
-
 export const generateBackgroundOnChatGPT = async (imagePath, promptsArray, abortSignal = null, sampleImagePath = null, isNewSession = true, extraWatchImages = []) => {
     // ── Toggle Check: Tạo Ảnh AI ──
     // BẬT (true) = Bỏ qua Playwright, dùng ảnh gốc (vì Gemini API không sinh ảnh được)
@@ -831,29 +808,13 @@ export const generateBackgroundOnChatGPT = async (imagePath, promptsArray, abort
         }
         
         // Đảm bảo ô nhập prompt đã sẵn sàng
-        const PROMPT_SELECTORS = [
-            '#prompt-textarea',
-            'div[contenteditable="true"][data-lexical-editor]',
-            'div[contenteditable="true"]',
-            'p[data-placeholder]',
-        ];
-
         let promptLocator = null;
         console.log('🔍 Đang tìm ô nhập liệu ChatGPT (timeout 10 phút)...');
         
         // Thử tìm tối đa 10 phút (20 lần x 30 giây mỗi lần)
         for (let retry = 0; retry < 20; retry++) {
-            for (const sel of PROMPT_SELECTORS) {
-                try {
-                    await page.waitForSelector(sel, { state: 'visible', timeout: 8000 });
-                    promptLocator = page.locator(sel).first();
-                    console.log(`✅ Tìm thấy ô nhập liệu bằng selector: ${sel}`);
-                    break;
-                } catch (e) {
-                    // Selector không tìm thấy, thử cái tiếp theo
-                }
-            }
-            
+            promptLocator = await findChatGPTPrompt(page, 15_000);
+
             if (promptLocator) break;
             
             if (retry < 19) {
@@ -1204,17 +1165,12 @@ CRITICAL RULES:
                 `${generationBaseline.userMessageCount} tin nhắn user.`
             );
 
-            // Chỉ dùng phím Enter theo yêu cầu
-            await promptLocator.focus();
-            await page.keyboard.press('Enter');
-
-            console.log('🔎 Đang xác nhận tin nhắn user đã xuất hiện trong cuộc trò chuyện...');
-            await waitForNewChatGPTUserMessage({
+            await submitChatGPTPrompt({
                 page,
-                baselineUserMessageCount: generationBaseline.userMessageCount,
-                abortSignal,
+                promptLocator,
+                log: console.log,
+                checkStop: () => abortSignal?.aborted,
             });
-            console.log('✅ Đã xác nhận ChatGPT nhận tin nhắn user mới.');
             liveLog(
                 `✅ Ảnh ${i + 1}: Thumbnail và tin nhắn user đều đã được xác nhận.`,
                 'success',
@@ -1475,33 +1431,6 @@ CRITICAL RULES:
     }
 };
 
-const CHATGPT_PROMPT_SELECTORS = [
-    '#prompt-textarea',
-    'div[contenteditable="true"][data-lexical-editor]',
-    'div[contenteditable="true"]',
-    'p[data-placeholder]',
-];
-
-const findChatGPTPrompt = async (page, timeout = 15000) => {
-    const deadline = Date.now() + timeout;
-    while (Date.now() < deadline) {
-        for (const selector of CHATGPT_PROMPT_SELECTORS) {
-            const locator = page.locator(selector).first();
-            if (await locator.isVisible().catch(() => false)) return locator;
-        }
-        await page.waitForTimeout(500);
-    }
-    return null;
-};
-
-const CHATGPT_SEND_BUTTON_SELECTOR = [
-    'button[data-testid="send-button"]',
-    'button[aria-label="Send prompt"]',
-    'button[aria-label*="Send"]',
-    'button[aria-label*="Gửi"]',
-    'form button[type="submit"]',
-].join(', ');
-
 const getEditableText = async (locator) => locator
     .evaluate((element) => ('value' in element ? element.value : element.innerText) || '')
     .catch(() => null);
@@ -1538,213 +1467,15 @@ const isChatGPTUploadLimitVisible = async (page) => {
     return isChatGPTUploadLimitText(bodyText);
 };
 
-const findEnabledChatGPTSendButton = async (page, timeout = 15000) => {
-    const deadline = Date.now() + timeout;
-    while (Date.now() < deadline) {
-        if (await isChatGPTUploadLimitVisible(page)) throw createChatGPTUploadLimitError();
-        if (await isChatGPTHistoryRateLimitVisible(page)) throw createChatGPTHistoryRateLimitError();
-        const buttons = page.locator(CHATGPT_SEND_BUTTON_SELECTOR);
-        const count = await buttons.count().catch(() => 0);
-        // ChatGPT đôi khi giữ một nút ẩn trong DOM. Duyệt từ cuối để lấy nút của composer đang mở.
-        for (let index = count - 1; index >= 0; index--) {
-            const button = buttons.nth(index);
-            const visible = await button.isVisible().catch(() => false);
-            const enabled = await button.isEnabled().catch(() => false);
-            const ariaDisabled = await button.getAttribute('aria-disabled').catch(() => null);
-            if (visible && enabled && ariaDisabled !== 'true') return button;
-        }
-        await page.waitForTimeout(250);
-    }
-    return null;
+const assertChatGPTReady = async (page) => {
+    if (await isChatGPTUploadLimitVisible(page)) throw createChatGPTUploadLimitError();
+    if (await isChatGPTHistoryRateLimitVisible(page)) throw createChatGPTHistoryRateLimitError();
 };
 
-const waitForChatGPTSubmission = async ({ page, promptLocator, baselineUserMessages, checkStop }) => {
-    const deadline = Date.now() + 12000;
-    while (Date.now() < deadline) {
-        if (checkStop?.()) throw new Error('STOP_REQUESTED');
-        if (await isChatGPTUploadLimitVisible(page)) throw createChatGPTUploadLimitError();
-        if (await isChatGPTHistoryRateLimitVisible(page)) throw createChatGPTHistoryRateLimitError();
-
-        const userMessageCount = await page.locator(CHATGPT_USER_MESSAGE_SELECTOR)
-            .count().catch(() => 0);
-        if (userMessageCount > baselineUserMessages) return true;
-
-        const stopVisible = await page.locator('button[data-testid="stop-button"]')
-            .last().isVisible().catch(() => false);
-        if (stopVisible) return true;
-
-        const composerText = await getEditableText(promptLocator);
-        if (composerText !== null && !composerText.trim()) return true;
-        await page.waitForTimeout(300);
-    }
-    return false;
-};
-
-const submitChatGPTPrompt = async ({ page, promptLocator, log, checkStop }) => {
-    const baselineUserMessages = await page.locator(CHATGPT_USER_MESSAGE_SELECTOR)
-        .count().catch(() => 0);
-
-    for (let attempt = 0; attempt < 3; attempt++) {
-        if (checkStop?.()) throw new Error('STOP_REQUESTED');
-        const sendButton = await findEnabledChatGPTSendButton(page, attempt === 0 ? 15000 : 4000);
-
-        try {
-            if (attempt === 1) {
-                log('[Playwright] Nút gửi chưa được xác nhận; thử Enter trực tiếp trong ô ChatGPT...');
-                await promptLocator.focus();
-                await promptLocator.press('Enter');
-            } else if (sendButton) {
-                if (attempt === 0) {
-                    log('[Playwright] Đã thấy nút Gửi ChatGPT, đang bấm gửi...');
-                    await sendButton.click({ timeout: 8000 });
-                } else {
-                    log('[Playwright] Thử kích hoạt trực tiếp nút Gửi ChatGPT lần cuối...');
-                    await sendButton.evaluate((element) => element.click());
-                }
-            } else {
-                log('[Playwright] Chưa thấy nút Gửi; thử Enter trực tiếp trong ô ChatGPT...');
-                await promptLocator.focus();
-                await promptLocator.press('Enter');
-            }
-        } catch (error) {
-            log(`[Playwright] ⚠️ Thao tác gửi ChatGPT lần ${attempt + 1} chưa thành công: ${error.message}`);
-        }
-
-        const submitted = await waitForChatGPTSubmission({
-            page,
-            promptLocator,
-            baselineUserMessages,
-            checkStop,
-        });
-        if (submitted) {
-            log('[Playwright] ✅ Đã xác nhận ChatGPT nhận yêu cầu.');
-            return;
-        }
-    }
-
-    const error = new Error('Không gửi được prompt vào ChatGPT: nội dung vẫn còn trong ô nhập sau 3 lần thử.');
-    error.code = 'CHATGPT_SEND_FAILED';
-    throw error;
-};
-
-const stopChatGPTGenerationIfVisible = async (page) => {
-    const stopButton = page.locator('button[data-testid="stop-button"]').first();
-    if (await stopButton.isVisible().catch(() => false)) {
-        await stopButton.click().catch(() => {});
-    }
-};
-
-const getChatGPTAssistantMessageCount = async (page) => page
-    .locator(CHATGPT_ASSISTANT_MESSAGE_SELECTOR)
-    .count()
-    .catch(() => 0);
-
-const CHATGPT_UNPROCESSED_ASSISTANT_MESSAGE_SELECTOR = CHATGPT_ASSISTANT_MESSAGE_SELECTOR
-    .split(',')
-    .map((selector) => `${selector.trim()}:not([data-autofill-processed="true"])`)
-    .join(', ');
-
-const getLatestChatGPTAssistantTextAfterBaseline = async ({
-    page,
-    baselineAssistantMessageCount,
-}) => page.evaluate(({
-    assistantSelector,
-    baselineAssistantMessageCount: baselineCount,
-}) => {
-    const userSelector = [
-        '[data-message-author-role="user"]',
-        '[data-turn="user"]',
-    ].join(', ');
-    const turnSelector = [
-        'article[data-testid^="conversation-turn-"]',
-        '[data-testid^="conversation-turn-"]',
-    ].join(', ');
-
-    const canonicalTurn = (element) => element.closest(turnSelector) || element;
-    const isVisible = (element) => {
-        const style = window.getComputedStyle(element);
-        const rect = element.getBoundingClientRect();
-        return style.display !== 'none'
-            && style.visibility !== 'hidden'
-            && rect.width > 0
-            && rect.height > 0;
-    };
-    const uniqueTurns = (selector) => {
-        const seen = new Set();
-        return Array.from(document.querySelectorAll(selector))
-            .map(canonicalTurn)
-            .filter((element) => {
-                if (seen.has(element) || !isVisible(element)) return false;
-                seen.add(element);
-                return true;
-            });
-    };
-    const extractCleanText = (element) => {
-        const contentRoot = element.querySelector('.markdown') || element;
-        const cleanRoot = contentRoot.cloneNode(true);
-        cleanRoot.querySelectorAll([
-            'button',
-            '[role="button"]',
-            '[data-testid*="source" i]',
-            '[data-testid*="citation" i]',
-            '[data-testid*="file" i]',
-            '[aria-label*="source" i]',
-            '[aria-label*="nguồn" i]',
-            'script',
-            'style',
-        ].join(',')).forEach((node) => node.remove());
-        return (cleanRoot.innerText || cleanRoot.textContent || '').trim();
-    };
-    const stripAssistantSpeechPrefix = (value) => String(value || '')
-        .replace(/\s+/g, ' ')
-        .trim()
-        .replace(/^(?:ChatGPT\s*(?:đã nói|said)|Assistant)\s*[:：]\s*/i, '')
-        .trim();
-    const foldForStatusMatch = (value) => stripAssistantSpeechPrefix(value)
-        .toLowerCase()
-        .normalize('NFD')
-        .replace(/[\u0300-\u036f]/g, '')
-        .replace(/đ/g, 'd')
-        .replace(/\s+/g, ' ')
-        .replace(/[.。…]+$/g, '')
-        .trim();
-    const transientAssistantStatuses = [
-        'dang tim kiem ngu canh du an',
-        'searching project context',
-        'dang suy luan',
-        'thinking',
-        'da ngung suy luan',
-        'stopped reasoning',
-    ];
-    const isTransientAssistantText = (text) => {
-        const normalized = foldForStatusMatch(text);
-        return !normalized || transientAssistantStatuses.some((status) => (
-            normalized === status || normalized.startsWith(`${status} `)
-        ));
-    };
-
-    const assistantMessages = uniqueTurns(assistantSelector);
-    const userMessages = uniqueTurns(userSelector);
-    const latestUserMessage = userMessages.at(-1) || null;
-    const isAfterLatestUser = (element) => latestUserMessage
-        ? Boolean(latestUserMessage.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING)
-        : false;
-
-    const baselineIndex = Math.max(0, Number(baselineCount) || 0);
-    const afterBaseline = assistantMessages.slice(baselineIndex);
-    const afterLatestUser = assistantMessages.filter(isAfterLatestUser);
-    const candidates = afterBaseline.length > 0 ? afterBaseline : afterLatestUser;
-
-    for (const candidate of candidates.slice().reverse()) {
-        const text = extractCleanText(candidate);
-        if (text && !isTransientAssistantText(text)) return text;
-    }
-
-    return '';
-}, {
-    assistantSelector: CHATGPT_ASSISTANT_MESSAGE_SELECTOR,
-    baselineAssistantMessageCount,
-}).catch(() => '');
+const submitChatGPTPrompt = (options) => submitVerifiedChatGPTPrompt({
+    ...options,
+    assertReady: () => assertChatGPTReady(options.page),
+});
 
 const CHATGPT_HISTORY_RATE_LIMIT_SELECTOR = [
     '[data-testid="modal-conversation-history-rate-limit"]',
@@ -1966,12 +1697,7 @@ export const createChatGPTTextSession = async ({
                     throw error;
                 }
 
-                // Đánh dấu trước khi gửi để không lấy nhầm câu trả lời của lần trước.
-                await page.evaluate((assistantSelector) => {
-                    document.querySelectorAll(assistantSelector).forEach((element) => {
-                        element.setAttribute('data-autofill-processed', 'true');
-                    });
-                }, CHATGPT_ASSISTANT_MESSAGE_SELECTOR);
+                const baselineAssistantMessageCount = await getChatGPTAssistantMessageCount(page);
 
                 if (image?.buffer) {
                     log('[Playwright] Đang đính kèm ảnh sản phẩm vào ChatGPT...');
@@ -2018,20 +1744,11 @@ export const createChatGPTTextSession = async ({
                     }
 
                     await page.waitForTimeout(2000);
-                    const isGenerating = await page.locator('button[data-testid="stop-button"]').first()
-                        .isVisible().catch(() => false);
+                    const isGenerating = await isChatGPTGenerating(page);
 
-                    const messages = page.locator(CHATGPT_UNPROCESSED_ASSISTANT_MESSAGE_SELECTOR);
-                    const count = await messages.count();
-                    if (count === 0) {
-                        if (isGenerating) continue;
-                        continue;
-                    }
-
-                    const message = messages.nth(count - 1);
-                    const text = await message.evaluate((element) => {
-                        const markdown = element.querySelector('.markdown');
-                        return (markdown || element).innerText;
+                    const text = await getLatestChatGPTAssistantTextAfterBaseline({
+                        page,
+                        baselineAssistantMessageCount,
                     });
                     const cleanText = text?.trim() || '';
                     if (!cleanText) {
@@ -2044,8 +1761,7 @@ export const createChatGPTTextSession = async ({
                         lastAssistantText = cleanText;
                         stableAssistantTextPolls = 0;
                     }
-                    if (!isGenerating || stableAssistantTextPolls >= 3) {
-                        if (isGenerating) await stopChatGPTGenerationIfVisible(page);
+                    if (!isGenerating && stableAssistantTextPolls >= 1) {
                         return cleanText;
                     }
                 }
@@ -2964,13 +2680,17 @@ export const generateContentOnChatGPT = async (prompt, type, imagePath = null) =
             throw new Error('Không tìm thấy ô nhập liệu ChatGPT!');
         }
 
+        let contentAttachmentBaseline = null;
         if (imagePath && fs.existsSync(imagePath)) {
             console.log('📤 Đang đính kèm ảnh...');
+            contentAttachmentBaseline = await getChatGPTAttachmentPreviewCount(promptLocator);
             const inputs = await page.$$('input[type="file"]');
             if (inputs.length > 0) {
                 const activeInput = inputs[inputs.length - 1];
                 await activeInput.setInputFiles([imagePath]);
                 await page.waitForTimeout(4000);
+            } else {
+                throw new Error('Không tìm thấy ô tải ảnh lên ChatGPT để viết content.');
             }
         }
 
@@ -2989,6 +2709,11 @@ export const generateContentOnChatGPT = async (prompt, type, imagePath = null) =
             }
         } catch (e) {}
 
+        if (contentAttachmentBaseline !== null) {
+            await waitForChatGPTAttachmentPreviews({
+                page, promptLocator, baselineCount: contentAttachmentBaseline, expectedIncrease: 1,
+            });
+        }
         const baselineAssistantMessageCount = await getChatGPTAssistantMessageCount(page);
 
         console.log('✍️ Đang gõ prompt text...');
@@ -3021,9 +2746,9 @@ export const generateContentOnChatGPT = async (prompt, type, imagePath = null) =
         let stableAssistantTextPolls = 0;
         for (let attempt = 0; attempt < 60; attempt++) {
             await page.waitForTimeout(5000);
+            await assertChatGPTReady(page);
             // Đợi cho đến khi ChatGPT không còn nút Stop generating nữa (tức là đã viết xong)
-            const isGenerating = await page.locator('button[data-testid="stop-button"]').first()
-                .isVisible().catch(() => false);
+            const isGenerating = await isChatGPTGenerating(page);
             
             const text = await getLatestChatGPTAssistantTextAfterBaseline({
                 page,
@@ -3044,14 +2769,13 @@ export const generateContentOnChatGPT = async (prompt, type, imagePath = null) =
                 lastAssistantText = cleanText;
                 stableAssistantTextPolls = 0;
             }
-            if (!isGenerating || stableAssistantTextPolls >= 2) {
-                if (isGenerating) await stopChatGPTGenerationIfVisible(page);
+            if (!isGenerating && stableAssistantTextPolls >= 1) {
                 console.log('✅ Đã lấy xong nội dung!');
                 return cleanText;
             }
         }
 
-        throw new Error('Timeout chờ text');
+        throw new Error('ChatGPT đã nhận prompt nhưng chưa có nội dung hoàn tất sau 5 phút (có thể vẫn đang suy luận hoặc giao diện phản hồi đã thay đổi).');
 
     } catch (error) {
         console.error('❌ LỖI TRONG TIẾN TRÌNH PLAYWRIGHT TEXT:', error.message);
@@ -3245,8 +2969,7 @@ IMPORTANT:
                 let stableAssistantTextPolls = 0;
                 for (let attempt = 0; attempt < 40; attempt++) {
                     await page.waitForTimeout(5000);
-                    const isGenerating = await page.locator('button[data-testid="stop-button"]').first()
-                        .isVisible().catch(() => false);
+                    const isGenerating = await isChatGPTGenerating(page);
 
                     const text = await getLatestChatGPTAssistantTextAfterBaseline({
                         page,
@@ -3263,8 +2986,7 @@ IMPORTANT:
                         lastAssistantText = cleanText;
                         stableAssistantTextPolls = 0;
                     }
-                    if (!isGenerating || stableAssistantTextPolls >= 2) {
-                        if (isGenerating) await stopChatGPTGenerationIfVisible(page);
+                    if (!isGenerating && stableAssistantTextPolls >= 1) {
                         responseText = cleanText;
                         break;
                     }

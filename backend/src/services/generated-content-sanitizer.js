@@ -64,6 +64,8 @@ const foldForStatusMatch = (value) => stripAssistantSpeechPrefix(value)
 
 const TRANSIENT_CHATGPT_STATUS_TEXTS = [
   'dang tim kiem ngu canh du an',
+  'dang tim ngu canh du an',
+  'dang tim ngu canh',
   'searching project context',
   'dang suy luan',
   'thinking',

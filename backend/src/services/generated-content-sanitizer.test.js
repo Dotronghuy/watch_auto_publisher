@@ -43,6 +43,13 @@ test('drops transient ChatGPT Project context status', () => {
   assert.equal(sanitizeGeneratedSocialContent(input), '');
 });
 
+test('drops the shortened Vietnamese project context status variant', () => {
+  assert.equal(
+    isTransientChatGPTAssistantText('Đang tìm ngữ cảnh dự án…'),
+    true,
+  );
+});
+
 test('removes ChatGPT screen-reader prefix from final caption', () => {
   assert.equal(
     sanitizeGeneratedSocialContent('ChatGPT đã nói:Anh không cần thả thính — cứ để mặt xanh lên tiếng.'),

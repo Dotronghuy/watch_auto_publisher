@@ -37,7 +37,8 @@ export const selectNewChatGptImageCandidate = ({
             && area >= minArea;
         if (isLargeVisibleImage) bestVisible = normalized;
 
-        const isSafeAssistantImage = candidate?.source === 'assistant';
+        const isSafeAssistantImage = candidate?.source === 'assistant'
+            && candidate?.isAfterLatestUser === true;
         const isSafeFallbackImage = candidate?.source === 'fallback'
             && candidate?.isAfterLatestUser === true
             && candidate?.isConversationSurface === true;
