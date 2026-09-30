@@ -137,10 +137,10 @@ export const markChatGPTLatestTurnAsBaseline = (page) => page.evaluate(() => {
     if (last) last.setAttribute('data-znw-baseline', '1');
 }).catch(() => {});
 
-// Fallback DOM-agnostic: selector role (data-message-author-role/data-turn) có
-// thể thay đổi theo bản cập nhật giao diện ChatGPT, nhưng các turn hội thoại
-// luôn được render thành article[data-testid^="conversation-turn-"]. Lấy text
-// turn cuối cùng sau mốc baseline, bỏ qua turn chứa đúng prompt vừa gửi.
+// Fallback DOM-agnostic: selector role (data-message-author-role/data-turn) và
+// cả testid turn đều có thể đổi theo bản cập nhật giao diện ChatGPT. Thử theo
+// thứ tự: (1) turn nằm sau mốc baseline, (2) cắt văn bản vùng hội thoại chính
+// từ prompt vừa gửi trở đi, (3) block .markdown cuối cùng hiển thị.
 export const getLatestChatGPTTextFromDom = async ({ page, submittedPrompt = '' }) => page.evaluate(({ submittedPrompt }) => {
     const normalize = (value) => String(value || '').replace(/\s+/g, ' ').trim();
     const cleanText = (root) => {
@@ -155,30 +155,62 @@ export const getLatestChatGPTTextFromDom = async ({ page, submittedPrompt = '' }
         const style = window.getComputedStyle(element);
         return style.display !== 'none' && style.visibility !== 'hidden';
     };
+
+    const normalizedPrompt = normalize(submittedPrompt);
+    const promptPrefix = normalizedPrompt.length >= 30 ? normalizedPrompt.slice(0, 80) : '';
+
+    // (1) Có mốc baseline → chỉ lấy turn mới nằm sau mốc.
     const turns = [...document.querySelectorAll('[data-testid^="conversation-turn-"]')]
         .filter(rendered);
-    const normalizedPrompt = normalize(submittedPrompt);
     for (let index = turns.length - 1; index >= 0; index--) {
-        // Mọi turn từ mốc baseline trở về trước là nội dung cũ — dừng ngay.
         if (turns[index].hasAttribute('data-znw-baseline')) break;
         const text = normalize(cleanText(turns[index]));
         if (!text) continue;
-        // Prompt gửi đi (đủ dài) xuất hiện nguyên văn trong turn của user.
-        if (normalizedPrompt.length >= 30 && text.includes(normalizedPrompt)) continue;
+        // Turn của user chứa nguyên văn prompt (hoặc ít nhất 80 ký tự đầu nếu
+        // giao diện thu gọn tin nhắn dài bằng "Read more").
+        if (promptPrefix && text.includes(promptPrefix)) continue;
         return text;
     }
-    // Không còn turn mới — nếu không thấy mốc baseline (DOM đổi hẳn) thì thử
-    // block markdown cuối cùng hiển thị trên trang như phương án cuối cùng.
     const hasMarker = turns.some((turn) => turn.hasAttribute('data-znw-baseline'));
-    if (!hasMarker) {
-        const markdowns = [...document.querySelectorAll('.markdown')].filter(rendered);
-        for (let index = markdowns.length - 1; index >= 0; index--) {
-            const text = normalize(cleanText(markdowns[index]));
-            if (text) return text;
+    // Mốc còn đó nhưng chưa có turn mới → ChatGPT chưa phản hồi.
+    if (hasMarker) return '';
+
+    // (2) Không có mốc (DOM đổi hẳn hoặc trang chuyển chat): cắt từ prompt đi.
+    if (promptPrefix) {
+        const main = document.querySelector('main') || document.body;
+        const bodyText = normalize(cleanText(main));
+        const idx = bodyText.lastIndexOf(promptPrefix);
+        if (idx >= 0) {
+            let tail = bodyText.slice(idx + promptPrefix.length);
+            tail = tail.replace(/^(?:ChatGPT\s*(?:đã nói|said)|Assistant)\s*[:：]\s*/i, '');
+            tail = tail.replace(/^(?:…|\.\.\.)?\s*(?:Read more|Xem thêm)\b[^#\n]*/i, '');
+            // Bỏ dòng khước từ cố định cuối trang ChatGPT.
+            tail = tail.replace(/ChatGPT có thể mắc lỗi[\s\S]*$/i, '');
+            tail = tail.trim();
+            if (tail) return tail;
         }
+    }
+
+    // (3) Cuối cùng: block markdown cuối cùng hiển thị trên trang.
+    const markdowns = [...document.querySelectorAll('.markdown')].filter(rendered);
+    for (let index = markdowns.length - 1; index >= 0; index--) {
+        const text = normalize(cleanText(markdowns[index]));
+        if (text) return text;
     }
     return '';
 }, { submittedPrompt });
+
+// Chẩn đoán DOM khi không đọc được phản hồi: in số lượng phần tử khớp từng
+// selector để biết giao diện ChatGPT đã đổi ở đâu.
+export const diagnoseChatGPTDom = (page) => page.evaluate(() => ({
+    url: window.location.href,
+    title: document.title,
+    turnCount: document.querySelectorAll('[data-testid^="conversation-turn-"]').length,
+    userRoleCount: document.querySelectorAll('[data-message-author-role="user"], [data-turn="user"]').length,
+    assistantRoleCount: document.querySelectorAll('[data-message-author-role="assistant"], [data-turn="assistant"]').length,
+    markdownCount: document.querySelectorAll('.markdown').length,
+    mainTextLength: (document.querySelector('main')?.innerText || '').length,
+})).catch((error) => ({ error: error.message }));
 
 export const isChatGPTGenerating = async (page) => {
     const buttons = page.locator(STOP_SELECTOR);

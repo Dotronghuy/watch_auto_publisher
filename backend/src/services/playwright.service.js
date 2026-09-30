@@ -12,6 +12,7 @@ import {
     hasRequiredAttachmentPreviews,
 } from './chatgpt-submission-policy.js';
 import {
+    diagnoseChatGPTDom,
     findChatGPTPrompt,
     getChatGPTAssistantMessageCount,
     getLatestChatGPTAssistantTextAfterBaseline,
@@ -1862,6 +1863,7 @@ export const createChatGPTTextSession = async ({
                 log('[Playwright] Đang chờ ChatGPT trả JSON...');
                 let lastAssistantText = '';
                 let stableAssistantTextPolls = 0;
+                let fallbackUsedLogged = false;
                 for (let attempt = 0; attempt < 150; attempt++) {
                     if (checkStop?.()) {
                         await stopChatGPTGenerationIfVisible(page);
@@ -1883,7 +1885,12 @@ export const createChatGPTTextSession = async ({
                         baselineAssistantMessageCount,
                     });
                     if (!text) {
-                        text = await getLatestChatGPTTextFromDom({ page, submittedPrompt: prompt });
+                        const fallbackText = await getLatestChatGPTTextFromDom({ page, submittedPrompt: prompt });
+                        if (fallbackText && !fallbackUsedLogged) {
+                            fallbackUsedLogged = true;
+                            log('[Playwright] ⚠️ Đọc theo role selector trả rỗng — đã dùng fallback đọc trực tiếp DOM...');
+                        }
+                        text = fallbackText;
                     }
                     const cleanText = text?.trim() || '';
                     if (!cleanText) {
@@ -1905,6 +1912,7 @@ export const createChatGPTTextSession = async ({
                     }
                 }
 
+                log('[Playwright] 🔍 Chẩn đoán DOM khi timeout:', JSON.stringify(await diagnoseChatGPTDom(page)));
                 await saveChatGPTDebugScreenshot(page, 'content-json-timeout');
                 throw new Error('ChatGPT phản hồi quá thời gian 5 phút.');
             };
@@ -2885,6 +2893,7 @@ export const generateContentOnChatGPT = async (prompt, type, imagePath = null) =
         
         let lastAssistantText = '';
         let stableAssistantTextPolls = 0;
+        let fallbackUsedLogged = false;
         for (let attempt = 0; attempt < 60; attempt++) {
             await page.waitForTimeout(5000);
             await assertChatGPTReady(page);
@@ -2901,7 +2910,12 @@ export const generateContentOnChatGPT = async (prompt, type, imagePath = null) =
             // Fallback DOM-agnostic: selector role có thể đổi theo giao diện
             // ChatGPT nhưng turn hội thoại vẫn là article conversation-turn-*.
             if (!text) {
-                text = await getLatestChatGPTTextFromDom({ page, submittedPrompt: prompt });
+                const fallbackText = await getLatestChatGPTTextFromDom({ page, submittedPrompt: prompt });
+                if (fallbackText && !fallbackUsedLogged) {
+                    fallbackUsedLogged = true;
+                    console.log('⚠️ Đọc theo role selector trả rỗng — đã dùng fallback đọc trực tiếp DOM...');
+                }
+                text = fallbackText;
             }
             const cleanText = sanitizeGeneratedSocialContent(text);
             if (!cleanText) {
@@ -2928,6 +2942,7 @@ export const generateContentOnChatGPT = async (prompt, type, imagePath = null) =
             }
         }
 
+        console.log('🔍 Chẩn đoán DOM ChatGPT khi timeout:', JSON.stringify(await diagnoseChatGPTDom(page)));
         await saveChatGPTDebugScreenshot(page, 'content-timeout');
         throw new Error('ChatGPT đã nhận prompt nhưng chưa có nội dung hoàn tất sau 5 phút (có thể vẫn đang suy luận hoặc giao diện phản hồi đã thay đổi).');
 
@@ -3122,6 +3137,7 @@ IMPORTANT:
                 let responseText = null;
                 let lastAssistantText = '';
                 let stableAssistantTextPolls = 0;
+                let fallbackUsedLogged = false;
                 for (let attempt = 0; attempt < 40; attempt++) {
                     await page.waitForTimeout(5000);
                     await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight)).catch(() => {});
@@ -3132,7 +3148,12 @@ IMPORTANT:
                         baselineAssistantMessageCount,
                     });
                     if (!text) {
-                        text = await getLatestChatGPTTextFromDom({ page, submittedPrompt: analyzePrompt });
+                        const fallbackText = await getLatestChatGPTTextFromDom({ page, submittedPrompt: analyzePrompt });
+                        if (fallbackText && !fallbackUsedLogged) {
+                            fallbackUsedLogged = true;
+                            console.log('⚠️ Đọc theo role selector trả rỗng — đã dùng fallback đọc trực tiếp DOM...');
+                        }
+                        text = fallbackText;
                     }
                     const cleanText = text?.trim() || '';
                     if (!cleanText) {
@@ -3153,6 +3174,7 @@ IMPORTANT:
                 }
 
                 if (!responseText) {
+                    console.log('🔍 Chẩn đoán DOM khi timeout:', JSON.stringify(await diagnoseChatGPTDom(page)));
                     await saveChatGPTDebugScreenshot(page, 'analyze-timeout');
                     console.log(`⚠️ Timeout phân tích ảnh ${imgFile}`);
                     continue;
