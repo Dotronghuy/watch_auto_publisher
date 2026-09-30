@@ -11,7 +11,7 @@ import { spawn } from 'child_process';
 import { startScheduler } from '../scheduler.js';
 import { autoPublishRoutine, dryRunRoutine, resetGlobalStop, triggerGlobalStop, getIsRunning, forceResetRunningState, trainImageOnly, trainContentOnly } from '../services/publish.service.js';
 import { getProductInfoBySku } from '../services/sheet.service.js';
-import { openLoginHelper, generateContentOnChatGPT, generateBackgroundOnChatGPT, analyzeNewSampleImages, isAiIdle } from '../services/playwright.service.js';
+import { openLoginHelper, generateContentOnChatGPT, generateBackgroundOnChatGPT, analyzeNewSampleImages, isAiIdle, getAiSessionStatus, verifyAiLoginStatus } from '../services/playwright.service.js';
 import { connection as redisConnection, publishQueue } from '../workers/queue.js';
 import {
   hasSuccessfulPublishResult,
@@ -28,7 +28,6 @@ import { syncAllCRM, replyCRM } from '../services/crm.service.js';
 import { autoTagAllConversations } from '../services/autotag.service.js';
 import { syncHashesFromSheets } from '../services/image-hash.service.js';
 import { syncLocalImageEmbeddingIndex } from '../services/local-image-embedding.service.js';
-import { startArena, stopArena, getArenaStatus, arenaEmitter } from '../services/ai_arena.service.js';
 import { CONTENT_CTAS, CONTENT_TONES, TONE_PROMPT_VERSION, getToneInstructionText } from '../services/content-tone.service.js';
 
 // Khởi tạo bảng CRM DB nếu chưa có
@@ -843,6 +842,32 @@ router.post('/ai/reset-profile', async (req, res) => {
   }
 });
 
+// API Trạng thái đăng nhập AI (Kiểm tra nhanh qua cookie profile)
+router.get('/ai/session-status', (req, res) => {
+  try {
+    res.json(getAiSessionStatus());
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// API Kiểm tra sâu trạng thái đăng nhập AI (Mở browser ẩn, verify thực tế)
+router.post('/ai/session-status/verify', async (req, res) => {
+  const { provider } = req.body;
+  if (!['chatgpt', 'gemini'].includes(provider)) {
+    return res.status(400).json({ error: 'Provider không hợp lệ' });
+  }
+
+  try {
+    res.json(await verifyAiLoginStatus(provider));
+  } catch (error) {
+    if (error?.code === 'AI_BUSY') {
+      return res.status(409).json({ error: error.message, aiBusy: true });
+    }
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // 6. Đọc Cấu hình (Lịch Đăng)
 router.get('/settings', (req, res) => {
   try {
@@ -1490,46 +1515,6 @@ router.post('/crm/bot/test', async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
-});
-
-// --- AI Arena Endpoints ---
-
-let arenaClients = [];
-arenaEmitter.on('arena_event', (data) => {
-  const payload = JSON.stringify({ ...data, time: Date.now() });
-  arenaClients.forEach(client => {
-    client.res.write(`data: ${payload}\n\n`);
-  });
-});
-
-router.post('/arena/start', (req, res) => {
-  const started = startArena();
-  if (started) res.json({ success: true, message: 'Đấu trường đã bắt đầu' });
-  else res.json({ success: false, message: 'Đấu trường đang chạy rồi' });
-});
-
-router.post('/arena/stop', (req, res) => {
-  const stopped = stopArena();
-  res.json({ success: stopped, message: stopped ? 'Đã dừng Đấu trường' : 'Đấu trường không chạy' });
-});
-
-router.get('/arena/status', (req, res) => {
-  res.json({ isRunning: getArenaStatus() });
-});
-
-router.get('/arena/stream', (req, res) => {
-  res.setHeader('Content-Type', 'text/event-stream');
-  res.setHeader('Cache-Control', 'no-cache');
-  res.setHeader('Connection', 'keep-alive');
-  res.setHeader('X-Accel-Buffering', 'no'); // Vô hiệu hóa buffer của Nginx/Vite Proxy
-  res.flushHeaders();
-  
-  const client = { id: Date.now(), res };
-  arenaClients.push(client);
-  
-  req.on('close', () => {
-    arenaClients = arenaClients.filter(c => c.id !== client.id);
-  });
 });
 
 export default router;

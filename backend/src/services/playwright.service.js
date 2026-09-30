@@ -3308,3 +3308,101 @@ export const openLoginHelper = async (provider) => {
         providerMutex.unlock();
     }
 };
+
+// ─── TRẠNG THÁI ĐĂNG NHẬP AI (cho trang Cài đặt) ───
+const AI_PROFILE_DIRS = {
+    chatgpt: path.join(__dirname, '../../chrome_data_chatgpt'),
+    gemini: path.join(__dirname, '../../chrome_data_gemini'),
+};
+// Cookie phiên đăng nhập nằm trong SQLite Cookies của profile. Chrome mới đặt
+// file này ở Default/Network/Cookies; quét binary tìm tên cookie phiên.
+const AI_SESSION_MARKERS = {
+    chatgpt: ['__Secure-next-auth.session-token'],
+    gemini: ['__Secure-1PSID', 'SAPISID'],
+};
+const AI_STATUS_URLS = {
+    chatgpt: 'https://chatgpt.com/',
+    gemini: 'https://gemini.google.com/app',
+};
+
+const readProfileLoginEvidence = (provider) => {
+    const profileDir = AI_PROFILE_DIRS[provider];
+    const profileExists = fs.existsSync(profileDir);
+    if (!profileExists) {
+        return { provider, profileExists: false, loggedIn: false, evidence: 'no-profile', lastSeenAt: null };
+    }
+    const cookiePaths = [
+        path.join(profileDir, 'Default', 'Network', 'Cookies'),
+        path.join(profileDir, 'Default', 'Cookies'),
+    ];
+    let lastModifiedMs = 0;
+    let markerFound = null;
+    for (const cookiePath of cookiePaths) {
+        if (!fs.existsSync(cookiePath)) continue;
+        try {
+            const stat = fs.statSync(cookiePath);
+            if (stat.mtimeMs > lastModifiedMs) lastModifiedMs = stat.mtimeMs;
+            const buffer = fs.readFileSync(cookiePath);
+            const found = AI_SESSION_MARKERS[provider].find((name) => buffer.includes(Buffer.from(name)));
+            if (found) markerFound = found;
+        } catch (error) {
+            // File cookie đang bị khoá (browser automation đang chạy) — bỏ qua.
+        }
+    }
+    return {
+        provider,
+        profileExists: true,
+        loggedIn: Boolean(markerFound),
+        evidence: markerFound ? `cookie:${markerFound}` : 'no-session-cookie',
+        lastSeenAt: lastModifiedMs ? new Date(lastModifiedMs).toISOString() : null,
+    };
+};
+
+// Kiểm tra nhanh bằng bằng chứng trong profile (không mở trình duyệt).
+export const getAiSessionStatus = () => ({
+    chatgpt: readProfileLoginEvidence('chatgpt'),
+    gemini: readProfileLoginEvidence('gemini'),
+    aiBusy: !isAiIdle(),
+    checkedAt: new Date().toISOString(),
+});
+
+// Kiểm tra sâu: mở trình duyệt headless bằng profile thật, truy cập trang và
+// xem có bị chuyển về trang đăng nhập không. Chỉ chạy khi AI đang rảnh để
+// không tranh chấp khoá profile với automation đang chạy.
+export const verifyAiLoginStatus = async (provider) => {
+    if (!AI_PROFILE_DIRS[provider]) throw new Error('Provider không hợp lệ');
+    const fast = readProfileLoginEvidence(provider);
+    if (!fast.profileExists) return { ...fast, verified: false, reason: 'no-profile' };
+    if (!isAiIdle()) throw Object.assign(new Error('AI đang chạy automation, không thể kiểm tra sâu lúc này.'), { code: 'AI_BUSY' });
+
+    let context = null;
+    try {
+        context = await chromium.launchPersistentContext(AI_PROFILE_DIRS[provider], {
+            headless: true,
+            executablePath: browserExecutablePath || undefined,
+            args: ['--no-sandbox', '--disable-dev-shm-usage'],
+        });
+        const page = context.pages().length > 0 ? context.pages()[0] : await context.newPage();
+        await page.goto(AI_STATUS_URLS[provider], { waitUntil: 'domcontentloaded', timeout: 30_000 });
+        await page.waitForTimeout(8000);
+
+        let loggedIn = false;
+        if (provider === 'chatgpt') {
+            const finalUrl = page.url();
+            const loggedOutByUrl = /auth\.openai\.com|chatgpt\.com\/auth|login\?/i.test(finalUrl);
+            const hasLoginButton = await page.getByText('Log in', { exact: true }).first()
+                .isVisible({ timeout: 800 }).catch(() => false);
+            loggedIn = !loggedOutByUrl && !hasLoginButton;
+        } else {
+            const finalUrl = page.url();
+            const hasPrompt = await page.locator('div.ql-editor, main [contenteditable="true"]').first()
+                .isVisible({ timeout: 800 }).catch(() => false);
+            loggedIn = !/accounts\.google\.com|ServiceLogin/i.test(finalUrl) && hasPrompt;
+        }
+        return { ...readProfileLoginEvidence(provider), verified: true, loggedIn, checkedAt: new Date().toISOString() };
+    } catch (error) {
+        return { ...fast, verified: false, loggedIn: fast.loggedIn, error: error.message };
+    } finally {
+        if (context) await context.close().catch(() => {});
+    }
+};

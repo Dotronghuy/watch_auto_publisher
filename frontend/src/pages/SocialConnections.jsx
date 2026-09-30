@@ -53,6 +53,8 @@ const SocialConnections = () => {
   const [isSavingEnv, setIsSavingEnv] = useState(false);
   const [showTokens, setShowTokens] = useState({ fb: false, ig: false, igId: false, tiktok: false });
   const [isResettingAI, setIsResettingAI] = useState(null);
+  const [aiSessionStatus, setAiSessionStatus] = useState(null);
+  const [verifyingAi, setVerifyingAi] = useState(null);
   const [isSyncingImages, setIsSyncingImages] = useState(false);
 
   const [accounts, setAccounts] = useState([]);
@@ -100,6 +102,8 @@ const SocialConnections = () => {
         setAccounts(Array.isArray(data) ? data : []);
       })
       .catch(err => console.error('Lỗi khi fetch accounts', err));
+
+    fetchAiSessionStatus();
 
   }, []);
 
@@ -180,6 +184,43 @@ const SocialConnections = () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(newAccounts)
     }).catch(() => setAccounts(accounts)); // Revert if failed
+  };
+
+  const fetchAiSessionStatus = async () => {
+    try {
+      const res = await fetch('/api/ai/session-status');
+      setAiSessionStatus(await res.json());
+    } catch (e) {
+      console.error('Lỗi khi lấy trạng thái đăng nhập AI:', e);
+    }
+  };
+
+  const handleVerifyAiLogin = async (provider) => {
+    setVerifyingAi(provider);
+    try {
+      const res = await fetch('/api/ai/session-status/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        if (res.status === 409) {
+          Swal.fire({ title: 'AI đang bận', text: data.error || 'AI đang chạy automation, vui lòng thử lại sau.', icon: 'warning', background: 'var(--color-surface)', color: 'white' });
+        } else {
+          Swal.fire('Lỗi', data.error || 'Không thể kiểm tra trạng thái', 'error');
+        }
+      } else {
+        setAiSessionStatus(prev => {
+          const next = { ...(prev || {}), checkedAt: new Date().toISOString() };
+          next[provider] = data;
+          return next;
+        });
+      }
+    } catch (e) {
+      console.error('Lỗi khi kiểm tra đăng nhập AI:', e);
+    }
+    setVerifyingAi(null);
   };
 
   const handleResetAI = async (provider) => {
@@ -706,7 +747,7 @@ const SocialConnections = () => {
             <div className="icon-circle green"><BrainCircuit size={16} /></div>
             <h3>Trí Tuệ Nhân Tạo (Web Automation)</h3>
           </div>
-          <p className="section-desc">Quản lý phiên đăng nhập AI chạy ngầm. Nếu bị văng hoặc dính Checkpoint, dùng Login Helper để dọn rác và đăng nhập lại.</p>
+          <p className="section-desc">Hệ thống tự nhận biết trạng thái đăng nhập ChatGPT &amp; Gemini qua profile trình duyệt. Nếu bị văng hoặc dính Checkpoint, dùng Login Helper để dọn rác và đăng nhập lại.</p>
 
           <div className="ai-grid">
             <div className="ai-card">
@@ -717,15 +758,36 @@ const SocialConnections = () => {
                   <div className="ai-model chatgpt">Mô hình: GPT-4 Vision</div>
                 </div>
               </div>
-              <button
-                className="btn-outline w-full justify-center"
-                onClick={() => handleResetAI('chatgpt')}
-                disabled={isResettingAI === 'chatgpt'}
-                style={{borderColor: '#10a37f', color: '#10a37f', fontSize: '12px'}}
-              >
-                {isResettingAI === 'chatgpt' ? <RefreshCw className="spin" size={14} style={{marginRight: '6px'}}/> : <RefreshCw size={14} style={{marginRight: '6px'}} />}
-                {isResettingAI === 'chatgpt' ? 'Đang chờ thao tác...' : 'Làm mới & Đăng nhập lại'}
-              </button>
+              <div className="ai-status">
+                {aiSessionStatus?.chatgpt?.loggedIn === true
+                  ? <span className="ai-status-badge ok"><CheckCircle2 size={13} /> Đã đăng nhập</span>
+                  : aiSessionStatus?.chatgpt?.loggedIn === false
+                    ? <span className="ai-status-badge bad"><XCircle size={13} /> Chưa đăng nhập</span>
+                    : <span className="ai-status-badge unknown"><AlertCircle size={13} /> Chưa xác định</span>}
+                {aiSessionStatus?.chatgpt?.verified === true
+                  ? <span className="ai-status-note">Đã kiểm tra thực tế</span>
+                  : aiSessionStatus?.aiBusy ? <span className="ai-status-note">AI đang chạy automation</span> : null}
+              </div>
+              <div className="ai-actions">
+                <button
+                  className="btn-outline w-full justify-center"
+                  onClick={() => handleVerifyAiLogin('chatgpt')}
+                  disabled={verifyingAi === 'chatgpt'}
+                  style={{ fontSize: '12px' }}
+                >
+                  {verifyingAi === 'chatgpt' ? <RefreshCw className="spin" size={14} style={{marginRight: '6px'}}/> : <RefreshCw size={14} style={{marginRight: '6px'}} />}
+                  {verifyingAi === 'chatgpt' ? 'Đang kiểm tra...' : 'Kiểm tra lại'}
+                </button>
+                <button
+                  className="btn-outline w-full justify-center"
+                  onClick={() => handleResetAI('chatgpt')}
+                  disabled={isResettingAI === 'chatgpt'}
+                  style={{borderColor: '#10a37f', color: '#10a37f', fontSize: '12px'}}
+                >
+                  {isResettingAI === 'chatgpt' ? <RefreshCw className="spin" size={14} style={{marginRight: '6px'}}/> : <RefreshCw size={14} style={{marginRight: '6px'}} />}
+                  {isResettingAI === 'chatgpt' ? 'Đang chờ thao tác...' : 'Làm mới & Đăng nhập lại'}
+                </button>
+              </div>
             </div>
 
             <div className="ai-card">
@@ -736,15 +798,36 @@ const SocialConnections = () => {
                   <div className="ai-model gemini">Mô hình: Gemini 1.5 Pro</div>
                 </div>
               </div>
-              <button
-                className="btn-outline w-full justify-center"
-                onClick={() => handleResetAI('gemini')}
-                disabled={isResettingAI === 'gemini'}
-                style={{borderColor: '#4285f4', color: '#4285f4', fontSize: '12px'}}
-              >
-                {isResettingAI === 'gemini' ? <RefreshCw className="spin" size={14} style={{marginRight: '6px'}}/> : <RefreshCw size={14} style={{marginRight: '6px'}} />}
-                {isResettingAI === 'gemini' ? 'Đang chờ thao tác...' : 'Làm mới & Đăng nhập lại'}
-              </button>
+              <div className="ai-status">
+                {aiSessionStatus?.gemini?.loggedIn === true
+                  ? <span className="ai-status-badge ok"><CheckCircle2 size={13} /> Đã đăng nhập</span>
+                  : aiSessionStatus?.gemini?.loggedIn === false
+                    ? <span className="ai-status-badge bad"><XCircle size={13} /> Chưa đăng nhập</span>
+                    : <span className="ai-status-badge unknown"><AlertCircle size={13} /> Chưa xác định</span>}
+                {aiSessionStatus?.gemini?.verified === true
+                  ? <span className="ai-status-note">Đã kiểm tra thực tế</span>
+                  : aiSessionStatus?.aiBusy ? <span className="ai-status-note">AI đang chạy automation</span> : null}
+              </div>
+              <div className="ai-actions">
+                <button
+                  className="btn-outline w-full justify-center"
+                  onClick={() => handleVerifyAiLogin('gemini')}
+                  disabled={verifyingAi === 'gemini'}
+                  style={{ fontSize: '12px' }}
+                >
+                  {verifyingAi === 'gemini' ? <RefreshCw className="spin" size={14} style={{marginRight: '6px'}}/> : <RefreshCw size={14} style={{marginRight: '6px'}} />}
+                  {verifyingAi === 'gemini' ? 'Đang kiểm tra...' : 'Kiểm tra lại'}
+                </button>
+                <button
+                  className="btn-outline w-full justify-center"
+                  onClick={() => handleResetAI('gemini')}
+                  disabled={isResettingAI === 'gemini'}
+                  style={{borderColor: '#4285f4', color: '#4285f4', fontSize: '12px'}}
+                >
+                  {isResettingAI === 'gemini' ? <RefreshCw className="spin" size={14} style={{marginRight: '6px'}}/> : <RefreshCw size={14} style={{marginRight: '6px'}} />}
+                  {isResettingAI === 'gemini' ? 'Đang chờ thao tác...' : 'Làm mới & Đăng nhập lại'}
+                </button>
+              </div>
             </div>
           </div>
         </div>

@@ -472,6 +472,41 @@
 .ai-model.chatgpt { color: #34d399; }
 .ai-model.gemini  { color: #60a5fa; }
 
+.ai-status {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.ai-status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 999px;
+}
+
+.ai-status-badge.ok { background: rgba(52, 211, 153, .12); color: #34d399; }
+.ai-status-badge.bad { background: rgba(248, 113, 113, .12); color: #f87171; }
+.ai-status-badge.unknown { background: rgba(251, 191, 36, .12); color: #fbbf24; }
+
+.ai-status-note {
+  font-size: 10px;
+  color: var(--color-text-muted, #94a3b8);
+}
+
+.ai-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.ai-actions .btn-outline {
+  flex: 1;
+}
+
 /* ─── Section Footer (Save Button) ─── */
 .section-footer {
   display: flex;
