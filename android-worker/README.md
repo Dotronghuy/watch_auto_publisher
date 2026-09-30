@@ -167,7 +167,8 @@ cụ thể. Không vượt qua cửa sổ bảo mật hay chạm tọa độ cũ
 Sau khi mở ba chấm của Reel, Facebook có thể đặt mục **Quản lý sản phẩm** bên dưới vùng
 đang hiển thị. Worker chỉ cuộn bảng tùy chọn của Facebook (tối đa 4 lần), sau đó bấm
 **Quản lý sản phẩm** → **Thêm sản phẩm liên kết tiếp thị** rồi mới nhập URL. Worker không
-swipe lên video hoặc Feed.
+swipe lên video hoặc Feed. Nếu video đã có sẵn sản phẩm liên kết, Facebook đổi nhãn thành
+**Chỉnh sửa sản phẩm liên kết tiếp thị** — Worker nhận diện cả hai nhãn (Thêm/Chỉnh sửa).
 
 Bản 0.4.7 ưu tiên URL `https://www.facebook.com/{PAGE_ID}/videos/{VIDEO_ID}` cho Reel
 có `PAGE_ID_VIDEO_ID`, rồi mới dùng permalink Graph trả về. Trạng thái Worker hiển thị

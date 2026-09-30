@@ -453,7 +453,9 @@ class ShopeeAccessibilityService : AccessibilityService() {
             root,
             listOf(
                 "Thêm sản phẩm liên kết tiếp thị",
+                "Chỉnh sửa sản phẩm liên kết tiếp thị",
                 "Add affiliate product",
+                "Edit affiliate product",
             ),
             visibleOnly = true,
         )
@@ -471,7 +473,9 @@ class ShopeeAccessibilityService : AccessibilityService() {
             root,
             listOf(
                 "Thêm sản phẩm",
+                "Chỉnh sửa sản phẩm",
                 "Add product",
+                "Edit product",
             ),
             visibleOnly = true,
         ) != null
@@ -480,7 +484,7 @@ class ShopeeAccessibilityService : AccessibilityService() {
             failStepAfter(
                 active,
                 40_000,
-                "Không mở được mục Thêm sản phẩm liên kết tiếp thị",
+                "Không mở được mục Thêm/Chỉnh sửa sản phẩm liên kết tiếp thị",
             )
             return
         }
@@ -510,7 +514,7 @@ class ShopeeAccessibilityService : AccessibilityService() {
         failStepAfter(
             active,
             40_000,
-            "Không tìm thấy mục Quản lý liên kết sản phẩm hoặc Thêm sản phẩm liên kết tiếp thị",
+            "Không tìm thấy mục Quản lý liên kết sản phẩm hoặc Thêm/Chỉnh sửa sản phẩm liên kết tiếp thị",
         )
     }
 
@@ -826,9 +830,11 @@ class ShopeeAccessibilityService : AccessibilityService() {
                 "Quản lý liên kết đến sản phẩm",
                 "Quản lý sản phẩm",
                 "Thêm sản phẩm liên kết tiếp thị",
+                "Chỉnh sửa sản phẩm liên kết tiếp thị",
                 "Manage product links",
                 "Manage products",
                 "Add affiliate product",
+                "Edit affiliate product",
             ),
             visibleOnly = true,
         ) != null
@@ -1055,8 +1061,9 @@ class ShopeeAccessibilityService : AccessibilityService() {
         private const val ROOT_RETRY_MS = 500L
         private val PRODUCT_MANAGER_LABELS = listOf(
             "Quản lý liên kết đến sản phẩm", "Thêm liên kết sản phẩm", "Quản lý sản phẩm",
-            "Thêm sản phẩm liên kết tiếp thị", "Manage product links", "Add product link",
-            "Manage products", "Add affiliate product",
+            "Thêm sản phẩm liên kết tiếp thị", "Chỉnh sửa sản phẩm liên kết tiếp thị",
+            "Manage product links", "Add product link",
+            "Manage products", "Add affiliate product", "Edit affiliate product",
         )
         private val HOME_FEED_BOTTOM_NAV_HINTS = listOf(
             "trang ch\u1ee7",
