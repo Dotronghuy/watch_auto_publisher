@@ -156,8 +156,10 @@ export const markChatGPTLatestTurnAsBaseline = (page) => page.evaluate(() => {
 
 // Fallback DOM-agnostic: selector role (data-message-author-role/data-turn) và
 // cả testid turn đều có thể đổi theo bản cập nhật giao diện ChatGPT. Thử theo
-// thứ tự: (1) turn nằm sau mốc baseline, (2) cắt văn bản vùng hội thoại chính
-// từ prompt vừa gửi trở đi, (3) block .markdown cuối cùng hiển thị.
+// thứ tự: (1) turn nằm sau mốc baseline (qua node sống, không phụ thuộc
+// attribute), (2) turn đứng sau turn user chứa prompt, (3) cắt văn bản vùng hội
+// thoại, (4) block .markdown cuối cùng. Tuyệt đối không trả về nội dung prompt
+// của user — chỉ trả phản hồi mới của ChatGPT.
 export const getLatestChatGPTTextFromDom = async ({ page, submittedPrompt = '' }) => page.evaluate(({ submittedPrompt }) => {
     const normalize = (value) => String(value || '').replace(/\s+/g, ' ').trim();
     const cleanText = (root) => {
@@ -175,30 +177,84 @@ export const getLatestChatGPTTextFromDom = async ({ page, submittedPrompt = '' }
 
     const normalizedPrompt = normalize(submittedPrompt);
     const promptPrefix = normalizedPrompt.length >= 30 ? normalizedPrompt.slice(0, 80) : '';
+    // Turn của user luôn chứa prompt vừa gửi. ChatGPT có thể thu gọn tin nhắn
+    // dài bằng "Read more" nên so khớp nhiều độ dài + chiều ngược lại (turn bị
+    // cắt ngắn chính là phần đầu của prompt).
+    const isPromptEcho = (text) => {
+        if (!text || !promptPrefix) return false;
+        const chunks = [normalizedPrompt, ...(normalizedPrompt.length >= 200
+            ? [normalizedPrompt.slice(0, 200)] : []), normalizedPrompt.slice(0, 120), promptPrefix];
+        if (chunks.some((chunk) => text.includes(chunk))) return true;
+        return text.length >= 40 && text.length <= normalizedPrompt.length
+            && normalizedPrompt.startsWith(text);
+    };
 
-    // (1) Có mốc baseline → chỉ lấy turn mới nằm sau mốc.
     const turns = [...document.querySelectorAll('[data-testid^="conversation-turn-"]')]
         .filter(rendered);
-    for (let index = turns.length - 1; index >= 0; index--) {
-        if (turns[index].hasAttribute('data-znw-baseline')) break;
-        const text = normalize(cleanText(turns[index]));
-        if (!text) continue;
-        // Turn của user chứa nguyên văn prompt (hoặc ít nhất 80 ký tự đầu nếu
-        // giao diện thu gọn tin nhắn dài bằng "Read more").
-        if (promptPrefix && text.includes(promptPrefix)) continue;
-        return text;
-    }
-    const hasMarker = turns.some((turn) => turn.hasAttribute('data-znw-baseline'));
-    // Mốc còn đó nhưng chưa có turn mới → ChatGPT chưa phản hồi.
-    if (hasMarker) return '';
+    // Mốc baseline lưu qua node sống: vẫn đúng cả khi attribute bị ghi lên phần
+    // tử không phải turn article (fallback cạnh ô soạn thảo).
+    const markerNode = document.querySelector('[data-znw-baseline]') || window.__znwBaselineNode || null;
+    const isAfterMarker = (turn) => !markerNode || (
+        turn !== markerNode
+        && Boolean(markerNode.compareDocumentPosition(turn) & Node.DOCUMENT_POSITION_FOLLOWING)
+    );
 
-    // (2) Không có mốc (DOM đổi hẳn hoặc trang chuyển chat): cắt từ prompt đi.
+    // (1) Có mốc baseline → chỉ đọc turn nằm sau mốc, bỏ qua turn echo prompt.
+    if (markerNode) {
+        const newTurns = turns.filter(isAfterMarker);
+        for (let index = newTurns.length - 1; index >= 0; index--) {
+            const text = normalize(cleanText(newTurns[index]));
+            if (!text) continue;
+            if (isPromptEcho(text)) continue;
+            return text;
+        }
+        // Testid turn cũng có thể đã đổi: thử block .markdown nằm sau mốc.
+        const markdowns = [...document.querySelectorAll('.markdown')]
+            .filter(rendered)
+            .filter(isAfterMarker);
+        for (let index = markdowns.length - 1; index >= 0; index--) {
+            const text = normalize(cleanText(markdowns[index]));
+            if (text && !isPromptEcho(text)) return text;
+        }
+        // Mốc còn đó nhưng chưa có phản hồi mới → trả rỗng, không nhặt dữ liệu cũ.
+        return '';
+    }
+
+    // (2) Không có mốc (trang chuyển chat / DOM đổi hẳn): tìm turn user chứa
+    // prompt, chỉ lấy văn bản của các turn ĐỨNG SAU nó (phản hồi ChatGPT).
+    let userTurnIndex = -1;
+    for (let index = 0; index < turns.length; index++) {
+        const text = normalize(cleanText(turns[index]));
+        if (text && text.includes(promptPrefix)) userTurnIndex = index;
+    }
+    if (userTurnIndex >= 0) {
+        for (let index = userTurnIndex + 1; index < turns.length; index++) {
+            const text = normalize(cleanText(turns[index]));
+            if (text && !isPromptEcho(text)) return text;
+        }
+        return '';
+    }
+
+    // (3) Không có cấu trúc turn: cắt văn bản vùng hội thoại. Ưu tiên cắt sau
+    // NGUYÊN VĂN prompt; nếu chỉ khớp 80 ký tự đầu (turn user bị thu gọn) thì
+    // gọt tiếp phần đuôi còn là echo của prompt trước khi trả kết quả.
     if (promptPrefix) {
         const main = document.querySelector('main') || document.body;
         const bodyText = normalize(cleanText(main));
-        const idx = bodyText.lastIndexOf(promptPrefix);
-        if (idx >= 0) {
-            let tail = bodyText.slice(idx + promptPrefix.length);
+        let cutAt = -1;
+        if (normalizedPrompt.length >= 30) {
+            const fullIdx = bodyText.lastIndexOf(normalizedPrompt);
+            if (fullIdx >= 0) cutAt = fullIdx + normalizedPrompt.length;
+        }
+        if (cutAt < 0) {
+            const prefixIdx = bodyText.lastIndexOf(promptPrefix);
+            if (prefixIdx >= 0) cutAt = prefixIdx + promptPrefix.length;
+        }
+        if (cutAt >= 0) {
+            let tail = bodyText.slice(cutAt);
+            while (tail && normalizedPrompt.slice(promptPrefix.length).startsWith(tail.slice(0, 40))) {
+                tail = tail.slice(40).trim();
+            }
             tail = tail.replace(/^(?:ChatGPT\s*(?:đã nói|said)|Assistant)\s*[:：]\s*/i, '');
             tail = tail.replace(/^(?:…|\.\.\.)?\s*(?:Read more|Xem thêm)\b[^#\n]*/i, '');
             // Bỏ dòng khước từ cố định cuối trang ChatGPT.
@@ -208,11 +264,11 @@ export const getLatestChatGPTTextFromDom = async ({ page, submittedPrompt = '' }
         }
     }
 
-    // (3) Cuối cùng: block markdown cuối cùng hiển thị trên trang.
+    // (4) Cuối cùng: block markdown cuối cùng hiển thị, bỏ qua block echo prompt.
     const markdowns = [...document.querySelectorAll('.markdown')].filter(rendered);
     for (let index = markdowns.length - 1; index >= 0; index--) {
         const text = normalize(cleanText(markdowns[index]));
-        if (text) return text;
+        if (text && !isPromptEcho(text)) return text;
     }
     return '';
 }, { submittedPrompt });
