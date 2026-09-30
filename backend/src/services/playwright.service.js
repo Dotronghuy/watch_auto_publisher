@@ -311,6 +311,15 @@ const getRandomSampleImageLocal = () => {
 const settingsPath = path.join(__dirname, '../../config/settings.json');
 const CHATGPT_CONTENT_PROJECT_URL = 'https://chatgpt.com/g/g-p-6a70189272548191ba378566fbdc544b/project';
 const CHATGPT_IMAGE_PROJECT_URL = 'https://chatgpt.com/g/g-p-6a701915014081919f90f09828c54131/project';
+// Đồng bộ với PROMPT_SELECTORS trong chatgpt-browser.js (findChatGPTPrompt).
+// Vẫn dùng ở vòng lặp vẽ ảnh khi cần tìm lại ô nhập sau mỗi ảnh / khi mở chat mới.
+const PROMPT_SELECTORS = [
+    '#prompt-textarea[contenteditable="true"]',
+    'textarea#prompt-textarea',
+    '[contenteditable="true"][data-lexical-editor]',
+    '[contenteditable="true"][role="textbox"]',
+    'main [contenteditable="true"]',
+];
 
 const getSettingValue = (key) => {
     try {
@@ -953,6 +962,12 @@ export const generateBackgroundOnChatGPT = async (imagePath, promptsArray, abort
                         const activeInput = inputs[inputs.length - 1];
                         await activeInput.setInputFiles(filesToUpload);
                         console.log(`✅ Đã chọn ${filesToUpload.length} file ảnh bằng cách ẩn.`);
+                    } else {
+                        throw new Error(
+                            'Không tìm thấy ô tải file (input[type="file"]) trên ChatGPT để đính kèm ảnh. ' +
+                            'Giao diện ChatGPT có thể đã thay đổi hoặc tài khoản bị giới hạn đính kèm. ' +
+                            'Đã dừng để tránh gửi prompt thiếu ảnh sản phẩm.'
+                        );
                     }
                 }
             }
@@ -1186,6 +1201,7 @@ CRITICAL RULES:
             let imageRetryCount = 0;
             let lastTryAgainMs = 0;
             let chatgptFailureDetected = false;
+            let noResponseDetected = false; // ChatGPT không phản hồi/không có ảnh nào sau ~4 phút
             let firstGeneratingMs = 0; // Timestamp lần đầu phát hiện "One last tweak" / "Đang tạo ảnh"
             for (let attempt = 0; attempt < MAX_IMAGE_WAIT_ATTEMPTS; attempt++) {
                 if (abortSignal && abortSignal.aborted) throw new Error('Abort requested');
@@ -1196,6 +1212,28 @@ CRITICAL RULES:
                 await page.waitForTimeout(200 + Math.floor(Math.random() * 300));
                 // Anti-bot: Thỉnh thoảng di chuột/cuộn trang trong lúc chờ
                 if (attempt > 0 && attempt % 3 === 0) await humanBehavior.idleBehavior(page);
+
+                // ── Fail-fast: ChatGPT đăng xuất / chuyển trang đăng nhập ──
+                // Chat mới cũng không tự phục hồi được, nên báo lỗi rõ thay vì chờ hết 8 phút.
+                if (attempt > 0 && attempt % 6 === 0) {
+                    try {
+                        if (page.isClosed()) {
+                            throw new Error('Target page, context or browser has been closed');
+                        }
+                        const pageUrl = page.url();
+                        if (/auth\.openai\.com|chatgpt\.com\/auth|login\?/i.test(pageUrl)) {
+                            throw new Error('ChatGPT đã chuyển sang trang đăng nhập trong lúc tạo ảnh. Vui lòng đăng nhập lại ChatGPT trong Cài đặt AI rồi chạy lại.');
+                        }
+                        const hasLoginButton = await page.getByText('Log in', { exact: true }).first()
+                            .isVisible({ timeout: 300 }).catch(() => false);
+                        if (hasLoginButton) {
+                            throw new Error('ChatGPT đã đăng xuất trong lúc tạo ảnh. Vui lòng đăng nhập lại ChatGPT trong Cài đặt AI rồi chạy lại.');
+                        }
+                    } catch (error) {
+                        if (/đăng nhập|đăng xuất/.test(error.message) || isBrowserClosedError(error)) throw error;
+                        // Bỏ qua lỗi evaluate tạm thời; vòng lặp tiếp tục chờ ảnh.
+                    }
+                }
 
                 // ── Detect "Image generation failed" từ ChatGPT ──
                 // Chỉ kiểm tra sau 20 giây kể từ lần click "Try again" cuối cùng.
@@ -1271,6 +1309,11 @@ CRITICAL RULES:
                     }
                 } catch (e) {}
                 
+                // ── Detect giới hạn upload của ChatGPT trong lúc chờ ảnh ──
+                if (attempt % 3 === 0 && await isChatGPTUploadLimitVisible(page)) {
+                    throw createChatGPTUploadLimitError();
+                }
+
                 // Quét tìm ảnh có tọa độ Y lớn hơn ảnh cũ
                 try {
                     const isStillGenerating = await page.getByText(/One last tweak|Creating image|Generating image|Making image|Đang tạo ảnh|Đang chỉnh/i).last().isVisible({ timeout: 300 }).catch(() => false);
@@ -1329,7 +1372,23 @@ CRITICAL RULES:
                             `images=${scanResult.total}, valid=${scanResult.validCount}, lastImg=${bestText}`
                         );
                     }
-                } catch (e) {}
+
+                    // ── Sau ~4 phút không có phản hồi assistant và không có ảnh nào ──
+                    // trong DOM thì khả năng cao prompt chưa được gửi hoặc giao diện đã đổi.
+                    // Thoát sớm để luồng mở chat mới thử lại, thay vì chờ đủ 8 phút.
+                    if (!scanResult.target && !isStillGenerating
+                        && scanResult.newAssistantMessageCount === 0
+                        && scanResult.total === 0
+                        && attempt >= 48) {
+                        noResponseDetected = true;
+                        console.log(`❌ Ảnh ${i + 1}: Đã chờ ~4 phút nhưng ChatGPT không phản hồi và không có ảnh nào. Thoát chờ để mở chat mới...`);
+                        liveLog(`⚠️ Ảnh ${i + 1}: ChatGPT không phản hồi sau ~4 phút. Đang mở chat mới thử lại...`, 'warning', 'ChatGPT');
+                        break;
+                    }
+                } catch (error) {
+                    if (error?.code === 'CHATGPT_UPLOAD_LIMIT' || isBrowserClosedError(error)) throw error;
+                    // Bỏ qua lỗi evaluate tạm thời; vòng lặp tiếp tục chờ ảnh.
+                }
                 
                 if (targetImgSrc) break;
             }
@@ -1364,7 +1423,9 @@ CRITICAL RULES:
                     i--; // Lùi biến i để vòng lặp chạy lại đúng ảnh này
                     continue; // Bỏ qua đoạn lưu ảnh bên dưới, quay lại đầu vòng lặp
                 } else {
-                    const reason = chatgptFailureDetected
+                    const reason = noResponseDetected
+                        ? 'ChatGPT không phản hồi hoặc không tạo ảnh trong ~4 phút chờ'
+                        : chatgptFailureDetected
                         ? 'ChatGPT báo lỗi tạo ảnh sau nhiều lần thử lại'
                         : imageRetryCount > 0 
                         ? `ChatGPT tạo ảnh thất bại sau ${imageRetryCount} lần thử` 

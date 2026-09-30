@@ -188,6 +188,7 @@ export const submitChatGPTPrompt = async ({
         log('[Playwright] ✅ Đã xác nhận tin nhắn user mới chứa đúng prompt ChatGPT.');
     };
 
+    let sentAttempted = false;
     for (let attempt = 0; attempt < 3; attempt++) {
         await check();
         if (await acknowledged()) { confirmed(); return; }
@@ -207,6 +208,7 @@ export const submitChatGPTPrompt = async ({
         // An empty/remounted composer alone is NOT a submission acknowledgement.
         // Do not refill/resend when it clears: the request may already be in flight.
         if (draft === expectedText) {
+            sentAttempted = true;
             try {
                 if (sendButton) {
                     log(`[Playwright] Đang bấm nút Gửi trong ô ChatGPT (lần ${attempt + 1})...`);
@@ -227,7 +229,17 @@ export const submitChatGPTPrompt = async ({
             await page.waitForTimeout(pollInterval);
         } while (Date.now() < deadline);
         currentPrompt = await findChatGPTPrompt(page, 1000);
-        if (!currentPrompt || normalize(await readDraft(currentPrompt)) !== expectedText) break;
+        const currentDraft = currentPrompt ? normalize(await readDraft(currentPrompt)) : '';
+        if (currentDraft !== expectedText) {
+            // Ô nhập trống sau khi đã bấm gửi là tín hiệu mạnh tin nhắn ĐÃ được gửi.
+            // Không xác nhận được user-turn qua DOM (selector đổi, render chậm) không
+            // được dừng cả luồng; caller sẽ tự chờ phản hồi assistant với timeout riêng.
+            if (sentAttempted) {
+                log('[Playwright] ⚠️ Chưa xác nhận được user-turn mới trong DOM, nhưng ô nhập đã trống sau khi gửi. Coi như tin nhắn đã được gửi và tiếp tục chờ phản hồi...');
+                return;
+            }
+            break;
+        }
     }
     throw Object.assign(new Error(
         'Không xác nhận được tin nhắn user mới chứa prompt sau khi gửi ChatGPT. Dừng chờ kết quả để tránh timeout hoặc gửi trùng.',
