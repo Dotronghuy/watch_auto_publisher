@@ -1765,6 +1765,12 @@ export const autoPublishRoutine = async (retryContext = null, runOptions = {}) =
             liveLog('⏹️ Đã dừng tiến trình theo yêu cầu.', 'error', 'System');
             throw pwError;
           }
+          // Lỗi chí mạng (bot-challenge, đăng nhập...) → dừng cả Auto Publish vì
+          // mọi SKU kế tiếp cũng sẽ thất bại với cùng nguyên nhân.
+          if (pwError?.isFatal) {
+            liveLog(`🛑 Dừng Auto Publish: ${pwError.message}`, 'error', 'ChatGPT');
+            throw pwError;
+          }
           pwError.isAiSkuFailure = true;
           pwError.failedSku = selectedSku?.name || null;
           liveLog(

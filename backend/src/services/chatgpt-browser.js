@@ -167,6 +167,8 @@ export const submitChatGPTPrompt = async ({
     page, promptLocator, log = () => {}, checkStop, assertReady = async () => {},
     confirmationTimeout = 20_000, buttonTimeout = 15_000, pollInterval = 300,
 }) => {
+    // Trả về 'confirmed' khi xác nhận được user-turn mới qua DOM, 'assumed' khi
+    // chỉ dựa vào ô nhập trống sau khi bấm gửi. Caller log đúng trạng thái.
     const baseline = await readChatGPTTurns(page);
     const expectedText = normalize(await readDraft(promptLocator));
     if (!expectedText) throw Object.assign(new Error('Ô nhập ChatGPT đang trống trước khi gửi.'), { code: 'CHATGPT_EMPTY_PROMPT' });
@@ -186,18 +188,19 @@ export const submitChatGPTPrompt = async ({
     };
     const confirmed = () => {
         log('[Playwright] ✅ Đã xác nhận tin nhắn user mới chứa đúng prompt ChatGPT.');
+        return 'confirmed';
     };
 
     let sentAttempted = false;
     for (let attempt = 0; attempt < 3; attempt++) {
         await check();
-        if (await acknowledged()) { confirmed(); return; }
+        if (await acknowledged()) return confirmed();
         let currentPrompt = await findChatGPTPrompt(page, 1000);
         let sendButton = null;
         const buttonDeadline = Date.now() + (attempt === 0 ? buttonTimeout : Math.min(buttonTimeout, 4000));
         do {
             await check();
-            if (await acknowledged()) { confirmed(); return; }
+            if (await acknowledged()) return confirmed();
             currentPrompt = await findChatGPTPrompt(page, 500);
             if (currentPrompt) sendButton = await findSendButton(currentPrompt);
             if (sendButton) break;
@@ -225,7 +228,7 @@ export const submitChatGPTPrompt = async ({
         const deadline = Date.now() + confirmationTimeout;
         do {
             await check();
-            if (await acknowledged()) { confirmed(); return; }
+            if (await acknowledged()) return confirmed();
             await page.waitForTimeout(pollInterval);
         } while (Date.now() < deadline);
         currentPrompt = await findChatGPTPrompt(page, 1000);
@@ -236,7 +239,7 @@ export const submitChatGPTPrompt = async ({
             // được dừng cả luồng; caller sẽ tự chờ phản hồi assistant với timeout riêng.
             if (sentAttempted) {
                 log('[Playwright] ⚠️ Chưa xác nhận được user-turn mới trong DOM, nhưng ô nhập đã trống sau khi gửi. Coi như tin nhắn đã được gửi và tiếp tục chờ phản hồi...');
-                return;
+                return 'assumed';
             }
             break;
         }

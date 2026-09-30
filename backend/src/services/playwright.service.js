@@ -1180,17 +1180,25 @@ CRITICAL RULES:
                 `${generationBaseline.userMessageCount} tin nhắn user.`
             );
 
-            await submitChatGPTPrompt({
+            const submissionStatus = await submitChatGPTPrompt({
                 page,
                 promptLocator,
                 log: console.log,
                 checkStop: () => abortSignal?.aborted,
             });
-            liveLog(
-                `✅ Ảnh ${i + 1}: Thumbnail và tin nhắn user đều đã được xác nhận.`,
-                'success',
-                'ChatGPT',
-            );
+            if (submissionStatus === 'confirmed') {
+                liveLog(
+                    `✅ Ảnh ${i + 1}: Thumbnail và tin nhắn user đều đã được xác nhận.`,
+                    'success',
+                    'ChatGPT',
+                );
+            } else {
+                liveLog(
+                    `⚠️ Ảnh ${i + 1}: Đã bấm gửi nhưng chưa xác nhận được user-turn trong DOM. Vẫn tiếp tục chờ phản hồi ChatGPT...`,
+                    'warning',
+                    'ChatGPT',
+                );
+            }
 
             console.log(`⏳ Đang chờ ChatGPT vẽ ảnh ${i + 1} (có thể mất 60-100 giây)...`);
 
@@ -1222,15 +1230,27 @@ CRITICAL RULES:
                         }
                         const pageUrl = page.url();
                         if (/auth\.openai\.com|chatgpt\.com\/auth|login\?/i.test(pageUrl)) {
-                            throw new Error('ChatGPT đã chuyển sang trang đăng nhập trong lúc tạo ảnh. Vui lòng đăng nhập lại ChatGPT trong Cài đặt AI rồi chạy lại.');
+                            throw Object.assign(
+                                new Error('ChatGPT đã chuyển sang trang đăng nhập trong lúc tạo ảnh. Vui lòng đăng nhập lại ChatGPT trong Cài đặt AI rồi chạy lại.'),
+                                { code: 'CHATGPT_LOGIN_REQUIRED', isFatal: true },
+                            );
                         }
                         const hasLoginButton = await page.getByText('Log in', { exact: true }).first()
                             .isVisible({ timeout: 300 }).catch(() => false);
                         if (hasLoginButton) {
-                            throw new Error('ChatGPT đã đăng xuất trong lúc tạo ảnh. Vui lòng đăng nhập lại ChatGPT trong Cài đặt AI rồi chạy lại.');
+                            throw Object.assign(
+                                new Error('ChatGPT đã đăng xuất trong lúc tạo ảnh. Vui lòng đăng nhập lại ChatGPT trong Cài đặt AI rồi chạy lại.'),
+                                { code: 'CHATGPT_LOGIN_REQUIRED', isFatal: true },
+                            );
+                        }
+                        if (await isChatGPTBotChallengeVisible(page)) {
+                            await saveChatGPTDebugScreenshot(page, 'bot-challenge');
+                            throw createChatGPTBotChallengeError();
                         }
                     } catch (error) {
-                        if (/đăng nhập|đăng xuất/.test(error.message) || isBrowserClosedError(error)) throw error;
+                        if (/đăng nhập|đăng xuất|xác minh|CAPTCHA/i.test(error.message)
+                            || error?.code === 'CHATGPT_BOT_CHALLENGE'
+                            || isBrowserClosedError(error)) throw error;
                         // Bỏ qua lỗi evaluate tạm thời; vòng lặp tiếp tục chờ ảnh.
                     }
                 }
@@ -1373,12 +1393,13 @@ CRITICAL RULES:
                         );
                     }
 
-                    // ── Sau ~4 phút không có phản hồi assistant và không có ảnh nào ──
-                    // trong DOM thì khả năng cao prompt chưa được gửi hoặc giao diện đã đổi.
+                    // ── Sau ~4 phút không có phản hồi assistant ──
+                    // Ảnh đính kèm trong tin nhắn user luôn khiến total > 0 nên không
+                    // thể dựa vào total === 0. Không có assistant-turn mới suốt ~4 phút
+                    // nghĩa là prompt chưa được xử lý (chưa gửi hoặc bị chặn ngầm).
                     // Thoát sớm để luồng mở chat mới thử lại, thay vì chờ đủ 8 phút.
                     if (!scanResult.target && !isStillGenerating
                         && scanResult.newAssistantMessageCount === 0
-                        && scanResult.total === 0
                         && attempt >= 48) {
                         noResponseDetected = true;
                         console.log(`❌ Ảnh ${i + 1}: Đã chờ ~4 phút nhưng ChatGPT không phản hồi và không có ảnh nào. Thoát chờ để mở chat mới...`);
@@ -1398,6 +1419,7 @@ CRITICAL RULES:
                     fullRetryCountForImage++;
                     console.log(`❌ Ảnh ${i + 1} bị lỗi/kẹt. Đang mở CHAT MỚI để thử lại từ đầu (Lần 2)...`);
                     liveLog(`⚠️ Ảnh ${i + 1} lỗi. Đang tạo Chat mới và gửi lại yêu cầu vẽ ảnh...`, 'warning', 'ChatGPT');
+                    await saveChatGPTDebugScreenshot(page, `anh-${i + 1}-retry-newchat`);
                     
                     try {
                         await page.goto(targetUrl, { waitUntil: 'domcontentloaded' });
@@ -1423,6 +1445,7 @@ CRITICAL RULES:
                     i--; // Lùi biến i để vòng lặp chạy lại đúng ảnh này
                     continue; // Bỏ qua đoạn lưu ảnh bên dưới, quay lại đầu vòng lặp
                 } else {
+                    await saveChatGPTDebugScreenshot(page, `anh-${i + 1}-fail`);
                     const reason = noResponseDetected
                         ? 'ChatGPT không phản hồi hoặc không tạo ảnh trong ~4 phút chờ'
                         : chatgptFailureDetected
@@ -1526,6 +1549,50 @@ const isChatGPTUploadLimitVisible = async (page) => {
     if (isChatGPTUploadLimitText(statusText)) return true;
     const bodyText = await page.locator('body').innerText().catch(() => '');
     return isChatGPTUploadLimitText(bodyText);
+};
+
+const createChatGPTBotChallengeError = () => {
+    const error = new Error(
+        'ChatGPT đang hiển thị màn hình xác minh chống bot (CAPTCHA/Cloudflare). '
+        + 'Tool không thể tự vượt qua. Hãy mở ChatGPT (Cài đặt AI), tự giải CAPTCHA, '
+        + 'rồi chạy lại Auto Publish.'
+    );
+    error.code = 'CHATGPT_BOT_CHALLENGE';
+    error.isFatal = true;
+    return error;
+};
+
+const isChatGPTBotChallengeVisible = async (page) => {
+    try {
+        const challengeFrame = page.locator([
+            'iframe[src*="challenges.cloudflare.com"]',
+            'iframe[src*="hcaptcha"]',
+            'iframe[title*="hCaptcha" i]',
+            '[data-testid*="challenge" i]',
+            '[id*="turnstile"]',
+        ].join(', ')).first();
+        if (await challengeFrame.isVisible({ timeout: 300 }).catch(() => false)) return true;
+        return await page.getByText(
+            /verify you are human|prove you are human|xác minh bạn là người|kiểm tra bạn là người/i
+        ).first().isVisible({ timeout: 300 }).catch(() => false);
+    } catch (error) {
+        return false;
+    }
+};
+
+const saveChatGPTDebugScreenshot = async (page, label) => {
+    try {
+        const dir = path.join(__dirname, '../../debug_screenshots');
+        fs.mkdirSync(dir, { recursive: true });
+        const file = path.join(dir, `chatgpt-${label}-${Date.now()}.png`);
+        await page.screenshot({ path: file, fullPage: false });
+        console.log(`📸 Đã lưu ảnh chụp màn hình chẩn đoán: ${file}`);
+        liveLog(`📸 Đã lưu ảnh chẩn đoán trạng thái ChatGPT: ${path.basename(file)}`, 'info', 'ChatGPT');
+        return file;
+    } catch (error) {
+        console.log(`⚠️ Không chụp được ảnh chẩn đoán: ${error.message}`);
+        return null;
+    }
 };
 
 const assertChatGPTReady = async (page) => {
