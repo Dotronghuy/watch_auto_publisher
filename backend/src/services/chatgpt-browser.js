@@ -129,6 +129,57 @@ export const getLatestChatGPTAssistantTextAfterBaseline = async ({ page, baselin
     return '';
 };
 
+// Đánh dấu turn cuối cùng hiện tại làm mốc trước khi gửi. Fallback chỉ đọc các
+// turn nằm sau mốc này để không bao giờ nhặt nhầm content cũ của tin nhắn trước.
+export const markChatGPTLatestTurnAsBaseline = (page) => page.evaluate(() => {
+    const turns = [...document.querySelectorAll('[data-testid^="conversation-turn-"]')];
+    const last = turns.at(-1);
+    if (last) last.setAttribute('data-znw-baseline', '1');
+}).catch(() => {});
+
+// Fallback DOM-agnostic: selector role (data-message-author-role/data-turn) có
+// thể thay đổi theo bản cập nhật giao diện ChatGPT, nhưng các turn hội thoại
+// luôn được render thành article[data-testid^="conversation-turn-"]. Lấy text
+// turn cuối cùng sau mốc baseline, bỏ qua turn chứa đúng prompt vừa gửi.
+export const getLatestChatGPTTextFromDom = async ({ page, submittedPrompt = '' }) => page.evaluate(({ submittedPrompt }) => {
+    const normalize = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+    const cleanText = (root) => {
+        const clone = root.cloneNode(true);
+        clone.querySelectorAll('button, [role="button"], [data-testid*="citation" i], [data-testid*="source" i], [data-testid*="file" i], script, style')
+            .forEach((node) => node.remove());
+        clone.querySelectorAll('p, div, li, pre, h1, h2, h3, blockquote, br')
+            .forEach((node) => node.append('\n'));
+        return (clone.textContent || '').trim();
+    };
+    const rendered = (element) => {
+        const style = window.getComputedStyle(element);
+        return style.display !== 'none' && style.visibility !== 'hidden';
+    };
+    const turns = [...document.querySelectorAll('[data-testid^="conversation-turn-"]')]
+        .filter(rendered);
+    const normalizedPrompt = normalize(submittedPrompt);
+    for (let index = turns.length - 1; index >= 0; index--) {
+        // Mọi turn từ mốc baseline trở về trước là nội dung cũ — dừng ngay.
+        if (turns[index].hasAttribute('data-znw-baseline')) break;
+        const text = normalize(cleanText(turns[index]));
+        if (!text) continue;
+        // Prompt gửi đi (đủ dài) xuất hiện nguyên văn trong turn của user.
+        if (normalizedPrompt.length >= 30 && text.includes(normalizedPrompt)) continue;
+        return text;
+    }
+    // Không còn turn mới — nếu không thấy mốc baseline (DOM đổi hẳn) thì thử
+    // block markdown cuối cùng hiển thị trên trang như phương án cuối cùng.
+    const hasMarker = turns.some((turn) => turn.hasAttribute('data-znw-baseline'));
+    if (!hasMarker) {
+        const markdowns = [...document.querySelectorAll('.markdown')].filter(rendered);
+        for (let index = markdowns.length - 1; index >= 0; index--) {
+            const text = normalize(cleanText(markdowns[index]));
+            if (text) return text;
+        }
+    }
+    return '';
+}, { submittedPrompt });
+
 export const isChatGPTGenerating = async (page) => {
     const buttons = page.locator(STOP_SELECTOR);
     for (let index = 0; index < await buttons.count(); index++) {

@@ -15,7 +15,9 @@ import {
     findChatGPTPrompt,
     getChatGPTAssistantMessageCount,
     getLatestChatGPTAssistantTextAfterBaseline,
+    getLatestChatGPTTextFromDom,
     isChatGPTGenerating,
+    markChatGPTLatestTurnAsBaseline,
     stopChatGPTGenerationIfVisible,
     submitChatGPTPrompt as submitVerifiedChatGPTPrompt,
 } from './chatgpt-browser.js';
@@ -1826,6 +1828,7 @@ export const createChatGPTTextSession = async ({
                 }
 
                 const baselineAssistantMessageCount = await getChatGPTAssistantMessageCount(page);
+                await markChatGPTLatestTurnAsBaseline(page);
 
                 if (image?.buffer) {
                     log('[Playwright] Đang đính kèm ảnh sản phẩm vào ChatGPT...');
@@ -1872,12 +1875,16 @@ export const createChatGPTTextSession = async ({
                     }
 
                     await page.waitForTimeout(2000);
+                    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight)).catch(() => {});
                     const isGenerating = await isChatGPTGenerating(page);
 
-                    const text = await getLatestChatGPTAssistantTextAfterBaseline({
+                    let text = await getLatestChatGPTAssistantTextAfterBaseline({
                         page,
                         baselineAssistantMessageCount,
                     });
+                    if (!text) {
+                        text = await getLatestChatGPTTextFromDom({ page, submittedPrompt: prompt });
+                    }
                     const cleanText = text?.trim() || '';
                     if (!cleanText) {
                         if (isGenerating) continue;
@@ -1892,8 +1899,13 @@ export const createChatGPTTextSession = async ({
                     if (!isGenerating && stableAssistantTextPolls >= 1) {
                         return cleanText;
                     }
+                    if (isGenerating && stableAssistantTextPolls >= 3) {
+                        log('[Playwright] ⚠️ Nút Stop vẫn hiển thị nhưng nội dung đã ổn định. Chấp nhận kết quả.');
+                        return cleanText;
+                    }
                 }
 
+                await saveChatGPTDebugScreenshot(page, 'content-json-timeout');
                 throw new Error('ChatGPT phản hồi quá thời gian 5 phút.');
             };
 
@@ -2843,6 +2855,7 @@ export const generateContentOnChatGPT = async (prompt, type, imagePath = null) =
             });
         }
         const baselineAssistantMessageCount = await getChatGPTAssistantMessageCount(page);
+        await markChatGPTLatestTurnAsBaseline(page);
 
         console.log('✍️ Đang gõ prompt text...');
         await promptLocator.click();
@@ -2875,13 +2888,21 @@ export const generateContentOnChatGPT = async (prompt, type, imagePath = null) =
         for (let attempt = 0; attempt < 60; attempt++) {
             await page.waitForTimeout(5000);
             await assertChatGPTReady(page);
+            // Cuộn xuống cuối để ChatGPT render turn mới (ảo hóa DOM có thể
+            // khiến turn ngoài viewport không được vẽ nên bị coi là ẩn).
+            await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight)).catch(() => {});
             // Đợi cho đến khi ChatGPT không còn nút Stop generating nữa (tức là đã viết xong)
             const isGenerating = await isChatGPTGenerating(page);
             
-            const text = await getLatestChatGPTAssistantTextAfterBaseline({
+            let text = await getLatestChatGPTAssistantTextAfterBaseline({
                 page,
                 baselineAssistantMessageCount,
             });
+            // Fallback DOM-agnostic: selector role có thể đổi theo giao diện
+            // ChatGPT nhưng turn hội thoại vẫn là article conversation-turn-*.
+            if (!text) {
+                text = await getLatestChatGPTTextFromDom({ page, submittedPrompt: prompt });
+            }
             const cleanText = sanitizeGeneratedSocialContent(text);
             if (!cleanText) {
                 if (isGenerating) continue; // Vẫn đang stream chữ nhưng chưa thấy text mới
@@ -2901,8 +2922,13 @@ export const generateContentOnChatGPT = async (prompt, type, imagePath = null) =
                 console.log('✅ Đã lấy xong nội dung!');
                 return cleanText;
             }
+            if (isGenerating && stableAssistantTextPolls >= 3) {
+                console.log('⚠️ Nút Stop vẫn hiển thị nhưng nội dung đã ổn định ~15s. Chấp nhận kết quả.');
+                return cleanText;
+            }
         }
 
+        await saveChatGPTDebugScreenshot(page, 'content-timeout');
         throw new Error('ChatGPT đã nhận prompt nhưng chưa có nội dung hoàn tất sau 5 phút (có thể vẫn đang suy luận hoặc giao diện phản hồi đã thay đổi).');
 
     } catch (error) {
@@ -3081,6 +3107,7 @@ IMPORTANT:
 - If a future product watch has a leather, rubber, or silicone strap while this reference image shows a steel bracelet, the future product strap must still remain full-length, continuous, and uncropped.`;
 
                 const baselineAssistantMessageCount = await getChatGPTAssistantMessageCount(page);
+                await markChatGPTLatestTurnAsBaseline(page);
 
                 await promptLocator.click();
                 await page.waitForTimeout(300);
@@ -3097,12 +3124,16 @@ IMPORTANT:
                 let stableAssistantTextPolls = 0;
                 for (let attempt = 0; attempt < 40; attempt++) {
                     await page.waitForTimeout(5000);
+                    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight)).catch(() => {});
                     const isGenerating = await isChatGPTGenerating(page);
 
-                    const text = await getLatestChatGPTAssistantTextAfterBaseline({
+                    let text = await getLatestChatGPTAssistantTextAfterBaseline({
                         page,
                         baselineAssistantMessageCount,
                     });
+                    if (!text) {
+                        text = await getLatestChatGPTTextFromDom({ page, submittedPrompt: analyzePrompt });
+                    }
                     const cleanText = text?.trim() || '';
                     if (!cleanText) {
                         if (isGenerating) continue;
@@ -3114,13 +3145,15 @@ IMPORTANT:
                         lastAssistantText = cleanText;
                         stableAssistantTextPolls = 0;
                     }
-                    if (!isGenerating && stableAssistantTextPolls >= 1) {
+                    if ((!isGenerating && stableAssistantTextPolls >= 1)
+                        || (isGenerating && stableAssistantTextPolls >= 3)) {
                         responseText = cleanText;
                         break;
                     }
                 }
 
                 if (!responseText) {
+                    await saveChatGPTDebugScreenshot(page, 'analyze-timeout');
                     console.log(`⚠️ Timeout phân tích ảnh ${imgFile}`);
                     continue;
                 }
