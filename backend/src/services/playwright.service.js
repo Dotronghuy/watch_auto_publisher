@@ -12,6 +12,7 @@ import {
     hasRequiredAttachmentPreviews,
 } from './chatgpt-submission-policy.js';
 import {
+    closeChatGPTFeedbackDialogIfVisible,
     diagnoseChatGPTDom,
     findChatGPTPrompt,
     getChatGPTAssistantMessageCount,
@@ -906,6 +907,11 @@ export const generateBackgroundOnChatGPT = async (imagePath, promptsArray, abort
                 currentSampleImage = getRandomSampleImageLocal();
             }
 
+            // Đóng modal "Chia sẻ góp ý" còn sót từ lần tạo ảnh trước (chặn click nếu không đóng)
+            if (await closeChatGPTFeedbackDialogIfVisible(page)) {
+                console.log('🧹 Đã tự đóng modal góp ý của ChatGPT trước khi xử lý ảnh tiếp theo.');
+            }
+
             console.log('📤 Bắt đầu tải ảnh lên bằng cách mô phỏng click như người thật...');
             const filesToUpload = [];
             const copyToUniqueTemp = (srcPath) => {
@@ -1498,6 +1504,12 @@ CRITICAL RULES:
             console.log(`✅ Đã lưu ảnh ${i + 1} thành công (đã xóa metadata AI): ${path.basename(outputPath)}`);
             
             outputPaths.push(outputPath);
+            
+            // Modal "Chia sẻ góp ý" thường xuất hiện ngay khi ảnh vừa render xong.
+            // Đóng ngay để không chặn thao tác ở ảnh kế tiếp.
+            if (await closeChatGPTFeedbackDialogIfVisible(page)) {
+                console.log('🧹 Đã tự đóng modal góp ý của ChatGPT sau khi lưu ảnh.');
+            }
             
             // Anti-bot: Nghỉ ngơi giữa các ảnh (nếu còn ảnh tiếp theo)
             if (i < count - 1) {

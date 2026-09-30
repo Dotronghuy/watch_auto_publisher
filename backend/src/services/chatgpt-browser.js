@@ -247,6 +247,36 @@ export const stopChatGPTGenerationIfVisible = async (page) => {
     }
 };
 
+// ChatGPT hiện modal góp ý ("Chia sẻ góp ý") sau mỗi lần tạo ảnh. Modal này chặn
+// toàn bộ thao tác chuột ở ảnh kế tiếp nên phải đóng ngay khi phát hiện.
+// Chỉ đóng bằng nút X hoặc phím Escape — tuyệt đối không bấm nút "Gửi".
+export const closeChatGPTFeedbackDialogIfVisible = async (page) => {
+    try {
+        const dialog = page.locator([
+            '[role="dialog"]:has-text("Chia sẻ góp ý")',
+            '[role="dialog"]:has-text("Share feedback")',
+            '[role="dialog"]:has-text("Chia sẻ chi tiết")',
+            '[role="dialog"]:has-text("Share details")',
+        ].join(', ')).first();
+        if (!(await dialog.isVisible({ timeout: 500 }).catch(() => false))) return false;
+
+        const closeButton = dialog.locator([
+            'button[aria-label="Close"]',
+            'button[aria-label="Đóng"]',
+            '[data-testid="close-button"]',
+        ].join(', ')).first();
+        if (await closeButton.isVisible({ timeout: 500 }).catch(() => false)) {
+            await closeButton.click({ force: true }).catch(() => {});
+        } else {
+            await page.keyboard.press('Escape');
+        }
+        await page.waitForTimeout(400);
+        return true;
+    } catch (error) {
+        return false;
+    }
+};
+
 const findSendButton = async (promptLocator) => {
     // Never click another form's submit button (search/share/project dialogs).
     const container = promptLocator.locator('xpath=ancestor::*[self::form or @data-type="unified-composer" or @data-testid="composer"][1]');
