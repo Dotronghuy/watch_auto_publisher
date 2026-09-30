@@ -591,12 +591,25 @@ export const findNewAssistantImageCandidate = async (page, {
 
         const newAssistantMessages = assistantMessages.slice(baselineMessageCount);
         const latestUserMessage = Array.from(document.querySelectorAll(userSelector)).at(-1) || null;
+        // Fallback: khi selector role không còn khớp (0 tin nhắn user trong DOM),
+        // dùng mốc đánh dấu turn cuối trước khi gửi làm ranh giới.
+        const baselineMarker = document.querySelector('[data-znw-baseline]')
+            || window.__znwBaselineNode
+            || null;
         const followsLatestUserMessage = (element) => {
-            if (!latestUserMessage) return false;
-            return Boolean(
-                latestUserMessage.compareDocumentPosition(element)
-                & Node.DOCUMENT_POSITION_FOLLOWING
-            );
+            if (latestUserMessage) {
+                return Boolean(
+                    latestUserMessage.compareDocumentPosition(element)
+                    & Node.DOCUMENT_POSITION_FOLLOWING
+                );
+            }
+            if (baselineMarker) {
+                return Boolean(
+                    baselineMarker.compareDocumentPosition(element)
+                    & Node.DOCUMENT_POSITION_FOLLOWING
+                );
+            }
+            return false;
         };
         const isVisible = (element) => {
             const style = window.getComputedStyle(element);
@@ -1182,6 +1195,7 @@ CRITICAL RULES:
                 `${generationBaseline.assistantImageSrcs.length} ảnh cũ, ` +
                 `${generationBaseline.userMessageCount} tin nhắn user.`
             );
+            await markChatGPTLatestTurnAsBaseline(page);
 
             const submissionStatus = await submitChatGPTPrompt({
                 page,

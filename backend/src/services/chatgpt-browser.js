@@ -129,12 +129,29 @@ export const getLatestChatGPTAssistantTextAfterBaseline = async ({ page, baselin
     return '';
 };
 
-// Đánh dấu turn cuối cùng hiện tại làm mốc trước khi gửi. Fallback chỉ đọc các
-// turn nằm sau mốc này để không bao giờ nhặt nhầm content cũ của tin nhắn trước.
+// Đánh dấu turn cuối cùng hiện tại làm mốc trước khi gửi. Các luồng đọc chỉ
+// quan tâm nội dung nằm sau mốc này để không bao giờ nhặt nhầm dữ liệu cũ.
+// Ưu tiên turn article; nếu testid turn cũng đã đổi thì lấy phần tử đứng ngay
+// trước ô soạn thảo (chính là turn cuối của hội thoại).
 export const markChatGPTLatestTurnAsBaseline = (page) => page.evaluate(() => {
+    let lastTurn = null;
     const turns = [...document.querySelectorAll('[data-testid^="conversation-turn-"]')];
-    const last = turns.at(-1);
-    if (last) last.setAttribute('data-znw-baseline', '1');
+    lastTurn = turns.at(-1) || null;
+    if (!lastTurn) {
+        const prompt = document.querySelector('#prompt-textarea')
+            || document.querySelector('[contenteditable="true"][data-lexical-editor]')
+            || document.querySelector('main [contenteditable="true"]');
+        const composer = prompt?.closest('form')
+            || prompt?.closest('[data-testid="composer"]')
+            || prompt?.parentElement?.parentElement
+            || null;
+        lastTurn = composer?.previousElementSibling || null;
+    }
+    if (lastTurn) {
+        lastTurn.setAttribute('data-znw-baseline', '1');
+        // Tham chiếu node sống qua nhiều lần evaluate trong cùng trang.
+        window.__znwBaselineNode = lastTurn;
+    }
 }).catch(() => {});
 
 // Fallback DOM-agnostic: selector role (data-message-author-role/data-turn) và
