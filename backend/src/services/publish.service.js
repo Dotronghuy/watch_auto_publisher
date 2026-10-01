@@ -17,7 +17,9 @@ import { fileURLToPath } from 'url';
 import {
   assertGeneratedImagesAreNotInputReferences,
   generateBackgroundOnChatGPT,
-  generateContentOnChatGPT
+  generateContentOnChatGPT,
+  generateFbIgContentOnChatGPT,
+  getAiSessionStatus
 } from './playwright.service.js';
 import { PrismaClient } from '@prisma/client';
 const prisma = new PrismaClient();
@@ -41,6 +43,9 @@ import { createFacebookPermalinkResolver } from './facebookPermalink.service.js'
 import { buildPerformanceMultipliers, getToneInstructionText, selectContentTone } from './content-tone.service.js';
 import { reelPropagationDelayMs, waitForReelPropagation } from './mobile-reel-readiness.js';
 import { sanitizeGeneratedSocialContent } from './generated-content-sanitizer.js';
+import { validateSocialPostContent } from './content-validator.js';
+import { sendAlert } from './alert.service.js';
+import { cleanupDebugScreenshots } from './ui-watch.service.js';
 
 export { getToneInstructionText };
 
@@ -791,11 +796,8 @@ If Image 2 HAS a human hand or wrist, apply these MANDATORY rules:
               platform: 'crosspost'
             }, recentToneSelections, performanceByTone);
             const combinedPrompt = (fbPromptFinal || fallbackPrompt) + toneSelection.instruction;
-            const fbSpecificPrompt = combinedPrompt + "\n\n[LƯU Ý: HÃY CHỈ VIẾT NỘI DUNG CHO FACEBOOK DỰA THEO HƯỚNG DẪN TRÊN. BỎ QUA CÁC PHẦN KHÁC. TRẢ VỀ TRỰC TIẾP NỘI DUNG MÀ KHÔNG CẦN TIÊU ĐỀ ## FACEBOOK]";
-            const igSpecificPrompt = combinedPrompt + "\n\n[LƯU Ý: HÃY CHỈ VIẾT NỘI DUNG CHO INSTAGRAM DỰA THEO HƯỚNG DẪN TRÊN. BỎ QUA CÁC PHẦN KHÁC. TRẢ VỀ TRỰC TIẾP NỘI DUNG MÀ KHÔNG CẦN TIÊU ĐỀ ## INSTAGRAM]";
 
-            const accFbContent = await generateContentOnChatGPT(fbSpecificPrompt, 'fb', targetImgPathForGemini);
-            const accIgContent = await generateContentOnChatGPT(igSpecificPrompt, 'ig', targetImgPathForGemini);
+            const { fb: accFbContent, ig: accIgContent } = await generateFbIgContentOnChatGPT(combinedPrompt, targetImgPathForGemini);
             
             if (!firstFbContent) {
                firstFbContent = accFbContent;
@@ -1291,11 +1293,8 @@ export const trainContentOnly = async () => {
         platform: 'crosspost'
       }, recentToneSelections, performanceByTone);
       const combinedPrompt = (fbPromptFinal || fallbackPrompt) + toneSelection.instruction;
-      const fbSpecificPrompt = combinedPrompt + "\n\n[LƯU Ý: HÃY CHỈ VIẾT NỘI DUNG CHO FACEBOOK DỰA THEO HƯỚNG DẪN TRÊN. BỎ QUA CÁC PHẦN KHÁC. TRẢ VỀ TRỰC TIẾP NỘI DUNG MÀ KHÔNG CẦN TIÊU ĐỀ ## FACEBOOK]";
-      const igSpecificPrompt = combinedPrompt + "\n\n[LƯU Ý: HÃY CHỈ VIẾT NỘI DUNG CHO INSTAGRAM DỰA THEO HƯỚNG DẪN TRÊN. BỎ QUA CÁC PHẦN KHÁC. TRẢ VỀ TRỰC TIẾP NỘI DUNG MÀ KHÔNG CẦN TIÊU ĐỀ ## INSTAGRAM]";
 
-      const accFbContent = await generateContentOnChatGPT(fbSpecificPrompt, 'fb', targetImgPathForContent);
-      const accIgContent = await generateContentOnChatGPT(igSpecificPrompt, 'ig', targetImgPathForContent);
+      const { fb: accFbContent, ig: accIgContent } = await generateFbIgContentOnChatGPT(combinedPrompt, targetImgPathForContent);
       
       if (!firstFbContent) {
          firstFbContent = accFbContent;
@@ -1769,6 +1768,20 @@ export const autoPublishRoutine = async (retryContext = null, runOptions = {}) =
           // mọi SKU kế tiếp cũng sẽ thất bại với cùng nguyên nhân.
           if (pwError?.isFatal) {
             liveLog(`🛑 Dừng Auto Publish: ${pwError.message}`, 'error', 'ChatGPT');
+            if (pwError?.code === 'CHATGPT_BOT_CHALLENGE') {
+              await sendAlert({
+                type: 'captcha',
+                title: 'ChatGPT yêu cầu xác minh CAPTCHA — Auto Publish đã dừng',
+                details: `Hệ thống phát hiện CAPTCHA/Cloudflare khi tạo ảnh cho SKU ${selectedSku?.name || ''} và đã dừng cả luồng.\n\n👉 Hãy mở ChatGPT trên trình duyệt, tự giải CAPTCHA, rồi chạy lại Auto Publish.`,
+                photoPath: pwError.screenshotPath || null,
+              });
+            } else if (pwError?.code === 'CHATGPT_LOGIN_REQUIRED') {
+              await sendAlert({
+                type: 'login',
+                title: 'ChatGPT bị văng đăng nhập — Auto Publish đã dừng',
+                details: `Hệ thống phát hiện ChatGPT đăng xuất giữa lúc tạo ảnh cho SKU ${selectedSku?.name || ''}.\n\n👉 Mở Cài đặt AI và bấm "Làm mới & Đăng nhập lại" cho ChatGPT rồi chạy lại.`,
+              });
+            }
             throw pwError;
           }
           pwError.isAiSkuFailure = true;
@@ -1848,6 +1861,7 @@ export const autoPublishRoutine = async (retryContext = null, runOptions = {}) =
               targetImgPathForGemini = localFilePaths[0]; 
             }
 
+            let contentPromptUsed = '';
             if (postMode === 'REELS') {
               let reelsPrompt = '';
               if (selectedSku.name.toUpperCase().includes('DAILY VLOG')) {
@@ -1881,6 +1895,7 @@ export const autoPublishRoutine = async (retryContext = null, runOptions = {}) =
               fbContent = reelsContent;
               igContent = reelsContent; 
               thContent = reelsContent;
+              contentPromptUsed = reelsPrompt;
             } else {
               const fallbackPrompt = `Hãy viết 2 bài theo đúng format:\n## FACEBOOK:\n[Bài FB 50-80 từ, câu mở đầu VIẾT IN HOA, có hashtag #iwcarnivalvietnam #iwcarnival #donghoiwcarnival]\n## INSTAGRAM:\n[Caption IG 15-35 từ, góc nhìn KHÁC bài FB, có hashtag #iwcarnivalvietnam #iwcarnival #donghoiwcarnival]\nSản phẩm: đồng hồ SKU ${selectedSku.name}. Không kèm giải thích.`;
               contentSelection = selectToneForPrompt({
@@ -1890,11 +1905,11 @@ export const autoPublishRoutine = async (retryContext = null, runOptions = {}) =
                 platform: 'crosspost'
               }, recentToneSelections, performanceByTone);
               const combinedPrompt = (fbPromptFinal || fallbackPrompt) + contentSelection.instruction;
-              const fbSpecificPrompt = combinedPrompt + "\n\n[LƯU Ý: HÃY CHỈ VIẾT NỘI DUNG CHO FACEBOOK DỰA THEO HƯỚNG DẪN TRÊN. BỎ QUA CÁC PHẦN KHÁC. TRẢ VỀ TRỰC TIẾP NỘI DUNG MÀ KHÔNG CẦN TIÊU ĐỀ ## FACEBOOK]";
-              const igSpecificPrompt = combinedPrompt + "\n\n[LƯU Ý: HÃY CHỈ VIẾT NỘI DUNG CHO INSTAGRAM DỰA THEO HƯỚNG DẪN TRÊN. BỎ QUA CÁC PHẦN KHÁC. TRẢ VỀ TRỰC TIẾP NỘI DUNG MÀ KHÔNG CẦN TIÊU ĐỀ ## INSTAGRAM]";
 
-              fbContent = await generateContentOnChatGPT(fbSpecificPrompt, 'fb', targetImgPathForGemini);
-              igContent = await generateContentOnChatGPT(igSpecificPrompt, 'ig', targetImgPathForGemini);
+              const combinedContent = await generateFbIgContentOnChatGPT(combinedPrompt, targetImgPathForGemini);
+              fbContent = combinedContent.fb;
+              igContent = combinedContent.ig;
+              contentPromptUsed = combinedPrompt;
             }
 
             if (tempImgDownloaded && fs.existsSync(tempImgDownloaded)) fs.unlinkSync(tempImgDownloaded);
@@ -1910,6 +1925,29 @@ export const autoPublishRoutine = async (retryContext = null, runOptions = {}) =
             igContent = sanitizeGeneratedSocialContent(igContent) || igContent;
             thContent = sanitizeGeneratedSocialContent(thContent) || thContent;
             postContent = sanitizeGeneratedSocialContent(postContent) || postContent;
+
+            // Kiểm tra tiêu chuẩn bài đăng FB/IG — chặn content lấy nhầm prompt,
+            // quá ngắn/dài, còn placeholder template. Không đạt thì thay bằng
+            // nội dung dự phòng an toàn + báo Telegram thay vì đăng nội dung dở.
+            const fbCheck = validateSocialPostContent(fbContent, { platform: 'fb', prompt: contentPromptUsed });
+            const igCheck = validateSocialPostContent(igContent, { platform: 'ig', prompt: contentPromptUsed });
+            if (!fbCheck.ok || !igCheck.ok) {
+              const reasons = [
+                fbCheck.ok ? null : `FB (${fbCheck.reason})`,
+                igCheck.ok ? null : `IG (${igCheck.reason})`,
+              ].filter(Boolean).join(', ');
+              const safeFallback = `[Đăng Tự Động] Khám phá ngay siêu phẩm đồng hồ ${selectedSku.name} tuyệt đẹp. #iwcarnivalvietnam #iwcarnival #donghoiwcarnival`;
+              liveLog(`⚠️ [${account.name}] Nội dung không đạt tiêu chuẩn (${reasons}). Đã thay bằng nội dung dự phòng an toàn.`, 'warning', 'System');
+              await sendAlert({
+                type: 'content-invalid',
+                title: `Nội dung bài đăng không đạt tiêu chuẩn (${reasons})`,
+                details: `SKU: ${selectedSku.name}\nHệ thống phát hiện nội dung sinh ra có vấn đề và KHÔNG đăng nội dung đó — đã thay bằng nội dung dự phòng an toàn.\n\n— Nội dung FB bị loại —\n${(fbContent || '').slice(0, 300)}\n\n— Nội dung IG bị loại —\n${(igContent || '').slice(0, 300)}`,
+              });
+              if (!fbCheck.ok) fbContent = safeFallback;
+              if (!igCheck.ok) igContent = safeFallback;
+              thContent = fbContent;
+              postContent = fbContent;
+            }
 
          } catch (geminiError) {
             checkAbort();
@@ -2016,7 +2054,14 @@ export const autoPublishRoutine = async (retryContext = null, runOptions = {}) =
                     );
                   }
                 }
-              } catch (e) { liveLog(`❌ [${account.name}] Lỗi FB Reels: ${e.message}`, 'error', 'Facebook'); }
+              } catch (e) {
+                liveLog(`❌ [${account.name}] Lỗi FB Reels: ${e.message}`, 'error', 'Facebook');
+                await sendAlert({
+                  type: 'publish-error',
+                  title: 'Lỗi đăng Facebook Reels',
+                  details: `Tài khoản: ${account.name}\nSKU: ${selectedSku.name}\nLỗi: ${e.message}`,
+                });
+              }
             }
 
             const igTokenToUse = account.name === 'Mặc định (.env)' ? process.env.IG_ACCESS_TOKEN : account.igAccessToken;
@@ -2046,7 +2091,21 @@ export const autoPublishRoutine = async (retryContext = null, runOptions = {}) =
                     if (i < 3) await new Promise(r => setTimeout(r, 15000));
                   }
                 }
-              } catch (e) { liveLog(`❌ [${account.name}] Lỗi IG Reels: ${e.message}`, 'error', 'Instagram'); }
+                if (!igSuccess) {
+                  await sendAlert({
+                    type: 'publish-error',
+                    title: 'Lỗi đăng Instagram Reels (sau 3 lần thử)',
+                    details: `Tài khoản: ${account.name}\nSKU: ${selectedSku.name}\nHệ thống đã thử đăng 3 lần đều thất bại. Kiểm tra token/quyền tài khoản Instagram.`,
+                  });
+                }
+              } catch (e) {
+                liveLog(`❌ [${account.name}] Lỗi IG Reels: ${e.message}`, 'error', 'Instagram');
+                await sendAlert({
+                  type: 'publish-error',
+                  title: 'Lỗi đăng Instagram Reels',
+                  details: `Tài khoản: ${account.name}\nSKU: ${selectedSku.name}\nLỗi: ${e.message}`,
+                });
+              }
             }
 
             if (finalVideoPath !== localFilePaths[0] && fs.existsSync(finalVideoPath)) {
@@ -2125,7 +2184,14 @@ export const autoPublishRoutine = async (retryContext = null, runOptions = {}) =
                     successfulPlatforms.add('instagram');
                     liveLog(`✅ [${account.name}] Đăng IG 1 ảnh thành công!`, 'success', 'Instagram');
                   }
-               } catch (e) { liveLog(`❌ [${account.name}] Lỗi đăng FB 1 ảnh: ${e.response?.data?.error?.message || e.message}`, 'error', 'Facebook'); }
+               } catch (e) {
+                 liveLog(`❌ [${account.name}] Lỗi đăng FB 1 ảnh: ${e.response?.data?.error?.message || e.message}`, 'error', 'Facebook');
+                 await sendAlert({
+                   type: 'publish-error',
+                   title: 'Lỗi đăng Facebook 1 ảnh',
+                   details: `Tài khoản: ${account.name}\nSKU: ${selectedSku.name}\nLỗi: ${e.response?.data?.error?.message || e.message}`,
+                 });
+               }
             }
 
          } else {
@@ -2216,7 +2282,14 @@ export const autoPublishRoutine = async (retryContext = null, runOptions = {}) =
                        liveLog(`✅ [${account.name}] Đăng Album IG thành công!`, 'success', 'Instagram');
                     }
                   }
-               } catch (e) { liveLog(`❌ [${account.name}] Lỗi đăng Album FB: ${e.response?.data?.error?.message || e.message}`, 'error', 'Facebook'); }
+               } catch (e) {
+                 liveLog(`❌ [${account.name}] Lỗi đăng Album FB: ${e.response?.data?.error?.message || e.message}`, 'error', 'Facebook');
+                 await sendAlert({
+                   type: 'publish-error',
+                   title: 'Lỗi đăng Album Facebook/Instagram',
+                   details: `Tài khoản: ${account.name}\nSKU: ${selectedSku.name}\nLỗi: ${e.response?.data?.error?.message || e.message}`,
+                 });
+               }
             }
          }
 
@@ -2303,6 +2376,27 @@ export const autoPublishRoutine = async (retryContext = null, runOptions = {}) =
     throw error;
   } finally {
     if (isRootAttempt) {
+      // Kiểm tra sức khỏe sau lượt chạy: văng đăng nhập AI + dọn ảnh chẩn đoán cũ
+      try {
+        const sessionStatus = getAiSessionStatus();
+        if (!sessionStatus.chatgpt?.loggedIn) {
+          await sendAlert({
+            type: 'login',
+            title: 'ChatGPT hiện KHÔNG còn đăng nhập',
+            details: 'Sau lượt chạy, hệ thống phát hiện profile ChatGPT không còn cookie đăng nhập.\n\n👉 Mở Cài đặt AI và bấm "Làm mới & Đăng nhập lại" cho ChatGPT trước lượt chạy tiếp theo.',
+          });
+        }
+        if (!sessionStatus.gemini?.loggedIn) {
+          await sendAlert({
+            type: 'login',
+            title: 'Gemini hiện KHÔNG còn đăng nhập',
+            details: 'Sau lượt chạy, hệ thống phát hiện profile Gemini không còn cookie đăng nhập.\n\n👉 Mở Cài đặt AI và bấm "Làm mới & Đăng nhập lại" cho Gemini trước lượt chạy tiếp theo.',
+          });
+        }
+      } catch (statusError) {
+        console.log(`⚠️ Không kiểm tra được trạng thái đăng nhập AI sau lượt chạy: ${statusError.message}`);
+      }
+      cleanupDebugScreenshots();
       isRoutineRunning = false;
     }
   }

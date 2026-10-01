@@ -25,6 +25,9 @@ import {
 } from './chatgpt-browser.js';
 import { selectNewChatGptImageCandidate } from './chatgpt-image-detection-policy.js';
 import { isTransientChatGPTAssistantText, sanitizeGeneratedSocialContent } from './generated-content-sanitizer.js';
+import { splitFbIgContent } from './content-validator.js';
+import { sendAlert } from './alert.service.js';
+import { captureAndCompareUI } from './ui-watch.service.js';
 
 const prisma = new PrismaClient();
 const __filename = fileURLToPath(import.meta.url);
@@ -797,6 +800,11 @@ export const generateBackgroundOnChatGPT = async (imagePath, promptsArray, abort
             if (!isClosingContext) {
                 console.error('⚠️ ChatGPT Chromium context đã đóng bất ngờ khi automation vẫn đang chạy.');
                 liveLog('⚠️ Cửa sổ ChatGPT/Chromium đã đóng bất ngờ khi automation vẫn đang chạy.', 'error', 'ChatGPT');
+                sendAlert({
+                    type: 'system',
+                    title: 'Cửa sổ ChatGPT bị đóng bất ngờ',
+                    details: 'Trình duyệt automation của ChatGPT đã đóng giữa chừng khi hệ thống vẫn đang chạy. Luồng sẽ báo lỗi — kiểm tra Dashboard để xử lý.',
+                });
             }
         });
         page = context.pages().length > 0 ? context.pages()[0] : await context.newPage();
@@ -816,10 +824,27 @@ export const generateBackgroundOnChatGPT = async (imagePath, promptsArray, abort
         
         // Kiểm tra xem đã đăng nhập chưa
         await page.waitForTimeout(3000); // Chờ trang tải các nút bấm
+
+        // Đối soát giao diện với lần chạy trước — phát hiện ChatGPT đổi UI
+        const uiWatch = await captureAndCompareUI(page, 'chatgpt-image');
+        if (uiWatch.changed) {
+            await sendAlert({
+                type: 'ui-change',
+                title: 'Giao diện ChatGPT có dấu hiệu đã thay đổi',
+                details: `Trong lúc tạo ảnh, khung giao diện khác biệt ${(uiWatch.diffPct * 100).toFixed(1)}% so với lần chạy trước.\nTool có thể vẫn hoạt động nhờ fallback, nhưng nên xem ảnh đính kèm để chắc chắn.`,
+                photoPath: uiWatch.screenshotPath,
+            });
+        }
+
         const isLoggedOut = await page.isVisible('text="Log in"');
         if (isLoggedOut) {
             console.log('⚠️ BẠN CHƯA ĐĂNG NHẬP CHATGPT! Trình duyệt sẽ dừng lại để bạn thao tác.');
             console.log('⏳ Vui lòng đăng nhập vào tài khoản Plus trên trình duyệt đang mở (Bạn có 3 phút)...');
+            await sendAlert({
+                type: 'login',
+                title: 'ChatGPT bị văng đăng nhập khi tạo ảnh',
+                details: 'Hệ thống phát hiện ChatGPT đã đăng xuất khi bắt đầu tạo ảnh và đang chờ bạn đăng nhập lại trên cửa sổ trình duyệt (3 phút).\n\n👉 Nếu không kịp, vào Cài đặt AI bấm "Làm mới & Đăng nhập lại" cho ChatGPT.',
+            });
             
             for (let i = 0; i < 36; i++) {
                 if (abortSignal && abortSignal.aborted) throw new Error('Abort requested');
@@ -1253,6 +1278,11 @@ CRITICAL RULES:
                         }
                         const pageUrl = page.url();
                         if (/auth\.openai\.com|chatgpt\.com\/auth|login\?/i.test(pageUrl)) {
+                            await sendAlert({
+                                type: 'login',
+                                title: 'ChatGPT bị văng đăng nhập giữa lúc tạo ảnh',
+                                details: 'Hệ thống phát hiện ChatGPT chuyển sang trang đăng nhập trong lúc tạo ảnh.\n\n👉 Mở Cài đặt AI và bấm "Làm mới & Đăng nhập lại" cho ChatGPT rồi chạy lại Auto Publish.',
+                            });
                             throw Object.assign(
                                 new Error('ChatGPT đã chuyển sang trang đăng nhập trong lúc tạo ảnh. Vui lòng đăng nhập lại ChatGPT trong Cài đặt AI rồi chạy lại.'),
                                 { code: 'CHATGPT_LOGIN_REQUIRED', isFatal: true },
@@ -1261,14 +1291,27 @@ CRITICAL RULES:
                         const hasLoginButton = await page.getByText('Log in', { exact: true }).first()
                             .isVisible({ timeout: 300 }).catch(() => false);
                         if (hasLoginButton) {
+                            await sendAlert({
+                                type: 'login',
+                                title: 'ChatGPT bị văng đăng nhập giữa lúc tạo ảnh',
+                                details: 'Hệ thống phát hiện ChatGPT đã đăng xuất trong lúc tạo ảnh.\n\n👉 Mở Cài đặt AI và bấm "Làm mới & Đăng nhập lại" cho ChatGPT rồi chạy lại Auto Publish.',
+                            });
                             throw Object.assign(
                                 new Error('ChatGPT đã đăng xuất trong lúc tạo ảnh. Vui lòng đăng nhập lại ChatGPT trong Cài đặt AI rồi chạy lại.'),
                                 { code: 'CHATGPT_LOGIN_REQUIRED', isFatal: true },
                             );
                         }
                         if (await isChatGPTBotChallengeVisible(page)) {
-                            await saveChatGPTDebugScreenshot(page, 'bot-challenge');
-                            throw createChatGPTBotChallengeError();
+                            const shotPath = await saveChatGPTDebugScreenshot(page, 'bot-challenge');
+                            const challengeError = createChatGPTBotChallengeError();
+                            challengeError.screenshotPath = shotPath;
+                            await sendAlert({
+                                type: 'captcha',
+                                title: 'ChatGPT yêu cầu xác minh CAPTCHA',
+                                details: `Hệ thống phát hiện màn hình xác minh chống bot (CAPTCHA/Cloudflare) khi đang tạo ảnh và đã dừng luồng.\n\n👉 Hãy mở ChatGPT trên trình duyệt, tự giải CAPTCHA, rồi chạy lại Auto Publish.`,
+                                photoPath: shotPath,
+                            });
+                            throw challengeError;
                         }
                     } catch (error) {
                         if (/đăng nhập|đăng xuất|xác minh|CAPTCHA/i.test(error.message)
@@ -2808,7 +2851,7 @@ export const createGeminiTextSession = async ({
     }
 };
 
-export const generateContentOnChatGPT = async (prompt, type, imagePath = null) => {
+export const generateContentOnChatGPT = async (prompt, type, imagePath = null, options = {}) => {
     // ── Toggle Check: Viết Content bằng API thay vì Playwright ──
     try {
       const allowContent = await prisma.setting.findUnique({ where: { key: 'gemini_allow_content' } });
@@ -2822,7 +2865,7 @@ export const generateContentOnChatGPT = async (prompt, type, imagePath = null) =
         }
         const result = await callGeminiAPIDirectly(prompt, images);
         console.log('[Toggle] ✅ Đã nhận content từ Gemini API thành công!');
-        return sanitizeGeneratedSocialContent(result);
+        return options.raw ? result : sanitizeGeneratedSocialContent(result);
       }
     } catch (e) {
       console.warn('[Toggle] ⚠️ Lỗi gọi Gemini API, fallback về Playwright:', e.message);
@@ -2847,6 +2890,24 @@ export const generateContentOnChatGPT = async (prompt, type, imagePath = null) =
         await page.goto(targetUrl, { waitUntil: 'domcontentloaded' });
         
         await page.waitForTimeout(3000);
+
+        // Fail-fast: ChatGPT văng đăng nhập ngay từ đầu
+        if (/auth\.openai\.com|chatgpt\.com\/auth|login\?/i.test(page.url())) {
+            const err = new Error('ChatGPT chưa đăng nhập hoặc phiên đã hết hạn (redirect về trang đăng nhập). Vui lòng đăng nhập lại trong Cài đặt AI.');
+            err.code = 'CHATGPT_NOT_LOGGED_IN';
+            throw err;
+        }
+
+        // Đối soát giao diện với lần chạy trước — phát hiện ChatGPT đổi UI
+        const uiWatch = await captureAndCompareUI(page, 'chatgpt-content');
+        if (uiWatch.changed) {
+            await sendAlert({
+                type: 'ui-change',
+                title: 'Giao diện ChatGPT có dấu hiệu đã thay đổi',
+                details: `Trong lúc lấy content, khung giao diện khác biệt ${(uiWatch.diffPct * 100).toFixed(1)}% so với lần chạy trước.\nTool có thể vẫn hoạt động bình thường nhờ fallback, nhưng nên xem ảnh đính kèm để chắc chắn.`,
+                photoPath: uiWatch.screenshotPath,
+            });
+        }
         
         const promptLocator = await findChatGPTPrompt(page, 15000);
 
@@ -2960,11 +3021,11 @@ export const generateContentOnChatGPT = async (prompt, type, imagePath = null) =
             }
             if (!isGenerating && stableAssistantTextPolls >= 1) {
                 console.log('✅ Đã lấy xong nội dung!');
-                return cleanText;
+                return options.raw ? (text || cleanText) : cleanText;
             }
             if (isGenerating && stableAssistantTextPolls >= 3) {
                 console.log('⚠️ Nút Stop vẫn hiển thị nhưng nội dung đã ổn định ~15s. Chấp nhận kết quả.');
-                return cleanText;
+                return options.raw ? (text || cleanText) : cleanText;
             }
         }
 
@@ -2974,6 +3035,20 @@ export const generateContentOnChatGPT = async (prompt, type, imagePath = null) =
 
     } catch (error) {
         console.error('❌ LỖI TRONG TIẾN TRÌNH PLAYWRIGHT TEXT:', error.message);
+        if (error?.code === 'CHATGPT_NOT_LOGGED_IN') {
+            await sendAlert({
+                type: 'login',
+                title: 'ChatGPT bị văng đăng nhập',
+                details: `Hệ thống phát hiện ChatGPT chuyển về trang đăng nhập trong lúc viết content.\n\n👉 Mở Cài đặt AI và bấm "Làm mới & Đăng nhập lại" cho ChatGPT rồi chạy lại Auto Publish.`,
+            });
+        } else if (error?.code === 'CHATGPT_BOT_CHALLENGE') {
+            await sendAlert({
+                type: 'captcha',
+                title: 'ChatGPT yêu cầu xác minh CAPTCHA',
+                details: `Hệ thống phát hiện màn hình xác minh chống bot (CAPTCHA/Cloudflare) và đã dừng luồng.\n\n👉 Hãy mở ChatGPT trên trình duyệt, tự giải CAPTCHA, rồi chạy lại.`,
+                photoPath: error.screenshotPath || null,
+            });
+        }
         return null;
     } finally {
         if (context) {
@@ -2981,6 +3056,19 @@ export const generateContentOnChatGPT = async (prompt, type, imagePath = null) =
         }
         aiMutex.unlock();
     }
+};
+
+// Gọi ChatGPT MỘT lần duy nhất để lấy ĐỦ content cho cả Facebook và Instagram
+// (giảm 2 lần mở trình duyệt/2 lần gửi prompt xuống còn 1 — đỡ bị nghi là bot).
+export const generateFbIgContentOnChatGPT = async (prompt, imagePath = null) => {
+    const combinedPrompt = `${prompt}\n\n[LƯU Ý QUAN TRỌNG: HÃY TRẢ VỀ ĐẦY ĐỦ CẢ HAI PHẦN THEO ĐÚNG FORMAT TRÊN — GIỮ NGUYÊN TIÊU ĐỀ MỖI PHẦN "FACEBOOK:" VÀ "INSTAGRAM:". KHÔNG BỎ SÓT PHẦN NÀO.]`;
+    const raw = await generateContentOnChatGPT(combinedPrompt, 'crosspost', imagePath, { raw: true });
+    if (!raw) return { fb: null, ig: null };
+    const { fb, ig } = splitFbIgContent(raw);
+    return {
+        fb: fb ? (sanitizeGeneratedSocialContent(fb) || null) : null,
+        ig: ig ? (sanitizeGeneratedSocialContent(ig) || null) : null,
+    };
 };
 
 // ─── PHÂN TÍCH ẢNH MẪU MỚI → SINH PROMPT → LƯU VÀO .MD ───
