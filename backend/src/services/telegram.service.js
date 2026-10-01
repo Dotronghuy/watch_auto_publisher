@@ -4,9 +4,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { EventEmitter } from 'events';
-import { generateBackgroundOnChatGPT } from './playwright.service.js';
-import { generateBackgroundOnSD } from './sd.service.js';
-import { readJsonFileSync } from '../utils/json-file.js';
+import { generateImageWithEngine } from './image-engine.service.js';
 
 dotenv.config();
 
@@ -15,23 +13,6 @@ process.env.NTBA_FIX_350 = 1;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const settingsPath = path.join(__dirname, '../../config/settings.json');
-
-const generateImageWithEngine = async (imagePath, promptsArray, abortSignal, sampleImagePath, isNewSession, extraWatchImages) => {
-    let engine = 'chatgpt';
-    try {
-        if (fs.existsSync(settingsPath)) {
-            const settings = readJsonFileSync(settingsPath);
-            engine = settings.imageGenerationEngine || 'chatgpt';
-        }
-    } catch(e) {}
-    
-    if (engine === 'sd') {
-        return await generateBackgroundOnSD(imagePath, promptsArray, abortSignal, sampleImagePath, isNewSession, extraWatchImages);
-    } else {
-        return await generateBackgroundOnChatGPT(imagePath, promptsArray, abortSignal, sampleImagePath, isNewSession, extraWatchImages);
-    }
-};
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
 const chatId = process.env.TELEGRAM_CHAT_ID;

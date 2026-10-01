@@ -16,14 +16,13 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import {
   assertGeneratedImagesAreNotInputReferences,
-  generateBackgroundOnChatGPT,
   generateContentOnChatGPT,
   generateFbIgContentOnChatGPT,
   getAiSessionStatus
 } from './playwright.service.js';
 import { PrismaClient } from '@prisma/client';
 const prisma = new PrismaClient();
-import { generateBackgroundOnSD } from './sd.service.js';
+import { generateImageWithEngine } from './image-engine.service.js';
 import { telegramEvents, sendBatchToTelegram } from './telegram.service.js';
 import { publishToInstagram, publishCarouselToInstagram, publishFBReels, publishIGReels, publishThreadChain } from './meta.service.js';
 import { addMusicToVideo, hasAudioStream } from './video.service.js';
@@ -58,22 +57,6 @@ const N8N_WEBHOOK_URL = process.env.N8N_WEBHOOK_URL || 'http://127.0.0.1:5678/we
 const ROOT_DRIVE_FOLDER_ID = process.env.ROOT_DRIVE_FOLDER_ID || '1MFAy8z4kghRCT4Z8tGsvVAqk_I02UCHl';
 const SAMPLE_IMAGES_DIR = path.join(__dirname, '../../config/sample_images');
 const GPT_IMAGE_PROMPT_PATH = path.join(__dirname, '../../config/gpt_image_prompt.md');
-
-const generateImageWithEngine = async (imagePath, promptsArray, abortSignal, sampleImagePath, isNewSession, extraWatchImages) => {
-    let engine = 'chatgpt';
-    try {
-        if (fs.existsSync(settingsPath)) {
-            const settings = readJsonFileSync(settingsPath);
-            engine = settings.imageGenerationEngine || 'chatgpt';
-        }
-    } catch(e) {}
-    
-    if (engine === 'sd') {
-        return await generateBackgroundOnSD(imagePath, promptsArray, abortSignal, sampleImagePath, isNewSession, extraWatchImages);
-    } else {
-        return await generateBackgroundOnChatGPT(imagePath, promptsArray, abortSignal, sampleImagePath, isNewSession, extraWatchImages);
-    }
-};
 
 // Tone Engine là nguồn duy nhất cho 8 phong cách, lựa chọn theo ngữ cảnh và lịch sử gần nhất.
 const selectToneForPrompt = (context, recentSelections, performanceByTone = {}) => {

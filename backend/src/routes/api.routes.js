@@ -11,7 +11,8 @@ import { spawn } from 'child_process';
 import { startScheduler } from '../scheduler.js';
 import { autoPublishRoutine, dryRunRoutine, resetGlobalStop, triggerGlobalStop, getIsRunning, forceResetRunningState, trainImageOnly, trainContentOnly } from '../services/publish.service.js';
 import { getProductInfoBySku } from '../services/sheet.service.js';
-import { openLoginHelper, generateContentOnChatGPT, generateBackgroundOnChatGPT, analyzeNewSampleImages, isAiIdle, getAiSessionStatus, verifyAiLoginStatus } from '../services/playwright.service.js';
+import { openLoginHelper, generateContentOnChatGPT, analyzeNewSampleImages, isAiIdle, getAiSessionStatus, verifyAiLoginStatus } from '../services/playwright.service.js';
+import { generateImageWithEngine } from '../services/image-engine.service.js';
 import { connection as redisConnection, publishQueue } from '../workers/queue.js';
 import {
   hasSuccessfulPublishResult,
@@ -1212,16 +1213,16 @@ YÊU CẦU:
 2. Tạo lại 1 ảnh mới với bối cảnh tương tự nhưng đã sửa theo nhận xét.
 3. Giữ nguyên chiếc đồng hồ 100% như gốc, chỉ thay đổi bối cảnh/góc chụp.`;
 
-    // Nếu có ảnh tham chiếu, dùng generateBackgroundOnChatGPT
+    // Nếu có ảnh tham chiếu, dùng engine tạo ảnh (ChatGPT/Gemini luân phiên)
     // Nếu không, dùng generateContentOnChatGPT với image_feedback
     let newImageUrl = null;
 
     if (req.file) {
-      // Có ảnh tham chiếu → gửi ảnh + prompt cho GPT-4 Vision
+      // Có ảnh tham chiếu → gửi ảnh + prompt cho AI tạo ảnh
       console.log(`📤 Có ảnh tham chiếu: ${req.file.filename}`);
       const refImagePath = req.file.path;
       
-      const generatedPaths = await generateBackgroundOnChatGPT(
+      const generatedPaths = await generateImageWithEngine(
         null,           // Không có imagePath (ảnh sản phẩm mới)
         [{ prompt: feedbackMsg }],
         null,           // No abort signal
