@@ -30,6 +30,7 @@ import { addActivity } from '../utils/activity.js';
 import { liveLog } from '../utils/liveLog.js';
 import { readJsonFileSync } from '../utils/json-file.js';
 import { shouldTryNextSkuAfterAiFailure } from './auto-publish-policy.js';
+import { getRotatedAccountOrder, isAccountRestrictionError } from './account-rotation.js';
 import { computeHashFromBuffer } from './image-hash.service.js';
 import { saveImageHash } from '../utils/crm.db.js';
 import {
@@ -1316,6 +1317,17 @@ export const trainContentOnly = async () => {
   }
 };
 
+// Khi tài khoản bị Facebook/Instagram hạn chế giữa lúc đăng → báo Telegram để người vận hành biết.
+const notifyAccountRestriction = async (account, error, skuName, hasBackupAccount) => {
+  const msg = error?.response?.data?.error?.message || error?.message || 'không rõ lý do';
+  liveLog(`🚫 Tài khoản ${account.name} bị hạn chế: ${msg}`, 'error', 'System');
+  await sendAlert({
+    type: 'system',
+    title: `Tài khoản ${account.name} bị hạn chế — chuyển tài khoản dự phòng`,
+    details: `Tài khoản: ${account.name}\nSKU: ${skuName || 'không rõ'}\nLỗi: ${msg}\n${hasBackupAccount ? 'Hệ thống sẽ tự chuyển sang tài khoản dự phòng kế tiếp cho job này.' : 'Không còn tài khoản dự phòng — job này sẽ thất bại.'}`,
+  });
+};
+
 // Khi tạo ảnh AI thất bại, không hủy job: tìm ảnh thật/video chưa đăng có sẵn
 // trong Drive của CHÍNH SKU đó (Ảnh_Tự_Chụp → Ảnh_Hãng → Video_Doc) để chuyển
 // luồng đăng bình thường. Trả về { media, postMode } hoặc null nếu không còn gì.
@@ -1876,11 +1888,20 @@ export const autoPublishRoutine = async (retryContext = null, runOptions = {}) =
         }];
       }
 
+      // Luân phiên tài khoản: mỗi job dùng 1 tài khoản chính (xoay vòng theo lượt chạy),
+      // khi tài khoản chính bị hạn chế thì tự chuyển sang tài khoản dự phòng kế tiếp.
+      const orderedAccounts = getRotatedAccountOrder(activeAccounts);
+      if (orderedAccounts.length > 0) {
+        const backupNames = orderedAccounts.slice(1).map(a => a.name).join(', ');
+        liveLog(`🎯 Tài khoản chính lượt này: ${orderedAccounts[0].name}${backupNames ? ` — Dự phòng: ${backupNames}` : ''}`, 'info', 'System');
+      }
+
       let mainPostId = null;
+      let postedAccountName = null;
       const recentToneSelections = await getRecentContentSelections(5);
       const performanceByTone = buildPerformanceMultipliers(await getTonePerformance(30));
 
-      for (const account of activeAccounts) {
+      for (const account of orderedAccounts) {
          liveLog(`🚀 Đang xử lý cho tài khoản: ${account.name}`, 'info', 'System');
          checkAbort();
 
@@ -1892,6 +1913,9 @@ export const autoPublishRoutine = async (retryContext = null, runOptions = {}) =
          let tempImgDownloaded = null;
          let contentSelection = null;
          const accountMetricId = account.id || account.fbPageId || account.igUserId || account.name;
+         const accountIndex = orderedAccounts.indexOf(account);
+         const hasBackupAccount = accountIndex >= 0 && accountIndex < orderedAccounts.length - 1;
+         const hadSuccessBefore = publishSucceeded;
 
          // 3.2 GỌI GEMINI ĐỂ VIẾT CONTENT RIÊNG CHO ACCOUNT NÀY
          try {
@@ -2162,10 +2186,15 @@ export const autoPublishRoutine = async (retryContext = null, runOptions = {}) =
                   }
                 }
               } catch (e) {
+                const restriction = isAccountRestrictionError(e);
+                if (restriction && !hadSuccessBefore && !publishSucceeded && hasBackupAccount) {
+                  await notifyAccountRestriction(account, e, selectedSku.name, true);
+                  continue;
+                }
                 liveLog(`❌ [${account.name}] Lỗi FB Reels: ${e.message}`, 'error', 'Facebook');
                 await sendAlert({
-                  type: 'publish-error',
-                  title: 'Lỗi đăng Facebook Reels',
+                  type: restriction ? 'system' : 'publish-error',
+                  title: restriction ? `Tài khoản ${account.name} bị Facebook hạn chế` : 'Lỗi đăng Facebook Reels',
                   details: `Tài khoản: ${account.name}\nSKU: ${selectedSku.name}\nLỗi: ${e.message}`,
                 });
               }
@@ -2206,10 +2235,15 @@ export const autoPublishRoutine = async (retryContext = null, runOptions = {}) =
                   });
                 }
               } catch (e) {
+                const restriction = isAccountRestrictionError(e);
+                if (restriction && !hadSuccessBefore && !publishSucceeded && hasBackupAccount) {
+                  await notifyAccountRestriction(account, e, selectedSku.name, true);
+                  continue;
+                }
                 liveLog(`❌ [${account.name}] Lỗi IG Reels: ${e.message}`, 'error', 'Instagram');
                 await sendAlert({
-                  type: 'publish-error',
-                  title: 'Lỗi đăng Instagram Reels',
+                  type: restriction ? 'system' : 'publish-error',
+                  title: restriction ? `Tài khoản ${account.name} bị Instagram hạn chế` : 'Lỗi đăng Instagram Reels',
                   details: `Tài khoản: ${account.name}\nSKU: ${selectedSku.name}\nLỗi: ${e.message}`,
                 });
               }
@@ -2292,10 +2326,15 @@ export const autoPublishRoutine = async (retryContext = null, runOptions = {}) =
                     liveLog(`✅ [${account.name}] Đăng IG 1 ảnh thành công!`, 'success', 'Instagram');
                   }
                } catch (e) {
+                 const restriction = isAccountRestrictionError(e);
+                 if (restriction && !hadSuccessBefore && !publishSucceeded && hasBackupAccount) {
+                   await notifyAccountRestriction(account, e, selectedSku.name, true);
+                   continue;
+                 }
                  liveLog(`❌ [${account.name}] Lỗi đăng FB 1 ảnh: ${e.response?.data?.error?.message || e.message}`, 'error', 'Facebook');
                  await sendAlert({
-                   type: 'publish-error',
-                   title: 'Lỗi đăng Facebook 1 ảnh',
+                   type: restriction ? 'system' : 'publish-error',
+                   title: restriction ? `Tài khoản ${account.name} bị Facebook hạn chế` : 'Lỗi đăng Facebook 1 ảnh',
                    details: `Tài khoản: ${account.name}\nSKU: ${selectedSku.name}\nLỗi: ${e.response?.data?.error?.message || e.message}`,
                  });
                }
@@ -2390,10 +2429,15 @@ export const autoPublishRoutine = async (retryContext = null, runOptions = {}) =
                     }
                   }
                } catch (e) {
+                 const restriction = isAccountRestrictionError(e);
+                 if (restriction && !hadSuccessBefore && !publishSucceeded && hasBackupAccount) {
+                   await notifyAccountRestriction(account, e, selectedSku.name, true);
+                   continue;
+                 }
                  liveLog(`❌ [${account.name}] Lỗi đăng Album FB: ${e.response?.data?.error?.message || e.message}`, 'error', 'Facebook');
                  await sendAlert({
-                   type: 'publish-error',
-                   title: 'Lỗi đăng Album Facebook/Instagram',
+                   type: restriction ? 'system' : 'publish-error',
+                   title: restriction ? `Tài khoản ${account.name} bị Facebook hạn chế` : 'Lỗi đăng Album Facebook/Instagram',
                    details: `Tài khoản: ${account.name}\nSKU: ${selectedSku.name}\nLỗi: ${e.response?.data?.error?.message || e.message}`,
                  });
                }
@@ -2403,6 +2447,12 @@ export const autoPublishRoutine = async (retryContext = null, runOptions = {}) =
          if (!mainPostId && postId) mainPostId = postId;
          
          liveLog(`✅ Hoàn thành tài khoản: ${account.name}`, 'success', 'System');
+
+         if (publishSucceeded && !hadSuccessBefore) {
+            postedAccountName = account.name;
+            liveLog(`🎉 Đăng thành công với tài khoản ${account.name} — kết thúc luân phiên cho job này.`, 'success', 'System');
+            break;
+         }
       } // KẾT THÚC VÒNG LẶP CHO NHIỀU ACCOUNTS
 
       if (!publishSucceeded) {
@@ -2414,7 +2464,7 @@ export const autoPublishRoutine = async (retryContext = null, runOptions = {}) =
       if (selectedSku) finalSkuName = selectedSku.name;
 
       // Đẩy lịch sử lên giao diện Dashboard
-      addActivity(`Đăng thành công sản phẩm ${selectedSku.name} lên ${activeAccounts.length} Page!`, 'success');
+      addActivity(`Đăng thành công sản phẩm ${selectedSku.name} lên Page ${postedAccountName || '(không xác định)'}!`, 'success');
 
       // Lưu Post ID và Ngày đăng lên Google Sheets
       try {
