@@ -271,6 +271,102 @@ export const getTonePerformance = async (days = 30, accountId = null) => {
   }
 };
 
+// Xếp hạng sản phẩm (SKU) theo tương tác trong N ngày gần nhất — bổ trợ prioritySkus.
+export const getSkuPerformance = async (days = 30, accountId = null) => {
+  try {
+    const safeDays = Math.min(365, Math.max(1, Number.parseInt(days, 10) || 30));
+    const cutoff = Date.now() - safeDays * 24 * 60 * 60 * 1000;
+    const where = ['timestamp >= ?', "sku IS NOT NULL", "sku != ''"];
+    const params = [cutoff];
+    if (accountId) {
+      where.push('account_id = ?');
+      params.push(accountId);
+    }
+
+    const rows = await runQuery(
+      `SELECT
+         sku,
+         COUNT(*) AS posts,
+         SUM(COALESCE(likes, 0)) AS likes,
+         SUM(COALESCE(comments, 0)) AS comments,
+         SUM(COALESCE(shares, 0)) AS shares,
+         SUM(COALESCE(likes, 0) + 2 * COALESCE(comments, 0) + 3 * COALESCE(shares, 0)) AS score
+       FROM post_metrics
+       WHERE ${where.join(' AND ')}
+       GROUP BY sku
+       ORDER BY score DESC, posts DESC
+       LIMIT 50`,
+      params
+    );
+
+    return rows.map(row => ({
+      sku: row.sku,
+      posts: Number(row.posts) || 0,
+      likes: Number(row.likes) || 0,
+      comments: Number(row.comments) || 0,
+      shares: Number(row.shares) || 0,
+      score: Number(row.score) || 0,
+      averageScore: row.posts ? Number((Number(row.score) / Number(row.posts)).toFixed(2)) : 0
+    }));
+  } catch (error) {
+    console.error('Lỗi thống kê hiệu quả SKU:', error.message);
+    return [];
+  }
+};
+
+// Phân tích khung giờ đăng: gộp tương tác theo giờ địa phương của từng bài trong N ngày.
+export const getHourPerformance = async (days = 30, accountId = null) => {
+  const emptyBuckets = () => Array.from({ length: 24 }, (_, hour) => ({
+    hour,
+    label: `${String(hour).padStart(2, '0')}:00`,
+    posts: 0,
+    likes: 0,
+    comments: 0,
+    shares: 0,
+    score: 0,
+    averageScore: 0
+  }));
+
+  try {
+    const safeDays = Math.min(365, Math.max(1, Number.parseInt(days, 10) || 30));
+    const cutoff = Date.now() - safeDays * 24 * 60 * 60 * 1000;
+    const where = ['timestamp >= ?'];
+    const params = [cutoff];
+    if (accountId) {
+      where.push('account_id = ?');
+      params.push(accountId);
+    }
+
+    const rows = await runQuery(
+      `SELECT timestamp, likes, comments, shares FROM post_metrics WHERE ${where.join(' AND ')}`,
+      params
+    );
+
+    const buckets = emptyBuckets();
+    for (const row of rows) {
+      const hour = new Date(Number(row.timestamp)).getHours();
+      if (!Number.isInteger(hour) || hour < 0 || hour > 23) continue;
+      const bucket = buckets[hour];
+      const likes = Number(row.likes) || 0;
+      const comments = Number(row.comments) || 0;
+      const shares = Number(row.shares) || 0;
+      bucket.posts += 1;
+      bucket.likes += likes;
+      bucket.comments += comments;
+      bucket.shares += shares;
+      bucket.score += likes + 2 * comments + 3 * shares;
+    }
+
+    for (const bucket of buckets) {
+      bucket.averageScore = bucket.posts ? Number((bucket.score / bucket.posts).toFixed(2)) : 0;
+    }
+    return buckets;
+  } catch (error) {
+    console.error('Lỗi phân tích khung giờ đăng:', error.message);
+    return emptyBuckets();
+  }
+};
+
 export const updatePostMetrics = async (postId, likes, comments, shares = 0) => {
   await schemaReady;
   return new Promise((resolve, reject) => {

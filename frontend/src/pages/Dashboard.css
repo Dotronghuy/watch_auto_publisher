@@ -868,3 +868,246 @@
   .tone-performance-header p { margin-left: 0; }
   .tone-performance-grid { grid-template-columns: 1fr; }
 }
+
+/* ═══ Hiệu quả sâu: Sản phẩm & Khung giờ ═══ */
+.effectiveness-section {
+  background: linear-gradient(180deg, rgba(255,255,255,.03) 0%, rgba(0,0,0,.12) 100%);
+  border: 1px solid rgba(255,255,255,.06);
+  border-radius: 12px;
+  padding: 18px;
+  margin-bottom: 16px;
+}
+
+.effectiveness-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+
+.effectiveness-panel {
+  min-width: 0;
+  border: 1px solid rgba(255,255,255,.06);
+  border-radius: 10px;
+  padding: 12px;
+  background: rgba(0,0,0,.14);
+}
+
+.effectiveness-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.effectiveness-panel-header h4 {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.effectiveness-panel-header .qa-btn {
+  padding: 5px 10px;
+  font-size: 10px;
+}
+
+.effectiveness-panel-header .qa-btn:disabled {
+  opacity: .45;
+  cursor: not-allowed;
+}
+
+.priority-skus-note {
+  margin-bottom: 10px;
+  padding: 7px 10px;
+  border-radius: 7px;
+  color: #fbbf24;
+  background: rgba(251,191,36,.07);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.sku-ranking-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sku-ranking-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 9px;
+  border-radius: 8px;
+  background: rgba(255,255,255,.03);
+  border: 1px solid rgba(255,255,255,.05);
+}
+
+.sku-ranking-item.leader {
+  border-color: rgba(251,191,36,.35);
+  background: rgba(251,191,36,.06);
+}
+
+.sku-rank-index {
+  flex: 0 0 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  font-size: 9px;
+  font-weight: 800;
+  color: #fff;
+  background: rgba(255,255,255,.08);
+}
+
+.sku-ranking-item.leader .sku-rank-index {
+  background: #fbbf24;
+  color: #1e1b4b;
+}
+
+.sku-ranking-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.sku-ranking-top {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 11px;
+}
+
+.sku-ranking-top strong {
+  color: #fff;
+}
+
+.sku-priority-badge {
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 8px;
+  font-weight: 700;
+  color: #1e1b4b;
+  background: #fbbf24;
+}
+
+.sku-ranking-stats {
+  color: var(--color-text-dim);
+  font-size: 9px;
+}
+
+.sku-score {
+  flex: 0 0 auto;
+  font-size: 12px;
+  color: #fbbf24;
+}
+
+.hour-chart {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 90px;
+  margin-bottom: 6px;
+}
+
+.hour-column {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  height: 100%;
+  min-width: 0;
+}
+
+.hour-bar {
+  width: 100%;
+  max-width: 16px;
+  border-radius: 3px 3px 0 0;
+  background: rgba(255,255,255,.12);
+  transition: height .4s ease;
+}
+
+.hour-column.current .hour-bar {
+  background: linear-gradient(180deg, #60a5fa, #3b82f6);
+}
+
+.hour-column.best .hour-bar {
+  background: linear-gradient(180deg, #fbbf24, #f59e0b);
+}
+
+.hour-column.best.current .hour-bar {
+  background: linear-gradient(180deg, #fbbf24, #3b82f6);
+}
+
+.hour-label {
+  margin-top: 3px;
+  font-size: 8px;
+  color: var(--color-text-dim);
+}
+
+.hour-column.best .hour-label {
+  color: #fbbf24;
+  font-weight: 700;
+}
+
+.hour-legend {
+  display: flex;
+  gap: 14px;
+  margin-bottom: 10px;
+  font-size: 9px;
+  color: var(--color-text-dim);
+}
+
+.hour-legend span {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.legend-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+
+.legend-dot.current { background: #3b82f6; }
+.legend-dot.best { background: #fbbf24; }
+
+.slot-suggestions {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.slot-suggestion-title {
+  font-size: 10px;
+  font-weight: 700;
+  color: #a5b4fc;
+}
+
+.slot-suggestion-item {
+  padding: 6px 9px;
+  border-radius: 7px;
+  font-size: 10px;
+  color: rgba(255,255,255,.82);
+  background: rgba(255,255,255,.03);
+}
+
+.slot-suggestion-item b {
+  color: #fbbf24;
+}
+
+.slot-suggestion-note {
+  margin-top: 3px;
+  font-size: 9px;
+  color: var(--color-text-dim);
+  line-height: 1.5;
+}
+
+@media (max-width: 1100px) {
+  .effectiveness-grid { grid-template-columns: 1fr; }
+}

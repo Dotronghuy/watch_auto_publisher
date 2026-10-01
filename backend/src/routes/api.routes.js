@@ -19,7 +19,7 @@ import {
   markLastSuccessfulRun,
 } from '../services/publish-run-state.service.js';
 import { recentActivities, addActivity } from '../utils/activity.js';
-import { getAllPostedHistory, getTodayEngagement, getTonePerformance } from '../utils/history.js';
+import { getAllPostedHistory, getTodayEngagement, getTonePerformance, getSkuPerformance, getHourPerformance } from '../utils/history.js';
 import { readJsonFileSync, writeJsonFileSync } from '../utils/json-file.js';
 import { trackPostMetrics } from '../services/tracking.service.js';
 import logEmitter from '../utils/liveLog.js';
@@ -308,6 +308,71 @@ router.get('/dashboard/tone-performance', async (req, res) => {
   } catch (err) {
     console.error('Lỗi lấy hiệu quả tone:', err);
     res.status(500).json({ error: 'Cannot fetch tone performance' });
+  }
+});
+
+// 1e. Hiệu quả sâu: xếp hạng sản phẩm theo tương tác + khung giờ vàng + gợi ý chỉnh lịch đăng.
+router.get('/dashboard/effectiveness', async (req, res) => {
+  try {
+    const days = Math.min(365, Math.max(1, Number.parseInt(req.query.days, 10) || 30));
+    const accountId = req.query.accountId || null;
+    const [skus, hours] = await Promise.all([
+      getSkuPerformance(days, accountId),
+      getHourPerformance(days, accountId)
+    ]);
+
+    const settings = fs.existsSync(settingsPath) ? readJsonFileSync(settingsPath) : {};
+    const currentTimeSlots = Array.isArray(settings.timeSlots) ? settings.timeSlots : [];
+    const currentHours = new Set(currentTimeSlots.map(slot => Number.parseInt(String(slot).split(':')[0], 10)));
+    const prioritySkus = settings.prioritySkus || '';
+
+    // Khung giờ tốt nhất: yêu cầu tối thiểu 2 bài để con số đủ tin cậy.
+    const MIN_POSTS = 2;
+    const rankedHours = hours
+      .filter(h => h.posts >= MIN_POSTS)
+      .sort((a, b) => b.averageScore - a.averageScore);
+
+    const slotInfo = (slot) => {
+      const hour = Number.parseInt(String(slot).split(':')[0], 10);
+      const bucket = hours.find(h => h.hour === hour) || { hour, posts: 0, averageScore: 0 };
+      return { slot, hour, posts: bucket.posts, averageScore: bucket.averageScore };
+    };
+
+    // Gợi ý thay thế: cặp "khung giờ hiện tại yếu nhất" ↔ "khung giờ tốt nhất chưa dùng".
+    const replacements = [];
+    const weakSlots = currentTimeSlots
+      .map(slotInfo)
+      .filter(item => item.posts >= MIN_POSTS)
+      .sort((a, b) => a.averageScore - b.averageScore);
+
+    const usedHours = new Set(currentHours);
+    for (const best of rankedHours) {
+      if (replacements.length >= 3 || weakSlots.length === 0) break;
+      if (usedHours.has(best.hour)) continue;
+      const weak = weakSlots.shift();
+      if (weak.averageScore >= best.averageScore) break;
+      replacements.push({
+        from: weak.slot,
+        fromAverageScore: weak.averageScore,
+        to: best.label,
+        toAverageScore: best.averageScore
+      });
+      usedHours.add(best.hour);
+    }
+
+    res.json({
+      days,
+      scoringFormula: 'like + 2 × comment + 3 × share',
+      skus,
+      hours,
+      bestHours: rankedHours.slice(0, 5),
+      currentSlots: currentTimeSlots.map(slotInfo),
+      replacements,
+      prioritySkus
+    });
+  } catch (err) {
+    console.error('Lỗi lấy hiệu quả sâu:', err);
+    res.status(500).json({ error: 'Cannot fetch effectiveness data' });
   }
 });
 
