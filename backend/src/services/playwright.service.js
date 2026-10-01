@@ -270,6 +270,17 @@ export const aiMutex = new Mutex();
 const geminiTextMutex = new Mutex();
 export const isAiIdle = () => !aiMutex.isLocked() && !geminiTextMutex.isLocked();
 // ─── GEMINI API FALLBACK (Dùng khi toggle BẬT, thay thế Playwright) ───
+const GEMINI_MIME_BY_EXT = {
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.webp': 'image/webp',
+    '.mp4': 'video/mp4',
+    '.mov': 'video/quicktime',
+};
+
+const getMimeTypeByExtension = (filePath) => GEMINI_MIME_BY_EXT[path.extname(filePath).toLowerCase()] || 'image/jpeg';
+
 async function callGeminiAPIDirectly(prompt, images = []) {
   const geminiSetting = await prisma.setting.findUnique({ where: { key: 'gemini_api_key' } });
   const geminiKeys = (geminiSetting?.value || '').split(',').map(k => k.trim()).filter(k => k !== '');
@@ -2860,8 +2871,7 @@ export const generateContentOnChatGPT = async (prompt, type, imagePath = null, o
         let images = [];
         if (imagePath && fs.existsSync(imagePath)) {
           const base64Data = fs.readFileSync(imagePath, { encoding: 'base64' });
-          const mimeType = imagePath.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg';
-          images.push({ data: base64Data, mimeType });
+          images.push({ data: base64Data, mimeType: getMimeTypeByExtension(imagePath) });
         }
         const result = await callGeminiAPIDirectly(prompt, images);
         console.log('[Toggle] ✅ Đã nhận content từ Gemini API thành công!');

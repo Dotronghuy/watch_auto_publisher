@@ -19,11 +19,27 @@ const MIME_BY_EXT = {
 
 const getMimeType = (filePath) => MIME_BY_EXT[path.extname(filePath).toLowerCase()] || 'image/png';
 
-const imageToPart = (filePath) => ({
-    inlineData: {
-        data: fs.readFileSync(filePath).toString('base64'),
-        mimeType: getMimeType(filePath),
-    },
+// Nén ảnh trước khi gửi (Gemini giới hạn request ~20MB; ảnh gốc từ Drive có thể vượt).
+const compressImageForGemini = async (filePath) => {
+    try {
+        const sharp = (await import('sharp')).default;
+        const buffer = await sharp(filePath, { failOn: 'none' })
+            .rotate()
+            .resize(1024, 1024, { fit: 'inside', withoutEnlargement: true })
+            .flatten({ background: { r: 255, g: 255, b: 255 } })
+            .jpeg({ quality: 85 })
+            .toBuffer();
+        if (buffer && buffer.length > 0) {
+            return { data: buffer.toString('base64'), mimeType: 'image/jpeg' };
+        }
+    } catch (e) {
+        console.warn(`[Gemini Ảnh] Không nén được ảnh ${path.basename(filePath)} (${e.message}) — gửi ảnh gốc.`);
+    }
+    return { data: fs.readFileSync(filePath).toString('base64'), mimeType: getMimeType(filePath) };
+};
+
+const imageToPart = async (filePath) => ({
+    inlineData: await compressImageForGemini(filePath),
 });
 
 const getRandomSampleImageLocal = () => {
@@ -120,11 +136,11 @@ export const generateBackgroundOnGemini = async (imagePath, promptsArray, abortS
         // Ảnh 2-5: ảnh tham khảo thực tế từ Drive
         // Ảnh cuối: ảnh bố cục mẫu (scene/background muốn tạo ra)
         const imageParts = [];
-        if (imagePath && fs.existsSync(imagePath)) imageParts.push(imageToPart(imagePath));
+        if (imagePath && fs.existsSync(imagePath)) imageParts.push(await imageToPart(imagePath));
         for (const extraImg of extraWatchImages || []) {
-            if (fs.existsSync(extraImg)) imageParts.push(imageToPart(extraImg));
+            if (fs.existsSync(extraImg)) imageParts.push(await imageToPart(extraImg));
         }
-        if (currentSampleImage && fs.existsSync(currentSampleImage)) imageParts.push(imageToPart(currentSampleImage));
+        if (currentSampleImage && fs.existsSync(currentSampleImage)) imageParts.push(await imageToPart(currentSampleImage));
         if (imageParts.length > 6) imageParts.length = 6;
 
         const parts = [...imageParts, { text: currentPrompt }];

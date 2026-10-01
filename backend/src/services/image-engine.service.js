@@ -51,7 +51,7 @@ export const generateImageWithEngine = async (imagePath, promptsArray, abortSign
     }
   } catch (e) {}
 
-  const rotatedEngine = getRotatedEngine();
+  const rotatedEngine = engineSetting === 'rotate' ? getRotatedEngine() : 'chatgpt';
   const order = resolveEngineOrder(engineSetting, rotatedEngine);
   let lastError = null;
 
