@@ -1922,16 +1922,32 @@ export const autoPublishRoutine = async (retryContext = null, runOptions = {}) =
             // Kiểm tra tiêu chuẩn bài đăng FB/IG. Nếu bị đánh giá dở → mở lại
             // ChatGPT/Gemini để SINH NỘI DUNG MỚI (tối đa 2 lần sửa). Tuyệt đối
             // không dùng nội dung dự phòng.
+            // Trường hợp AI timeout/treo (không trả về nội dung gì): chờ một lúc
+            // rồi mở lại ChatGPT/Gemini với ĐÚNG prompt cũ, không dùng nội dung dự phòng.
+            const CONTENT_TIMEOUT_RETRY_MS = 60_000;
             let fbCheck = validateSocialPostContent(fbContent, { platform: 'fb', prompt: contentPromptUsed });
             let igCheck = validateSocialPostContent(igContent, { platform: 'ig', prompt: contentPromptUsed });
             let contentRegenAttempts = 0;
             while ((!fbCheck.ok || !igCheck.ok) && contentRegenAttempts < 2) {
               contentRegenAttempts++;
-              const failedParts = [];
-              if (!fbCheck.ok) failedParts.push(`FACEBOOK (${REASON_FIX_TEXT[fbCheck.reason] || fbCheck.reason})`);
-              if (!igCheck.ok) failedParts.push(`INSTAGRAM (${REASON_FIX_TEXT[igCheck.reason] || igCheck.reason})`);
-              const retryPrompt = `${contentPromptUsed}\n\n[LẦN SỬA ${contentRegenAttempts}: Nội dung lần trước chưa đạt chuẩn: ${failedParts.join('; ')}. Hãy viết lại HOÀN TOÀN MỚI và khắc phục các lỗi đó. Giữ đúng format tiêu đề FACEBOOK: và INSTAGRAM:.]`;
-              liveLog(`🔄 [${account.name}] Nội dung chưa đạt chuẩn (${failedParts.join('; ')}). Đang sinh lại lần ${contentRegenAttempts}...`, 'warning', 'System');
+              const isTimeoutRetry = !fbContent && !igContent;
+              let retryPrompt = contentPromptUsed;
+              if (isTimeoutRetry) {
+                liveLog(`⏳ [${account.name}] ChatGPT/Gemini không trả về nội dung (có thể bị timeout). Chờ ${CONTENT_TIMEOUT_RETRY_MS / 1000} giây rồi mở lại (lần ${contentRegenAttempts + 1}/3)...`, 'warning', 'System');
+                await new Promise((resolve, reject) => {
+                  const timer = setTimeout(resolve, CONTENT_TIMEOUT_RETRY_MS);
+                  globalStopController.signal.addEventListener('abort', () => {
+                    clearTimeout(timer);
+                    reject(new Error('Sleep bị dừng theo yêu cầu.'));
+                  });
+                });
+              } else {
+                const failedParts = [];
+                if (!fbCheck.ok) failedParts.push(`FACEBOOK (${REASON_FIX_TEXT[fbCheck.reason] || fbCheck.reason})`);
+                if (!igCheck.ok) failedParts.push(`INSTAGRAM (${REASON_FIX_TEXT[igCheck.reason] || igCheck.reason})`);
+                retryPrompt = `${contentPromptUsed}\n\n[LẦN SỬA ${contentRegenAttempts}: Nội dung lần trước chưa đạt chuẩn: ${failedParts.join('; ')}. Hãy viết lại HOÀN TOÀN MỚI và khắc phục các lỗi đó. Giữ đúng format tiêu đề FACEBOOK: và INSTAGRAM:.]`;
+                liveLog(`🔄 [${account.name}] Nội dung chưa đạt chuẩn (${failedParts.join('; ')}). Đang sinh lại lần ${contentRegenAttempts}...`, 'warning', 'System');
+              }
               if (postMode === 'REELS') {
                 const reelsContent = await generateContentOnChatGPT(retryPrompt, 'reels', targetImgPathForGemini);
                 fbContent = reelsContent;
@@ -1957,7 +1973,7 @@ export const autoPublishRoutine = async (retryContext = null, runOptions = {}) =
               await sendAlert({
                 type: 'content-invalid',
                 title: `Không tạo được nội dung đạt chuẩn cho SKU ${selectedSku.name}`,
-                details: `Đã mở ChatGPT/Gemini sinh lại 2 lần nhưng nội dung vẫn không đạt tiêu chuẩn (${reasons}).\nHệ thống KHÔNG đăng nội dung dở và đã bỏ qua SKU này.\n\n— Nội dung lần cuối (FB) —\n${(fbContent || '').slice(0, 300)}\n\n— Nội dung lần cuối (IG) —\n${(igContent || '').slice(0, 300)}`,
+                details: `Đã mở lại ChatGPT/Gemini 2 lần (chờ 60 giây giữa các lần nếu bị timeout/không phản hồi) nhưng vẫn không có nội dung đạt chuẩn (${reasons}).\nHệ thống KHÔNG đăng nội dung dở và đã bỏ qua SKU này.\n\n— Nội dung lần cuối (FB) —\n${(fbContent || '').slice(0, 300)}\n\n— Nội dung lần cuối (IG) —\n${(igContent || '').slice(0, 300)}`,
               });
               throw Object.assign(
                 new Error(`Không tạo được nội dung FB/IG đạt chuẩn sau 3 lần thử (${reasons}).`),
