@@ -43,7 +43,7 @@ import { createFacebookPermalinkResolver } from './facebookPermalink.service.js'
 import { buildPerformanceMultipliers, getToneInstructionText, selectContentTone } from './content-tone.service.js';
 import { reelPropagationDelayMs, waitForReelPropagation } from './mobile-reel-readiness.js';
 import { sanitizeGeneratedSocialContent } from './generated-content-sanitizer.js';
-import { validateSocialPostContent } from './content-validator.js';
+import { validateSocialPostContent, REASON_FIX_TEXT } from './content-validator.js';
 import { sendAlert } from './alert.service.js';
 import { cleanupDebugScreenshots } from './ui-watch.service.js';
 
@@ -1913,50 +1913,77 @@ export const autoPublishRoutine = async (retryContext = null, runOptions = {}) =
             }
 
             if (tempImgDownloaded && fs.existsSync(tempImgDownloaded)) fs.unlinkSync(tempImgDownloaded);
-            
-            fbContent = fbContent || `[Đăng Tự Động] Khám phá ngay siêu phẩm đồng hồ ${selectedSku.name} tuyệt đẹp. #iwcarnivalvietnam #iwcarnival #donghoiwcarnival`;
-            igContent = igContent || fbContent;
-            thContent = fbContent;
-            postContent = fbContent;
 
             // Final defense before any platform API call: ChatGPT's visible
             // project title can be concatenated with the markdown body.
             fbContent = sanitizeGeneratedSocialContent(fbContent) || fbContent;
             igContent = sanitizeGeneratedSocialContent(igContent) || igContent;
-            thContent = sanitizeGeneratedSocialContent(thContent) || thContent;
-            postContent = sanitizeGeneratedSocialContent(postContent) || postContent;
 
-            // Kiểm tra tiêu chuẩn bài đăng FB/IG — chặn content lấy nhầm prompt,
-            // quá ngắn/dài, còn placeholder template. Không đạt thì thay bằng
-            // nội dung dự phòng an toàn + báo Telegram thay vì đăng nội dung dở.
-            const fbCheck = validateSocialPostContent(fbContent, { platform: 'fb', prompt: contentPromptUsed });
-            const igCheck = validateSocialPostContent(igContent, { platform: 'ig', prompt: contentPromptUsed });
+            // Kiểm tra tiêu chuẩn bài đăng FB/IG. Nếu bị đánh giá dở → mở lại
+            // ChatGPT/Gemini để SINH NỘI DUNG MỚI (tối đa 2 lần sửa). Tuyệt đối
+            // không dùng nội dung dự phòng.
+            let fbCheck = validateSocialPostContent(fbContent, { platform: 'fb', prompt: contentPromptUsed });
+            let igCheck = validateSocialPostContent(igContent, { platform: 'ig', prompt: contentPromptUsed });
+            let contentRegenAttempts = 0;
+            while ((!fbCheck.ok || !igCheck.ok) && contentRegenAttempts < 2) {
+              contentRegenAttempts++;
+              const failedParts = [];
+              if (!fbCheck.ok) failedParts.push(`FACEBOOK (${REASON_FIX_TEXT[fbCheck.reason] || fbCheck.reason})`);
+              if (!igCheck.ok) failedParts.push(`INSTAGRAM (${REASON_FIX_TEXT[igCheck.reason] || igCheck.reason})`);
+              const retryPrompt = `${contentPromptUsed}\n\n[LẦN SỬA ${contentRegenAttempts}: Nội dung lần trước chưa đạt chuẩn: ${failedParts.join('; ')}. Hãy viết lại HOÀN TOÀN MỚI và khắc phục các lỗi đó. Giữ đúng format tiêu đề FACEBOOK: và INSTAGRAM:.]`;
+              liveLog(`🔄 [${account.name}] Nội dung chưa đạt chuẩn (${failedParts.join('; ')}). Đang sinh lại lần ${contentRegenAttempts}...`, 'warning', 'System');
+              if (postMode === 'REELS') {
+                const reelsContent = await generateContentOnChatGPT(retryPrompt, 'reels', targetImgPathForGemini);
+                fbContent = reelsContent;
+                igContent = reelsContent;
+                thContent = reelsContent;
+              } else {
+                const combinedContent = await generateFbIgContentOnChatGPT(retryPrompt, targetImgPathForGemini);
+                fbContent = combinedContent.fb;
+                igContent = combinedContent.ig;
+              }
+              fbContent = sanitizeGeneratedSocialContent(fbContent) || fbContent;
+              igContent = sanitizeGeneratedSocialContent(igContent) || igContent;
+              thContent = sanitizeGeneratedSocialContent(thContent) || thContent;
+              fbCheck = validateSocialPostContent(fbContent, { platform: 'fb', prompt: retryPrompt });
+              igCheck = validateSocialPostContent(igContent, { platform: 'ig', prompt: retryPrompt });
+            }
             if (!fbCheck.ok || !igCheck.ok) {
               const reasons = [
                 fbCheck.ok ? null : `FB (${fbCheck.reason})`,
                 igCheck.ok ? null : `IG (${igCheck.reason})`,
               ].filter(Boolean).join(', ');
-              const safeFallback = `[Đăng Tự Động] Khám phá ngay siêu phẩm đồng hồ ${selectedSku.name} tuyệt đẹp. #iwcarnivalvietnam #iwcarnival #donghoiwcarnival`;
-              liveLog(`⚠️ [${account.name}] Nội dung không đạt tiêu chuẩn (${reasons}). Đã thay bằng nội dung dự phòng an toàn.`, 'warning', 'System');
+              liveLog(`🛑 [${account.name}] Không tạo được nội dung đạt chuẩn sau 3 lần thử (${reasons}). Bỏ qua SKU này.`, 'error', 'System');
               await sendAlert({
                 type: 'content-invalid',
-                title: `Nội dung bài đăng không đạt tiêu chuẩn (${reasons})`,
-                details: `SKU: ${selectedSku.name}\nHệ thống phát hiện nội dung sinh ra có vấn đề và KHÔNG đăng nội dung đó — đã thay bằng nội dung dự phòng an toàn.\n\n— Nội dung FB bị loại —\n${(fbContent || '').slice(0, 300)}\n\n— Nội dung IG bị loại —\n${(igContent || '').slice(0, 300)}`,
+                title: `Không tạo được nội dung đạt chuẩn cho SKU ${selectedSku.name}`,
+                details: `Đã mở ChatGPT/Gemini sinh lại 2 lần nhưng nội dung vẫn không đạt tiêu chuẩn (${reasons}).\nHệ thống KHÔNG đăng nội dung dở và đã bỏ qua SKU này.\n\n— Nội dung lần cuối (FB) —\n${(fbContent || '').slice(0, 300)}\n\n— Nội dung lần cuối (IG) —\n${(igContent || '').slice(0, 300)}`,
               });
-              if (!fbCheck.ok) fbContent = safeFallback;
-              if (!igCheck.ok) igContent = safeFallback;
-              thContent = fbContent;
-              postContent = fbContent;
+              throw Object.assign(
+                new Error(`Không tạo được nội dung FB/IG đạt chuẩn sau 3 lần thử (${reasons}).`),
+                { code: 'CONTENT_GENERATION_FAILED', isAiSkuFailure: true, failedSku: selectedSku?.name || '' },
+              );
             }
+            thContent = fbContent;
+            postContent = fbContent;
+            thContent = sanitizeGeneratedSocialContent(thContent) || thContent;
+            postContent = sanitizeGeneratedSocialContent(postContent) || postContent;
 
          } catch (geminiError) {
             checkAbort();
-            console.log(`⚠️ Lỗi Playwright ChatGPT: ${geminiError.message}. Dùng nội dung dự phòng.`);
+            if (geminiError?.code === 'CONTENT_GENERATION_FAILED' || geminiError?.isAiSkuFailure) throw geminiError;
+            console.log(`⚠️ Lỗi Playwright ChatGPT: ${geminiError.message}. Không dùng nội dung dự phòng — bỏ qua SKU này.`);
             contentSelection = null;
-            fbContent = `[Đăng Tự Động] Khám phá ngay siêu phẩm đồng hồ ${selectedSku.name} tuyệt đẹp. #iwcarnivalvietnam #iwcarnival #donghoiwcarnival`;
-            igContent = fbContent;
-            thContent = fbContent;
-            postContent = fbContent;
+            await sendAlert({
+              type: 'content-invalid',
+              title: `Không tạo được nội dung cho SKU ${selectedSku?.name || ''} — đã bỏ qua`,
+              details: `Lỗi khi mở ChatGPT/Gemini viết nội dung: ${geminiError.message}\nHệ thống KHÔNG đăng nội dung dự phòng và đã bỏ qua SKU này, chuyển sang SKU tiếp theo.`,
+            });
+            throw Object.assign(geminiError, {
+              code: geminiError.code || 'CONTENT_GENERATION_FAILED',
+              isAiSkuFailure: true,
+              failedSku: selectedSku?.name || '',
+            });
          }
 
          const metricMetadata = contentSelection

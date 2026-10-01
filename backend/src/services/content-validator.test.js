@@ -78,8 +78,34 @@ test('validateSocialPostContent từ chối nội dung còn placeholder template
 });
 
 test('validateSocialPostContent từ chối IG quá 30 hashtag', () => {
-    const hashtags = Array.from({ length: 31 }, (_, i) => `#tag${i}`).join(' ');
+    const hashtags = ['#iwcarnivalvietnam', '#iwcarnival', ...Array.from({ length: 29 }, (_, i) => `#tag${i}`)].join(' ');
     const res = validateSocialPostContent(`Chiếc đồng hồ đẹp nhất hôm nay. ${hashtags}`, { platform: 'ig' });
     assert.equal(res.ok, false);
     assert.equal(res.reason, 'too-many-hashtags');
+});
+
+test('validateSocialPostContent từ chối từ ngữ bị cấm', () => {
+    const content = 'ĐỒNG HỒ CỰC ĐẸP — sale sốc giảm giá hôm nay, mua ngay kẻo lỡ! #iwcarnivalvietnam #iwcarnival';
+    const res = validateSocialPostContent(content, { platform: 'fb' });
+    assert.equal(res.ok, false);
+    assert.equal(res.reason, 'banned-phrase');
+});
+
+test('validateSocialPostContent từ chối hashtag có dấu tiếng Việt', () => {
+    const content = 'ĐỒNG HỒ SANG TRỌNG cho phái mạnh. #iwcarnivalvietnam #đồnghồnam';
+    const res = validateSocialPostContent(content, { platform: 'fb' });
+    assert.equal(res.ok, false);
+    assert.equal(res.reason, 'diacritic-hashtag');
+});
+
+test('validateSocialPostContent từ chối thiếu hashtag thương hiệu', () => {
+    const content = 'ĐỒNG HỒ MỚI VỀ — thiết kế sang trọng, bộ máy bền bỉ dành cho phái mạnh. #dongho #dothegioi';
+    const res = validateSocialPostContent(content, { platform: 'fb' });
+    assert.equal(res.ok, false);
+    assert.equal(res.reason, 'missing-brand-hashtag');
+});
+
+test('validateSocialPostContent chấp nhận khi đủ 2 hashtag thương hiệu', () => {
+    const content = 'ĐỒNG HỒ MỚI VỀ — thiết kế sang trọng, bộ máy bền bỉ dành cho phái mạnh hiện đại. #iwcarnivalvietnam #iwcarnival';
+    assert.deepEqual(validateSocialPostContent(content, { platform: 'fb' }), { ok: true, reason: null });
 });
