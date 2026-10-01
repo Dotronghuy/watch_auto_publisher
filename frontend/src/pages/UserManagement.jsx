@@ -71,6 +71,7 @@ const PERMISSION_TREE = [
       { id: 'settings.api_keys', label: 'Khóa API Gemini & Phân bổ nguồn' },
       { id: 'settings.accounts', label: 'Danh sách tài khoản đăng bài' },
       { id: 'settings.ai_login', label: 'Login Helper AI (ChatGPT/Gemini)' },
+      { id: 'settings.backup', label: 'Sao lưu & Khôi phục dữ liệu' },
       { id: 'settings.users', label: 'Quản lý Nhân sự (Chỉ Admin)' }
     ]
   }

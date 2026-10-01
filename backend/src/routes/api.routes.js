@@ -29,6 +29,7 @@ import { syncAllCRM, replyCRM } from '../services/crm.service.js';
 import { autoTagAllConversations } from '../services/autotag.service.js';
 import { syncHashesFromSheets } from '../services/image-hash.service.js';
 import { syncLocalImageEmbeddingIndex } from '../services/local-image-embedding.service.js';
+import { createBackup, listBackups, restoreBackup, getBackupZipPath, BACKUP_NAME_PATTERN } from '../services/backup.service.js';
 import { CONTENT_CTAS, CONTENT_TONES, TONE_PROMPT_VERSION, getToneInstructionText } from '../services/content-tone.service.js';
 
 // Khởi tạo bảng CRM DB nếu chưa có
@@ -980,6 +981,48 @@ router.post('/settings', async (req, res) => {
   } catch (e) {
     res.status(500).json({ error: 'Cannot save settings' });
   }
+});
+
+// 8. Sao lưu & khôi phục dữ liệu 1 chạm
+router.post('/backup/create', async (req, res) => {
+  try {
+    const backup = await createBackup();
+    addActivity(`Đã sao lưu dữ liệu (${backup.fileCount} file, ${(backup.totalBytes / 1024).toFixed(0)} KB)`, 'info');
+    res.json({ success: true, backup });
+  } catch (err) {
+    console.error('Lỗi tạo backup:', err);
+    res.status(500).json({ error: err.message || 'Không thể tạo backup' });
+  }
+});
+
+router.get('/backup/list', (req, res) => {
+  try {
+    res.json(listBackups());
+  } catch (err) {
+    console.error('Lỗi liệt kê backup:', err);
+    res.status(500).json({ error: err.message || 'Không thể liệt kê backup' });
+  }
+});
+
+router.post('/backup/restore', async (req, res) => {
+  try {
+    const { name } = req.body || {};
+    const result = await restoreBackup(String(name || ''));
+    addActivity(`Đã khôi phục dữ liệu từ bản backup ${name} (${result.restored.length} file)`, 'warning');
+    res.json({ success: true, ...result });
+  } catch (err) {
+    console.error('Lỗi khôi phục backup:', err);
+    res.status(400).json({ error: err.message || 'Không thể khôi phục backup' });
+  }
+});
+
+router.get('/backup/download/:name', (req, res) => {
+  const name = String(req.params.name || '');
+  const zipPath = getBackupZipPath(name);
+  if (!BACKUP_NAME_PATTERN.test(name) || !zipPath) {
+    return res.status(404).json({ error: 'File zip không tồn tại hoặc tên backup không hợp lệ' });
+  }
+  res.download(zipPath);
 });
 
 // 8. API lấy Lịch sử đăng bài (Cho trang Lịch)

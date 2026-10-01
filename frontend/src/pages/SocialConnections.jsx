@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Key, Copy, Link2, Clock, Plus, X, Save, Check, Eye, EyeOff, BrainCircuit, RefreshCw, Sparkles, Trash2, AlertCircle, Play, CheckCircle2, XCircle, FileText, ChevronDown, ChevronRight, Settings, Users, Edit2, MessageSquare } from 'lucide-react';
+import { Key, Copy, Link2, Clock, Plus, X, Save, Check, Eye, EyeOff, BrainCircuit, RefreshCw, Sparkles, Trash2, AlertCircle, Play, CheckCircle2, XCircle, FileText, ChevronDown, ChevronRight, Settings, Users, Edit2, MessageSquare, DatabaseBackup, Download, RotateCcw } from 'lucide-react';
 import Swal from 'sweetalert2';
 import { Facebook, Instagram, Threads, TikTok } from '../components/SocialIcons';
 import { useAuth } from '../context/AuthContext';
@@ -17,6 +17,11 @@ const SocialConnections = () => {
   const [igDelayMin, setIgDelayMin] = useState(10);
   const [igDelayMax, setIgDelayMax] = useState(20);
   const [prioritySkus, setPrioritySkus] = useState('');
+  
+  // Sao lưu & khôi phục
+  const [backups, setBackups] = useState([]);
+  const [creatingBackup, setCreatingBackup] = useState(false);
+  const [restoringBackup, setRestoringBackup] = useState('');
   
   // AI Chatbot Settings
   const [botEnabled, setBotEnabled] = useState(false);
@@ -334,6 +339,73 @@ const SocialConnections = () => {
     const updated = timeSlots.filter(t => t !== time);
     setTimeSlots(updated);
     autoSaveSettings({ timeSlots: updated });
+  };
+
+  const loadBackups = async () => {
+    try {
+      const res = await fetch('/api/backup/list');
+      const data = await res.json();
+      if (Array.isArray(data)) setBackups(data);
+    } catch (e) { console.error(e); }
+  };
+
+  useEffect(() => { loadBackups(); }, []);
+
+  const handleCreateBackup = async () => {
+    setCreatingBackup(true);
+    try {
+      const res = await fetch('/api/backup/create', { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || 'Không thể tạo backup');
+      await loadBackups();
+      Swal.fire({
+        title: 'Sao lưu thành công',
+        html: `Đã sao lưu <b>${data.backup.fileCount} file</b> (${(data.backup.totalBytes / 1024).toFixed(0)} KB).<br/>Bạn có thể tải file zip về máy để lưu nơi khác.`,
+        icon: 'success',
+        background: 'var(--color-surface)',
+        color: 'white'
+      });
+    } catch (e) {
+      Swal.fire('Lỗi', e.message || 'Không thể tạo backup', 'error');
+    }
+    setCreatingBackup(false);
+  };
+
+  const handleRestoreBackup = async (name) => {
+    const confirm = await Swal.fire({
+      title: 'Khôi phục dữ liệu?',
+      text: `Toàn bộ cài đặt, token và lịch sử sẽ được thay bằng dữ liệu trong bản ${name}. Hãy chắc chắn bạn muốn tiếp tục.`,
+      icon: 'warning',
+      showCancelButton: true,
+      confirmButtonText: 'Khôi phục',
+      cancelButtonText: 'Hủy',
+      background: 'var(--color-surface)',
+      color: 'white'
+    });
+    if (!confirm.isConfirmed) return;
+    setRestoringBackup(name);
+    try {
+      const res = await fetch('/api/backup/restore', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name })
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || 'Không thể khôi phục');
+      const failedText = (data.failed && data.failed.length > 0)
+        ? `<br/><b>${data.failed.length} file không khôi phục được</b> — hãy tắt hệ thống và dùng lệnh restore trong Terminal.`
+        : '';
+      Swal.fire({
+        title: 'Khôi phục thành công',
+        html: `Đã khôi phục <b>${data.restored.length} file</b>.${failedText}<br/><b>Hãy khởi động lại hệ thống để dữ liệu có hiệu lực.</b>`,
+        icon: 'success',
+        background: 'var(--color-surface)',
+        color: 'white'
+      });
+    } catch (e) {
+      Swal.fire('Lỗi', e.message || 'Không thể khôi phục', 'error');
+    }
+    setRestoringBackup('');
   };
 
   return (
@@ -846,6 +918,75 @@ const SocialConnections = () => {
               <Link to="/settings/users" className="btn-primary glow-primary" style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', textDecoration: 'none' }}>
                 Truy cập trang Quản lý Nhân sự <ChevronRight size={16} />
               </Link>
+            </div>
+          </div>
+        )}
+
+        {/* ── Section 5: Backup & Restore (quyền: settings.backup) ── */}
+        {hasPermission('settings.backup') && (
+          <div className="section-card">
+            <div className="section-header">
+              <div className="icon-circle blue"><DatabaseBackup size={16} /></div>
+              <h3>Sao lưu & Khôi phục dữ liệu</h3>
+            </div>
+            <p className="section-desc">Sao lưu toàn bộ dữ liệu quan trọng (sản phẩm, cài đặt, lịch sử đăng, token tài khoản) phòng khi máy hỏng hoặc mất dữ liệu. File backup được lưu trong thư mục <code>backend/backups</code> và có thể tải về để cất nơi an toàn.</p>
+
+            <div style={{ padding: '0 20px 20px 20px' }}>
+              <button
+                className="btn-primary glow-primary"
+                onClick={handleCreateBackup}
+                disabled={creatingBackup}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: '8px' }}
+              >
+                {creatingBackup ? <RefreshCw className="spin" size={16} /> : <DatabaseBackup size={16} />}
+                {creatingBackup ? 'Đang sao lưu...' : 'Sao lưu ngay'}
+              </button>
+            </div>
+
+            {backups.length > 0 && (
+              <div style={{ padding: '0 20px 20px 20px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                {backups.map((b) => (
+                  <div key={b.name} className="ai-card" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', padding: '12px 16px' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                      <span style={{ fontWeight: 600, fontSize: '13px' }}>{new Date(b.createdAt).toLocaleString('vi-VN')}</span>
+                      <span style={{ fontSize: '12px', color: 'var(--color-text-muted)' }}>
+                        {b.fileCount} file · {b.totalBytes > 0 ? `${(b.totalBytes / 1024).toFixed(0)} KB` : '0 KB'}
+                      </span>
+                    </div>
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                      {b.zipName && (
+                        <button
+                          className="btn-outline justify-center"
+                          onClick={() => window.open(`/api/backup/download/${b.name}`)}
+                          title="Tải file backup về máy"
+                          style={{ fontSize: '12px', display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+                        >
+                          <Download size={14} /> Tải về
+                        </button>
+                      )}
+                      <button
+                        className="btn-outline justify-center"
+                        onClick={() => handleRestoreBackup(b.name)}
+                        disabled={restoringBackup === b.name}
+                        title="Khôi phục dữ liệu từ bản backup này"
+                        style={{ fontSize: '12px', borderColor: '#f59e0b', color: '#f59e0b', display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+                      >
+                        {restoringBackup === b.name ? <RefreshCw className="spin" size={14} /> : <RotateCcw size={14} />}
+                        {restoringBackup === b.name ? 'Đang khôi phục...' : 'Khôi phục'}
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className="section-footer" style={{ borderTop: '1px solid var(--color-border)', padding: '12px 20px 20px 20px', justifyContent: 'flex-start', flexDirection: 'column', alignItems: 'flex-start', gap: '6px' }}>
+              <span style={{ fontSize: '12px', color: 'var(--color-text-muted)' }}>
+                Sau khi khôi phục, hãy khởi động lại hệ thống để dữ liệu có hiệu lực.
+              </span>
+              <span style={{ fontSize: '12px', color: 'var(--color-text-muted)' }}>
+                Khôi phục khi không mở được giao diện: <code>node backend/src/scripts/restore_backup.js &lt;tên backup&gt;</code>
+              </span>
             </div>
           </div>
         )}
