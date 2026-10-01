@@ -23,7 +23,6 @@ const BACKUP_FILES = [
   'config/credentials.json',
   'config/analyzed_samples.json',
   'config/image-engine-state.json',
-  'config/account-rotation-state.json',
   'config/mobile_worker_pairing.txt',
   'config/zalo-bridge-device.json',
   'posted_history.db',
