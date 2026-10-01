@@ -1316,6 +1316,43 @@ export const trainContentOnly = async () => {
   }
 };
 
+// Khi tạo ảnh AI thất bại, không hủy job: tìm ảnh thật/video chưa đăng có sẵn
+// trong Drive của CHÍNH SKU đó (Ảnh_Tự_Chụp → Ảnh_Hãng → Video_Doc) để chuyển
+// luồng đăng bình thường. Trả về { media, postMode } hoặc null nếu không còn gì.
+const pickFallbackDriveMediaForSku = async (skuFolder, postedIds) => {
+  const fallbackOptions = [
+    { folder: '2_Anh_Tu_Chup', mode: 'ALBUM', video: false },
+    { folder: '1_Anh_Hang', mode: 'ALBUM', video: false },
+    { folder: '3_Video_Doc', mode: 'REELS', video: true },
+  ];
+  for (const option of fallbackOptions) {
+    try {
+      const folderId = await getFolderIdByName(option.folder, skuFolder.id);
+      if (!folderId) continue;
+      const mediaFiles = option.video
+        ? await getVideosInFolder(folderId)
+        : await getImagesInFolder(folderId);
+      const freshMedia = mediaFiles.filter(item => !postedIds.includes(item.id));
+      if (freshMedia.length === 0) continue;
+
+      if (option.mode === 'REELS') {
+        return {
+          media: [freshMedia[Math.floor(Math.random() * freshMedia.length)]],
+          postMode: 'REELS',
+        };
+      }
+      const numToPick = Math.min(freshMedia.length, Math.floor(Math.random() * 5) + 4);
+      const sorted = [...freshMedia].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+      const firstImage = sorted[0];
+      const rest = sorted.slice(1).sort(() => 0.5 - Math.random()).slice(0, numToPick - 1);
+      return { media: [firstImage, ...rest], postMode: 'ALBUM' };
+    } catch (e) {
+      console.log(`⚠️ Fallback Drive: lỗi khi đọc thư mục ${option.folder}: ${e.message}`);
+    }
+  }
+  return null;
+};
+
 export const autoPublishRoutine = async (retryContext = null, runOptions = {}) => {
   const isRootAttempt = retryContext === null;
   const context = retryContext || { failedAiSkus: new Set() };
@@ -1729,7 +1766,7 @@ export const autoPublishRoutine = async (retryContext = null, runOptions = {}) =
           }
 
           if (!Array.isArray(aiGeneratedImagePaths) || aiGeneratedImagePaths.length === 0) {
-            throw new Error('ChatGPT trả về 0 ảnh AI. Dừng Auto Publish để tránh chạy tiếp khi chưa có ảnh tạo mới.');
+            throw new Error('Cả ChatGPT và Gemini đều không tạo được ảnh AI cho SKU này.');
           }
 
           // Lớp chặn cuối ngay trước khâu đăng: kể cả engine hoặc selector thay đổi
@@ -1767,14 +1804,58 @@ export const autoPublishRoutine = async (retryContext = null, runOptions = {}) =
             }
             throw pwError;
           }
-          pwError.isAiSkuFailure = true;
-          pwError.failedSku = selectedSku?.name || null;
-          liveLog(
-            `❌ [AUTO PUBLISH] Tạo ảnh AI cho SKU ${selectedSku?.name || 'không xác định'} thất bại: ${pwError.message}. Đang chuyển sang SKU hợp lệ kế tiếp.`,
-            'error',
-            'ChatGPT',
-          );
-          throw pwError;
+
+          // Cả 2 engine tạo ảnh AI đều thất bại → KHÔNG hủy job. Chuyển luồng sang
+          // đăng ảnh thật/video có sẵn trong Drive của CHÍNH SKU này (nếu có).
+          const driveFallback = await pickFallbackDriveMediaForSku(selectedSku, postedIds);
+          if (driveFallback) {
+            try {
+              const newPaths = [];
+              for (const media of driveFallback.media) {
+                checkAbort();
+                newPaths.push(await downloadFileFromDrive(media.id, media.name));
+              }
+              // Dọn ảnh AVT gốc đã tải trước đó vì không còn dùng
+              if (fs.existsSync(localFilePaths[0])) {
+                try { fs.unlinkSync(localFilePaths[0]); } catch (e) {}
+              }
+              localFilePaths = newPaths;
+              selectedImages = driveFallback.media;
+              postMode = driveFallback.postMode;
+              const fallbackDesc = postMode === 'REELS'
+                ? '1 video có sẵn'
+                : `${newPaths.length} ảnh thật có sẵn`;
+              liveLog(
+                `🔄 [AUTO PUBLISH] Tạo ảnh AI thất bại (${pwError.message}). Đã chuyển luồng: đăng ${fallbackDesc} trong Drive của SKU ${selectedSku.name}.`,
+                'warning',
+                'System',
+              );
+              await sendAlert({
+                type: 'system',
+                title: `Tạo ảnh AI thất bại cho SKU ${selectedSku.name} — chuyển đăng ảnh/video có sẵn`,
+                details: `Cả ChatGPT và Gemini đều không tạo được ảnh cho SKU ${selectedSku.name} (${pwError.message}).\nHệ thống KHÔNG hủy job mà chuyển sang đăng ${fallbackDesc} có sẵn trong Drive của chính SKU này.`,
+              });
+            } catch (fallbackError) {
+              // Tải media dự phòng lỗi → bỏ qua SKU này, chuyển SKU hợp lệ kế tiếp
+              liveLog(
+                `⚠️ [AUTO PUBLISH] Chuyển luồng dự phòng cho SKU ${selectedSku.name} thất bại: ${fallbackError.message}. Chuyển sang SKU kế tiếp.`,
+                'error',
+                'System',
+              );
+              pwError.isAiSkuFailure = true;
+              pwError.failedSku = selectedSku?.name || null;
+              throw pwError;
+            }
+          } else {
+            pwError.isAiSkuFailure = true;
+            pwError.failedSku = selectedSku?.name || null;
+            liveLog(
+              `❌ [AUTO PUBLISH] Tạo ảnh AI cho SKU ${selectedSku?.name || 'không xác định'} thất bại: ${pwError.message}. Đang chuyển sang SKU hợp lệ kế tiếp.`,
+              'error',
+              'ChatGPT',
+            );
+            throw pwError;
+          }
         }
       }
 
