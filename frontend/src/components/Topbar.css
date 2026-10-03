@@ -219,6 +219,11 @@
 }
 
 /* ─── Nút chuyển giao diện Sáng / Tối / Tự động ─── */
+.theme-toggle-wrap {
+  position: relative;
+  flex-shrink: 0;
+}
+
 .theme-toggle {
   display: flex;
   align-items: center;
@@ -247,6 +252,72 @@
   transition: transform 0.45s var(--ease-spring);
 }
 
-.theme-toggle:hover svg {
+.theme-toggle:hover > svg:first-child {
   transform: rotate(180deg) scale(1.1);
+}
+
+.theme-toggle-caret {
+  opacity: 0.55;
+}
+
+.theme-toggle-caret.open {
+  transform: rotate(180deg);
+}
+
+.theme-toggle-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 100;
+  min-width: 168px;
+  padding: 6px;
+  border-radius: 14px;
+  border: 1px solid var(--border-light);
+  background: var(--glass-dropdown);
+  backdrop-filter: blur(18px);
+  box-shadow: var(--shadow-3);
+  animation: menu-pop 0.18s var(--ease-smooth);
+}
+
+@keyframes menu-pop {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.theme-toggle-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 11px;
+  border: none;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: 12.5px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.18s, color 0.18s;
+  text-align: left;
+}
+
+.theme-toggle-option:hover {
+  background: var(--hint-soft);
+  color: var(--color-text-main);
+}
+
+.theme-toggle-option.active {
+  background: rgba(255, 77, 141, 0.1);
+  color: var(--color-primary);
+}
+
+.theme-toggle-check {
+  margin-left: auto;
 }

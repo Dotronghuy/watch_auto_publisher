@@ -201,11 +201,6 @@ const Dashboard = () => {
             <p>Hệ thống hoạt động ổn định. {stats.activeWorkflows} luồng đang xử lý dữ liệu.</p>
           </div>
         </div>
-        <div className="dashboard-hero">
-          <div className="dashboard-hero-float">
-            <img src="/watch-3d.png" alt="ZenWatch 3D" className="dashboard-hero-watch" onMouseMove={applyTilt} onMouseLeave={resetTilt} />
-          </div>
-        </div>
       </div>
 
       {/* ═══ Stats Grid ═══ */}
