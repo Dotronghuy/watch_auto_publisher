@@ -133,10 +133,10 @@
 
 .value {
   font-size: 11px;
-  background: rgba(0,0,0,.3);
+  background: var(--dim-overlay);
   padding: 6px 10px;
   border-radius: 6px;
-  border: 1px solid rgba(255,255,255,.05);
+  border: 1px solid var(--border-light);
   color: var(--color-text-muted);
 }
 
@@ -260,8 +260,8 @@
   top: 20px;
   right: 0;
   z-index: 99;
-  background: rgba(16,16,20,0.9);
-  border: 1px solid rgba(255,255,255,0.1);
+  background: var(--glass-dropdown);
+  border: 1px solid var(--border);
   border-right: none;
   padding: 10px 16px;
   color: #fff;

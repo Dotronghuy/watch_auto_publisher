@@ -8,9 +8,17 @@ const Login = () => {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [tilt, setTilt] = useState({ x: 0, y: 0 });
   
   const { login } = useAuth();
   const navigate = useNavigate();
+
+  const handleMove = (e) => {
+    setTilt({
+      x: (e.clientX / window.innerWidth - 0.5) * 2,
+      y: (e.clientY / window.innerHeight - 0.5) * 2
+    });
+  };
 
   const handleLogin = async (e) => {
     e.preventDefault();
@@ -45,7 +53,20 @@ const Login = () => {
   };
 
   return (
-    <div className="login-container">
+    <div className="login-container" onMouseMove={handleMove}>
+      <div className="login-visual">
+        <div className="login-visual-glow"></div>
+        <div className="login-watch-float">
+          <img
+            src="/watch-3d.png"
+            alt="ZenWatch Flow 3D"
+            className="login-watch"
+            style={{ transform: `perspective(1400px) rotateY(${(tilt.x * 10).toFixed(2)}deg) rotateX(${(-tilt.y * 10).toFixed(2)}deg)` }}
+          />
+        </div>
+        <h1 className="login-visual-title">ZenWatch <span className="text-gradient">Flow</span></h1>
+        <p className="login-visual-sub">Hệ thống tự động đăng bài & chăm sóc khách hàng cho cửa hàng đồng hồ</p>
+      </div>
       <div className="login-box">
         <div className="login-logo">
           <img src="/logo-z.png" alt="ZenWatch Flow" />

@@ -58,8 +58,8 @@
 }
 
 .um-table-container {
-  background: rgba(20, 20, 20, 0.4);
-  border: 1px solid rgba(255, 255, 255, 0.05);
+  background: var(--color-surface-glass);
+  border: 1px solid var(--border-light);
   border-radius: 16px;
   overflow: hidden;
   backdrop-filter: blur(10px);
@@ -79,8 +79,8 @@
 }
 
 .um-table th {
-  background: rgba(0, 0, 0, 0.2);
-  color: rgba(255, 255, 255, 0.6);
+  background: var(--dim-soft);
+  color: var(--color-text-muted);
   font-weight: 600;
   font-size: 13px;
   text-transform: uppercase;
@@ -92,7 +92,7 @@
 }
 
 .um-table tbody tr:hover {
-  background: rgba(255, 255, 255, 0.02);
+  background: var(--hint-soft);
 }
 
 .um-table tbody tr:last-child td {
@@ -155,8 +155,8 @@
 }
 
 .um-action-btn.edit {
-  background: rgba(255, 255, 255, 0.05);
-  color: white;
+  background: var(--hint-soft);
+  color: var(--color-text-main);
 }
 
 .um-action-btn.edit:hover {
@@ -189,9 +189,9 @@
 }
 
 .um-modal {
-  background: linear-gradient(145deg, rgba(30, 30, 35, 0.95), rgba(20, 20, 25, 0.95));
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-top: 1px solid rgba(255, 255, 255, 0.2);
+  background: var(--glass-dropdown);
+  border: 1px solid var(--border);
+  border-top: 1px solid var(--border-lighter);
   border-radius: 24px;
   padding: 30px 40px;
   width: 100%;
@@ -233,8 +233,8 @@
 }
 
 .close-btn:hover {
-  background: rgba(255, 255, 255, 0.1);
-  color: white;
+  background: var(--hint-strong);
+  color: var(--color-text-main);
 }
 
 .um-form-group {
@@ -266,10 +266,10 @@
 .input-with-icon select {
   width: 100%;
   padding: 14px 18px 14px 44px; /* offset for icon */
-  background: rgba(0, 0, 0, 0.4);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: var(--dim-overlay);
+  border: 1px solid var(--border);
   border-radius: 12px;
-  color: white;
+  color: var(--color-text-main);
   font-size: 15px;
   transition: all 0.3s;
 }
@@ -279,7 +279,7 @@
   outline: none;
   border-color: var(--color-primary);
   box-shadow: 0 0 0 3px rgba(255, 77, 141, 0.15);
-  background: rgba(0, 0, 0, 0.6);
+  background: var(--hint-soft);
 }
 
 .input-with-icon select {
@@ -291,8 +291,8 @@
 }
 
 .input-with-icon select option {
-  background: #1a1a1a;
-  color: white;
+  background: var(--color-surface);
+  color: var(--color-text-main);
 }
 
 /* Beautiful Custom Checkboxes */
@@ -328,8 +328,8 @@
 }
 
 .perm-node-card {
-  background: #111111;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: var(--dim-soft);
+  border: 1px solid var(--border-light);
   border-radius: 12px;
   overflow: hidden;
   transition: all 0.2s;
@@ -357,7 +357,7 @@
 .perm-node-label {
   font-size: 14px;
   font-weight: 600;
-  color: white;
+  color: var(--color-text-main);
   display: flex;
   align-items: center;
   gap: 8px;
@@ -404,8 +404,8 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
-  border-top: 1px solid rgba(255, 255, 255, 0.05);
-  background: rgba(0, 0, 0, 0.2);
+  border-top: 1px solid var(--border-light);
+  background: var(--dim-soft);
 }
 
 .perm-child-item {
@@ -519,13 +519,13 @@
 /* Override input background for premium solid look */
 .um-form-group .input-with-icon input,
 .um-form-group .input-with-icon select {
-  background: #111111;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: var(--dim-soft);
+  border: 1px solid var(--border-light);
 }
 
 .um-form-group .input-with-icon input:focus,
 .um-form-group .input-with-icon select:focus {
-  background: #1a1a1a;
+  background: var(--hint-soft);
   border-color: rgba(255, 77, 141, 0.4);
 }
 
@@ -542,8 +542,8 @@
 }
 
 .btn-cancel:hover {
-  background: rgba(255, 255, 255, 0.05);
-  color: white;
+  background: var(--hint-strong);
+  color: var(--color-text-main);
 }
 
 .btn-save {

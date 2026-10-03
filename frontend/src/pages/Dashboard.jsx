@@ -128,6 +128,20 @@ const Dashboard = () => {
   const igPercent = totalEng > 0 ? (igTotal / totalEng * 100) : 50;
   const maxToneScore = Math.max(1, ...(tonePerformance.tones || []).map(tone => tone.averageScore || 0));
 
+  // Hiệu ứng 3D: nghiêng thẻ theo vị trí chuột
+  const applyTilt = (e) => {
+    const el = e.currentTarget;
+    const rect = el.getBoundingClientRect();
+    const x = (e.clientX - rect.left) / rect.width - 0.5;
+    const y = (e.clientY - rect.top) / rect.height - 0.5;
+    el.style.transform = `perspective(700px) rotateX(${(-y * 7).toFixed(2)}deg) rotateY(${(x * 9).toFixed(2)}deg) translateY(-4px) scale(1.02)`;
+    el.style.boxShadow = 'var(--shadow-3), 0 0 28px -6px var(--color-primary-glow)';
+  };
+  const resetTilt = (e) => {
+    e.currentTarget.style.transform = '';
+    e.currentTarget.style.boxShadow = '';
+  };
+
   const trackNow = async () => {
     setIsTracking(true);
     try {
@@ -180,16 +194,23 @@ const Dashboard = () => {
     <div className="dashboard">
       {/* ─── Header ─── */}
       <div className="dashboard-header">
-        <h1>Chào mừng trở lại, Toby!</h1>
-        <div className="status-indicator">
-          <span className="status-dot green"></span>
-          <p>Hệ thống hoạt động ổn định. {stats.activeWorkflows} luồng đang xử lý dữ liệu.</p>
+        <div className="dashboard-header-text">
+          <h1>Chào mừng trở lại, Toby!</h1>
+          <div className="status-indicator">
+            <span className="status-dot green"></span>
+            <p>Hệ thống hoạt động ổn định. {stats.activeWorkflows} luồng đang xử lý dữ liệu.</p>
+          </div>
+        </div>
+        <div className="dashboard-hero">
+          <div className="dashboard-hero-float">
+            <img src="/watch-3d.png" alt="ZenWatch 3D" className="dashboard-hero-watch" onMouseMove={applyTilt} onMouseLeave={resetTilt} />
+          </div>
         </div>
       </div>
 
       {/* ═══ Stats Grid ═══ */}
       <div className="stats-grid">
-        <div className="stat-card" onClick={() => navigate('/database')}>
+        <div className="stat-card" onClick={() => navigate('/database')} onMouseMove={applyTilt} onMouseLeave={resetTilt}>
           <div className="stat-header">
             <h3>Tổng bài đã đăng</h3>
             <div className="stat-icon-wrapper blue"><Send size={14} /></div>
@@ -197,7 +218,7 @@ const Dashboard = () => {
           <div className="stat-value"><h2>{stats.totalPosts}</h2></div>
         </div>
 
-        <div className="stat-card" onClick={() => navigate('/drive')}>
+        <div className="stat-card" onClick={() => navigate('/drive')} onMouseMove={applyTilt} onMouseLeave={resetTilt}>
           <div className="stat-header">
             <h3>Dung lượng Drive</h3>
             <div className="stat-icon-wrapper orange"><HardDrive size={14} /></div>
@@ -208,7 +229,7 @@ const Dashboard = () => {
           </div>
         </div>
 
-        <div className="stat-card">
+        <div className="stat-card" onMouseMove={applyTilt} onMouseLeave={resetTilt}>
           <div className="stat-header">
             <h3>Nền tảng kết nối</h3>
             <div className="stat-icon-wrapper pink"><Share2 size={14} /></div>
@@ -216,7 +237,7 @@ const Dashboard = () => {
           <div className="stat-value"><h2>{stats.socialHealth?.connected || 0}<span className="unit">/ {stats.socialHealth?.total || 4}</span></h2></div>
         </div>
 
-        <div className="stat-card" onClick={() => navigate('/workflow')}>
+        <div className="stat-card" onClick={() => navigate('/workflow')} onMouseMove={applyTilt} onMouseLeave={resetTilt}>
           <div className="stat-header">
             <h3>Luồng đang chạy</h3>
             <div className="stat-icon-wrapper green"><Activity size={14} /></div>

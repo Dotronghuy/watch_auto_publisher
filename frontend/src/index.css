@@ -41,6 +41,24 @@
   --border-color: rgba(255, 255, 255, 0.1);
   --color-border: rgba(255, 255, 255, 0.08);
 
+  /* ── Token ngữ nghĩa (đổi theo theme) ── */
+  --glass-shell: rgba(13, 13, 18, 0.55);          /* topbar */
+  --glass-panel: rgba(12, 12, 17, 0.62);          /* vùng nội dung chính */
+  --glass-dropdown: rgba(18, 18, 24, 0.97);       /* menu xổ xuống */
+  --hint-strong: rgba(255, 255, 255, 0.08);       /* nền hover */
+  --hint-soft: rgba(255, 255, 255, 0.04);         /* nền nhấn nhẹ */
+  --hint-line: rgba(255, 255, 255, 0.09);         /* viền trên nền nhấn */
+  --dim-overlay: rgba(0, 0, 0, 0.3);              /* vùng mờ */
+  --dim-soft: rgba(0, 0, 0, 0.2);
+  --dim-faint: rgba(0, 0, 0, 0.15);
+  --ink-bright: #ffffff;                          /* chữ trên nền nhấn */
+  --ink-bright-soft: rgba(255, 255, 255, 0.7);
+  --inset-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  --scroll-thumb: #3A3A44;
+  --scroll-thumb-hover: #55555F;
+  --orb-a: rgba(255, 77, 141, 0.16);
+  --orb-b: rgba(139, 92, 246, 0.13);
+
   /* ── Alias tương thích (các trang đang dùng tên cũ) ── */
   --text-main: var(--color-text-main);
   --text-dim: var(--color-text-dim);
@@ -79,6 +97,47 @@
   --ease-smooth: cubic-bezier(0.22, 1, 0.36, 1);
 }
 
+/* ── Chế độ SÁNG (ngày) ── */
+[data-theme='light'] {
+  --color-canvas: #EDEFF6;
+  --color-canvas-deep: #E4E7F0;
+  --color-surface: #FFFFFF;
+  --color-surface-hover: #F3F4F9;
+  --color-surface-light: #E9EBF3;
+  --color-surface-glass: rgba(255, 255, 255, 0.72);
+
+  --color-text-main: #191922;
+  --color-text-muted: #56586A;
+  --color-text-dim: #8E91A3;
+
+  --border-light: rgba(24, 26, 48, 0.08);
+  --border-lighter: rgba(24, 26, 48, 0.16);
+  --border: rgba(24, 26, 48, 0.12);
+  --border-color: rgba(24, 26, 48, 0.12);
+  --color-border: rgba(24, 26, 48, 0.1);
+
+  --shadow-1: 0 1px 3px rgba(24, 26, 48, 0.08);
+  --shadow-2: 0 8px 24px -8px rgba(24, 26, 48, 0.16);
+  --shadow-3: 0 20px 50px -12px rgba(24, 26, 48, 0.24);
+
+  --glass-shell: rgba(255, 255, 255, 0.62);
+  --glass-panel: rgba(255, 255, 255, 0.6);
+  --glass-dropdown: rgba(255, 255, 255, 0.98);
+  --hint-strong: rgba(24, 26, 48, 0.07);
+  --hint-soft: rgba(24, 26, 48, 0.04);
+  --hint-line: rgba(24, 26, 48, 0.1);
+  --dim-overlay: rgba(24, 26, 48, 0.06);
+  --dim-soft: rgba(24, 26, 48, 0.05);
+  --dim-faint: rgba(24, 26, 48, 0.03);
+  --ink-bright: #191922;
+  --ink-bright-soft: rgba(25, 25, 34, 0.65);
+  --inset-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  --scroll-thumb: #C6C9DA;
+  --scroll-thumb-hover: #AEB2C8;
+  --orb-a: rgba(255, 77, 141, 0.12);
+  --orb-b: rgba(139, 92, 246, 0.1);
+}
+
 * {
   box-sizing: border-box;
   margin: 0;
@@ -98,6 +157,7 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   overflow-x: hidden;
+  transition: background-color 0.45s ease, color 0.45s ease;
 }
 
 /* ── Nền ambient: quầng sáng hồng & tím trôi chậm phía sau giao diện ── */
@@ -119,14 +179,14 @@ body::after {
 body::before {
   top: -22vw;
   left: -14vw;
-  background: radial-gradient(circle, rgba(255, 77, 141, 0.16), transparent 65%);
+  background: radial-gradient(circle, var(--orb-a), transparent 65%);
   animation: orb-drift-a 26s ease-in-out infinite alternate;
 }
 
 body::after {
   bottom: -26vw;
   right: -16vw;
-  background: radial-gradient(circle, rgba(139, 92, 246, 0.13), transparent 65%);
+  background: radial-gradient(circle, var(--orb-b), transparent 65%);
   animation: orb-drift-b 32s ease-in-out infinite alternate;
 }
 
@@ -173,7 +233,7 @@ ul {
   backdrop-filter: blur(24px) saturate(140%);
   -webkit-backdrop-filter: blur(24px) saturate(140%);
   border: 1px solid var(--border-light);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  box-shadow: var(--inset-highlight);
 }
 
 /* ── Thẻ 3D: nghiêng nhẹ + nâng lên khi hover ── */
@@ -291,7 +351,7 @@ ul {
   -webkit-backdrop-filter: blur(24px) saturate(140%);
   border: 1px solid var(--border-light);
   border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-2), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  box-shadow: var(--shadow-2), var(--inset-highlight);
   overflow: hidden;
 }
 
@@ -316,12 +376,12 @@ ul {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #3A3A44;
+  background: var(--scroll-thumb);
   border-radius: 10px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #55555F;
+  background: var(--scroll-thumb-hover);
 }
 
 /* ── Hiệu ứng glow ── */

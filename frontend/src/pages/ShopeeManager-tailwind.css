@@ -29,7 +29,7 @@ ul {
   list-style: none;
 }
 
-body {
+.shopee-manager-wrapper {
   min-height: 100vh;
   color: var(--color-text);
   background: var(--color-background);
@@ -1423,10 +1423,7 @@ body,
   margin: 0;
   padding: 0;
   overflow: hidden;
-  background-color: #0B0F19;
-  /* Premium deep coal dark background */
   font-family: 'Outfit', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  color: #FFFFFF;
 }
 
 #root {
@@ -1445,11 +1442,11 @@ body,
 }
 
 ::-webkit-scrollbar-track {
-  background: #0B0F19;
+  background: transparent;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #2D3349;
+  background: var(--scroll-thumb);
   border-radius: 999px;
 }
 
@@ -1480,11 +1477,22 @@ body,
   border: 1px solid rgba(45, 51, 73, 0.45);
 }
 
+/* Trang ShopeeManager giữ giao diện tối kiểu console; ở chế độ sáng
+   các card glass vẫn chuyển theo palette chung */
+[data-theme='light'] .glass-card {
+  background: var(--color-surface-glass);
+  border-color: var(--border-light);
+}
+
 .glass-card-hover:hover {
   background: rgba(30, 34, 48, 0.75);
   border-color: rgba(0, 245, 255, 0.35);
   transform: translateY(-2px);
   transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+[data-theme='light'] .glass-card-hover:hover {
+  background: rgba(255, 255, 255, 0.92);
 }
 
 /* Pulse / Flow Animations */

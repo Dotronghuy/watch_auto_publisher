@@ -2,6 +2,8 @@
   display: flex;
   align-items: center;
   justify-content: center;
+  gap: 70px;
+  padding: 40px;
   min-height: 100vh;
   background: radial-gradient(circle at top right, rgba(255, 77, 141, 0.15), transparent 40%),
               radial-gradient(circle at bottom left, rgba(77, 141, 255, 0.1), transparent 40%),
@@ -28,24 +30,78 @@
 }
 
 .login-box {
-  background: rgba(20, 20, 20, 0.6);
+  background: var(--color-surface-glass);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
   padding: 50px 40px;
   border-radius: 24px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--border-light);
   width: 100%;
   max-width: 420px;
-  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.7), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5), var(--inset-highlight);
   z-index: 1;
   transform-style: preserve-3d;
   animation: slideUp 0.6s cubic-bezier(0.16, 1, 0.3, 1);
-  transition: transform 0.5s var(--ease-smooth), box-shadow 0.5s;
+  transition: transform 0.5s var(--ease-smooth), box-shadow 0.5s, background-color 0.45s ease;
 }
 
 .login-box:hover {
   transform: perspective(1200px) rotateX(1.5deg) rotateY(-1.5deg) translateY(-4px);
-  box-shadow: 0 30px 70px -12px rgba(0, 0, 0, 0.8), 0 0 40px -10px var(--color-primary-glow);
+  box-shadow: 0 30px 70px -12px rgba(0, 0, 0, 0.6), 0 0 40px -10px var(--color-primary-glow);
+}
+
+/* ─── Panel 3D bên trái: đồng hồ + slogan ─── */
+.login-visual {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+  max-width: 560px;
+}
+
+.login-visual-glow {
+  position: absolute;
+  inset: -90px;
+  background: radial-gradient(circle at center, rgba(255, 77, 141, 0.16), transparent 62%);
+  filter: blur(60px);
+  z-index: -1;
+  pointer-events: none;
+}
+
+.login-watch-float {
+  animation: float-y 8s ease-in-out infinite;
+}
+
+.login-watch {
+  width: min(470px, 36vw);
+  height: auto;
+  border-radius: 28px;
+  display: block;
+  border: 1px solid var(--border-light);
+  box-shadow: 0 40px 90px -20px rgba(0, 0, 0, 0.65), 0 0 60px -10px var(--color-primary-glow);
+  transition: transform 0.4s var(--ease-smooth);
+}
+
+.login-visual-title {
+  font-size: 42px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  margin: 0;
+  font-family: var(--font-display);
+}
+
+.login-visual-sub {
+  color: var(--color-text-muted);
+  font-size: 15px;
+  text-align: center;
+  max-width: 380px;
+  margin: 0;
+}
+
+@media (max-width: 1080px) {
+  .login-visual { display: none; }
 }
 
 @keyframes slideUp {
@@ -70,7 +126,7 @@
 .login-logo h2 {
   font-size: 28px;
   font-weight: 700;
-  background: linear-gradient(to right, #fff, rgba(255,255,255,0.7));
+  background: linear-gradient(to right, var(--color-text-main), var(--color-text-muted));
   -webkit-background-clip: text;
   color: transparent;
   margin: 0;
@@ -79,7 +135,7 @@
 
 .login-subtitle {
   text-align: center;
-  color: rgba(255, 255, 255, 0.5);
+  color: var(--color-text-muted);
   margin-bottom: 40px;
   font-size: 15px;
 }
@@ -115,29 +171,29 @@
   margin-bottom: 10px;
   font-size: 14px;
   font-weight: 500;
-  color: rgba(255, 255, 255, 0.8);
+  color: var(--color-text-muted);
 }
 
 .form-group input {
   width: 100%;
   padding: 14px 18px;
-  background: rgba(0, 0, 0, 0.4);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: var(--dim-overlay);
+  border: 1px solid var(--border);
   border-radius: 12px;
-  color: white;
+  color: var(--color-text-main);
   font-size: 15px;
   transition: all 0.3s ease;
 }
 
 .form-group input:focus {
   outline: none;
-  background: rgba(0, 0, 0, 0.6);
+  background: var(--hint-soft);
   border-color: var(--color-primary);
   box-shadow: 0 0 0 3px rgba(255, 77, 141, 0.15);
 }
 
 .form-group input::placeholder {
-  color: rgba(255, 255, 255, 0.2);
+  color: var(--color-text-dim);
 }
 
 .login-btn {

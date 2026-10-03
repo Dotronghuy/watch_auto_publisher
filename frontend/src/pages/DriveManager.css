@@ -171,8 +171,8 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  background: rgba(0,0,0,.25);
-  border: 1px solid rgba(255,255,255,.06);
+  background: var(--dim-soft);
+  border: 1px solid var(--border-light);
   border-radius: 8px;
   padding: 7px 14px;
   transition: border-color .15s;
@@ -218,8 +218,8 @@ th {
   letter-spacing: .06em;
   color: var(--color-text-muted);
   text-transform: uppercase;
-  background: rgba(0,0,0,.15);
-  border-bottom: 1px solid rgba(255,255,255,.05);
+  background: var(--dim-faint);
+  border-bottom: 1px solid var(--border-light);
   position: sticky;
   top: 0;
   z-index: 1;
@@ -333,9 +333,9 @@ tbody tr:nth-child(even):hover td {
 }
 
 .limit-selector {
-  background: rgba(0,0,0,.3);
+  background: var(--dim-overlay);
   color: var(--color-text-muted);
-  border: 1px solid rgba(255,255,255,.08);
+  border: 1px solid var(--hint-line);
   padding: 4px 10px;
   border-radius: 6px;
   outline: none;

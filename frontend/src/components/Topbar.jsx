@@ -3,6 +3,7 @@ import { Search, User, RefreshCw, Play, Square, Command, ChevronRight } from 'lu
 import { useNavigate } from 'react-router-dom';
 import Swal from 'sweetalert2';
 import { useAuth } from '../context/AuthContext';
+import ThemeToggle from './ThemeToggle';
 import './Topbar.css';
 
 const SEARCH_ITEMS = [
@@ -187,6 +188,8 @@ const Topbar = () => {
             Chạy luồng ngay
           </button>
         )}
+
+        <ThemeToggle />
 
         <div className="divider"></div>
 
