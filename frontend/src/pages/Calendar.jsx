@@ -9,8 +9,12 @@ const CalendarPage = () => {
   const [metrics, setMetrics] = useState([]);
 
   useEffect(() => {
-    fetch('/api/settings').then(r => r.json()).then(data => setSettings(data));
-    fetch('/api/history').then(r => r.json()).then(data => setHistory(data));
+    fetch('/api/settings').then(r => r.json()).then(data => {
+      setSettings({ ...(data || {}), timeSlots: Array.isArray(data?.timeSlots) ? data.timeSlots : [] });
+    }).catch(() => {});
+    fetch('/api/history').then(r => r.json()).then(data => {
+      setHistory(Array.isArray(data) ? data : []);
+    }).catch(() => {});
     // Also fetch post metrics for richer calendar data
     fetch('/api/stats').then(r => r.json()).then(data => {
       if (data.recentPosts) setMetrics(data.recentPosts);
@@ -46,7 +50,7 @@ const CalendarPage = () => {
   const historyMap = useMemo(() => {
     const map = {};
     // From posted_images
-    history.forEach(item => {
+    (history || []).forEach(item => {
       const d = new Date(item.timestamp);
       const key = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
       if (!map[key]) map[key] = [];
@@ -54,7 +58,7 @@ const CalendarPage = () => {
       map[key].push({ type: 'posted', text: label, platform: 'FB/IG' });
     });
     // From post_metrics
-    metrics.forEach(item => {
+    (metrics || []).forEach(item => {
       const d = new Date(item.timestamp);
       const key = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
       if (!map[key]) map[key] = [];

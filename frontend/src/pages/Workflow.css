@@ -71,14 +71,18 @@
 .node-card {
   position: absolute;
   width: 230px;
-  background: linear-gradient(180deg, rgba(22,22,28,.97) 0%, rgba(14,14,18,.98) 100%);
+  background: var(--color-surface-glass);
   border: 1px solid rgba(255,255,255,.08);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   padding: 14px;
   z-index: 10;
   box-shadow: 0 4px 20px rgba(0,0,0,.6), 0 0 0 1px rgba(255,255,255,.02) inset;
-  transition: border-color 0.3s, box-shadow 0.3s;
-  backdrop-filter: blur(12px);
+  transition: border-color 0.3s, box-shadow 0.3s, transform 0.3s var(--ease-smooth);
+  backdrop-filter: blur(16px);
+}
+
+.node-card:hover {
+  transform: translateY(-2px);
 }
 
 .node-card.active-glow {

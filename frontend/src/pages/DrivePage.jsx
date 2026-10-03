@@ -12,6 +12,7 @@ const DrivePage = () => {
     const fetchStats = async () => {
       try {
         const res = await fetch('/api/dashboard');
+        if (!res.ok) return;
         const data = await res.json();
         setStats(data);
       } catch(err) { console.error(err); }

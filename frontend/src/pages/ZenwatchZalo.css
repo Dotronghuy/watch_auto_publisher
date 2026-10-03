@@ -19,11 +19,14 @@
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
-  background: rgba(255, 255, 255, 0.025);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 16px;
+  background: var(--color-surface-glass);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-lg);
   padding: 28px 32px;
   gap: 20px;
+  box-shadow: var(--shadow-2), inset 0 1px 0 rgba(255, 255, 255, 0.05);
 }
 
 .zalo-hero-content {
@@ -133,19 +136,24 @@
 }
 
 .stat-card {
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--color-surface-glass);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
   border: 1px solid rgba(255, 255, 255, 0.07);
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   padding: 18px 22px;
   display: flex;
   flex-direction: column;
   gap: 10px;
-  transition: all 0.25s ease;
+  box-shadow: var(--shadow-2), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  transition: all 0.25s var(--ease-smooth);
 }
 
 .stat-card:hover {
   background: rgba(255, 255, 255, 0.05);
-  border-color: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.14);
+  transform: translateY(-3px);
+  box-shadow: var(--shadow-3), 0 0 20px -8px var(--color-primary-glow);
 }
 
 .stat-header {

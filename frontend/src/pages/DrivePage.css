@@ -137,12 +137,15 @@
 
 /* ─── Section Card ─── */
 .section-card {
-  background: linear-gradient(180deg, rgba(255,255,255,.03) 0%, rgba(0,0,0,.12) 100%);
-  border: 1px solid rgba(255,255,255,.06);
-  border-radius: 12px;
+  background: var(--color-surface-glass);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-lg);
   padding: 20px;
   display: flex;
   flex-direction: column;
+  box-shadow: var(--shadow-2), inset 0 1px 0 rgba(255,255,255,.05);
 }
 
 .section-card.full-width {

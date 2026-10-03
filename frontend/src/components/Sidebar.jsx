@@ -7,15 +7,11 @@ import {
   Calendar, 
   Database, 
   Settings, 
-  Upload, 
-  HelpCircle, 
   LogOut,
   MessageCircle,
   ShoppingBag,
-  Send,
-  FileSpreadsheet
+  Send
 } from 'lucide-react';
-import Swal from 'sweetalert2';
 import { motion } from 'framer-motion';
 import { useAuth } from '../context/AuthContext';
 import './Sidebar.css';
@@ -60,7 +56,7 @@ const Sidebar = () => {
   return (
     <aside className="sidebar">
       <div className="sidebar-header">
-        <div className="logo-icon glass" style={{ padding: 0, overflow: 'hidden' }}>
+        <div className="logo-icon glass animate-float" style={{ padding: 0, overflow: 'hidden' }}>
           <img src="/logo-z.png" alt="ZenWatch Logo" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
         </div>
         <div className="logo-text">
@@ -102,28 +98,7 @@ const Sidebar = () => {
       </nav>
 
       <div className="sidebar-footer">
-        <button 
-          className="btn-upgrade glow-primary"
-          onClick={() => {
-            Swal.fire({
-              title: 'Tài khoản VIP',
-              text: 'Bạn đang sử dụng phiên bản phần mềm không giới hạn tài nguyên dành cho nội bộ.',
-              icon: 'info',
-              confirmButtonColor: 'var(--color-primary)',
-              background: 'var(--color-surface)',
-              color: 'var(--color-text)'
-            });
-          }}
-        >
-          <Upload size={16} /> Nâng cấp ngay
-        </button>
         <ul className="footer-links">
-          <li>
-            <a href="#" className="footer-link">
-              <HelpCircle size={18} />
-              <span>Trợ giúp</span>
-            </a>
-          </li>
           <li>
             <a href="#" className="footer-link" onClick={handleLogout}>
               <LogOut size={18} />

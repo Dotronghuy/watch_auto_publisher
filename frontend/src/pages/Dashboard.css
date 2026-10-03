@@ -53,20 +53,25 @@
 }
 
 .stat-card {
-  background: linear-gradient(180deg, rgba(255,255,255,.03) 0%, rgba(0,0,0,.12) 100%);
-  border: 1px solid rgba(255,255,255,.06);
-  border-radius: 12px;
+  background: var(--color-surface-glass);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255,255,255,.07);
+  border-radius: var(--radius-lg);
   padding: 16px 18px;
   display: flex;
   flex-direction: column;
   gap: 10px;
-  transition: border-color .2s, transform .2s;
+  transition: border-color .25s, transform .35s var(--ease-smooth), box-shadow .35s;
   cursor: pointer;
+  transform-style: preserve-3d;
+  box-shadow: var(--shadow-2), inset 0 1px 0 rgba(255,255,255,.05);
 }
 
 .stat-card:hover {
-  border-color: rgba(255,255,255,.12);
-  transform: translateY(-2px);
+  border-color: rgba(255,255,255,.14);
+  transform: translateY(-4px) rotateX(2deg) scale(1.01);
+  box-shadow: var(--shadow-3), 0 0 24px -6px var(--color-primary-glow);
 }
 
 .stat-header {
@@ -182,13 +187,16 @@
 
 /* ─── Engagement Widget ─── */
 .engagement-section {
-  background: linear-gradient(180deg, rgba(255,255,255,.03) 0%, rgba(0,0,0,.12) 100%);
-  border: 1px solid rgba(255,255,255,.06);
-  border-radius: 12px;
+  background: var(--color-surface-glass);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255,255,255,.07);
+  border-radius: var(--radius-lg);
   padding: 18px;
   display: flex;
   flex-direction: column;
   gap: 16px;
+  box-shadow: var(--shadow-2), inset 0 1px 0 rgba(255,255,255,.05);
 }
 
 .engagement-header {
@@ -871,11 +879,14 @@
 
 /* ═══ Hiệu quả sâu: Sản phẩm & Khung giờ ═══ */
 .effectiveness-section {
-  background: linear-gradient(180deg, rgba(255,255,255,.03) 0%, rgba(0,0,0,.12) 100%);
-  border: 1px solid rgba(255,255,255,.06);
-  border-radius: 12px;
+  background: var(--color-surface-glass);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255,255,255,.07);
+  border-radius: var(--radius-lg);
   padding: 18px;
   margin-bottom: 16px;
+  box-shadow: var(--shadow-2), inset 0 1px 0 rgba(255,255,255,.05);
 }
 
 .effectiveness-grid {
@@ -886,10 +897,10 @@
 
 .effectiveness-panel {
   min-width: 0;
-  border: 1px solid rgba(255,255,255,.06);
-  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,.07);
+  border-radius: var(--radius-md);
   padding: 12px;
-  background: rgba(0,0,0,.14);
+  background: rgba(255,255,255,.02);
 }
 
 .effectiveness-panel-header {

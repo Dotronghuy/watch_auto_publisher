@@ -1,12 +1,23 @@
+const asList = async (url: string) => {
+  try {
+    const res = await fetch(url);
+    if (!res.ok) return [];
+    const data = await res.json();
+    return Array.isArray(data) ? data : [];
+  } catch {
+    return [];
+  }
+};
+
 const apiClient = {
-  getModels: async () => (await fetch('/api/shopee/models')).json(),
+  getModels: async () => asList('/api/shopee/models'),
   createModel: async (name: string) => (await fetch('/api/shopee/models', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) })).json(),
   deleteModel: async (id: string) => (await fetch(`/api/shopee/models?id=${id}`, { method: 'DELETE' })).json(),
-  getVariants: async (modelId: string) => (await fetch(`/api/shopee/variants/${modelId}`)).json(),
+  getVariants: async (modelId: string) => asList(`/api/shopee/variants/${modelId}`),
   createVariant: async (data: any) => (await fetch('/api/shopee/variants', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) })).json(),
   updateVariant: async (id: string, data: any) => (await fetch(`/api/shopee/variants/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) })).json(),
   deleteVariant: async (id: string) => (await fetch(`/api/shopee/variants/${id}`, { method: 'DELETE' })).json(),
-  getMissingShopeeVariants: async () => (await fetch('/api/shopee/variants/missing')).json(),
+  getMissingShopeeVariants: async () => asList('/api/shopee/variants/missing'),
   getSetting: async (key: string) => { const r = await fetch(`/api/shopee/settings/${key}`); const d = await r.json(); return d.value; },
   saveSetting: async (key: string, value: string) => (await fetch('/api/shopee/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key, value }) })).json(),
   saveEnvSetting: async (key: string, value: string) => (await fetch('/api/shopee/settings/env', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key, value }) })).json(),

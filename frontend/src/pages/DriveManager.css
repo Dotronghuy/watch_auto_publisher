@@ -30,11 +30,13 @@
   grid-template-columns: 1fr 1fr auto;
   gap: 0;
   padding: 0;
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   overflow: hidden;
   border: 1px solid var(--border-light);
-  background: linear-gradient(180deg, rgba(255,255,255,.03) 0%, rgba(0,0,0,.12) 100%);
-  backdrop-filter: blur(8px);
+  background: var(--color-surface-glass);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  box-shadow: var(--shadow-2), inset 0 1px 0 rgba(255,255,255,.05);
 }
 
 .stat-col {
@@ -105,13 +107,15 @@
 
 /* ═══ Data Table Section ═══ */
 .data-table-section {
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   display: flex;
   flex-direction: column;
   flex: 1;
   border: 1px solid var(--border-light);
-  background: linear-gradient(180deg, rgba(255,255,255,.03) 0%, rgba(0,0,0,.12) 100%);
-  backdrop-filter: blur(8px);
+  background: var(--color-surface-glass);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  box-shadow: var(--shadow-2), inset 0 1px 0 rgba(255,255,255,.05);
   overflow: hidden;
 }
 
