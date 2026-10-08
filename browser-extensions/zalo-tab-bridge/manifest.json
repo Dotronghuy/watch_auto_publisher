@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "ZenWatch Zalo Tab Bridge",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Kết nối ZenWatch Tool với tab Zalo Web đang đăng nhập sẵn.",
   "minimum_chrome_version": "120",
   "permissions": [

@@ -21,7 +21,8 @@ Sau lần ghép mã đầu tiên, extension lưu khóa thiết bị trong Chrome
 
 ## Lưu ý
 
-- Giữ tab Zalo Web mở trong suốt chiến dịch.
+- Giữ tab Zalo Web mở trong suốt chiến dịch, nhưng **không cần để tab ở chế độ hiển thị**: tool đăng bài ngầm, không chuyển tab và không giành focus màn hình. Bạn vẫn dùng máy bình thường trong lúc đăng.
+- Trong lúc đăng bài, tab Zalo Web hiển thị màn hình khóa (che nội dung + chặn click và gõ phím) để tránh lệch thao tác. Màn hình khóa tự gỡ khi đăng xong. Khóa chỉ áp dụng trên tab Zalo Web — nếu bạn mở thêm app Zalo PC thì app đó không bị khóa.
 - Không mở DevTools trên tab Zalo trong lúc tool đang đăng.
 - Khi extension bắt đầu thao tác, Chromium có thể hiển thị thông báo tab đang được debug. Đây là cơ chế `chrome.debugger` dùng để điều khiển chính tab đã chọn.
 - Nếu ZenWatch Tool/backend khởi động lại, extension sẽ tự kết nối lại. Mã mới chỉ cần khi tab Zalo đã chọn bị đóng/xóa, extension bị xóa, đổi tài khoản hoặc chủ động ngắt kết nối.

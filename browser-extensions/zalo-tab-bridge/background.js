@@ -221,21 +221,103 @@ async function waitForValue(tabId, expression, timeoutMs = 15_000, intervalMs = 
   return null;
 }
 
+async function lockTab(tabId) {
+  await evaluate(tabId, `(() => {
+    if (window.__zenwatchLockCleanup) {
+      if (window.__zenwatchLockOverlay) window.__zenwatchLockOverlay.style.display = '';
+      window.__zenwatchLockKey = true;
+      return true;
+    }
+    const originalVisibility = {};
+    try {
+      originalVisibility.visibilityState = Object.getOwnPropertyDescriptor(Document.prototype, 'visibilityState');
+      originalVisibility.hidden = Object.getOwnPropertyDescriptor(Document.prototype, 'hidden');
+      Object.defineProperty(Document.prototype, 'visibilityState', { configurable: true, get: () => 'visible' });
+      Object.defineProperty(Document.prototype, 'hidden', { configurable: true, get: () => false });
+    } catch (error) {
+      originalVisibility.failed = true;
+    }
+    const overlay = document.createElement('div');
+    overlay.setAttribute('style', [
+      'position:fixed', 'inset:0', 'z-index:2147483647',
+      'background:rgba(9,12,20,0.97)',
+      'display:flex', 'flex-direction:column', 'align-items:center', 'justify-content:center', 'gap:16px',
+      'font-family:-apple-system,"Segoe UI",Roboto,Arial,sans-serif',
+      'user-select:none', 'cursor:not-allowed'
+    ].join(';'));
+    const title = document.createElement('div');
+    title.textContent = 'ZenWatch Flow đang tự động đăng bài';
+    title.setAttribute('style', 'color:#f9fafb;font-size:24px;font-weight:700');
+    const hint = document.createElement('div');
+    hint.textContent = 'Tab Zalo đang bị khóa để tránh lệch thao tác. Đừng tắt tab này cho đến khi đăng xong.';
+    hint.setAttribute('style', 'color:#9ca3af;font-size:14px;max-width:480px;text-align:center;line-height:1.6;padding:0 24px');
+    overlay.append(title, hint);
+    const blockKeys = (event) => {
+      if (!window.__zenwatchLockKey) return;
+      event.stopImmediatePropagation();
+      event.preventDefault();
+    };
+    document.addEventListener('keydown', blockKeys, true);
+    document.addEventListener('keyup', blockKeys, true);
+    document.addEventListener('keypress', blockKeys, true);
+    document.documentElement.appendChild(overlay);
+    window.__zenwatchLockOverlay = overlay;
+    window.__zenwatchLockKey = true;
+    window.__zenwatchLockCleanup = () => {
+      document.removeEventListener('keydown', blockKeys, true);
+      document.removeEventListener('keyup', blockKeys, true);
+      document.removeEventListener('keypress', blockKeys, true);
+      overlay.remove();
+      if (!originalVisibility.failed) {
+        try {
+          if (originalVisibility.visibilityState) Object.defineProperty(Document.prototype, 'visibilityState', originalVisibility.visibilityState);
+          if (originalVisibility.hidden) Object.defineProperty(Document.prototype, 'hidden', originalVisibility.hidden);
+        } catch (error) {}
+      }
+      delete window.__zenwatchLockOverlay;
+      delete window.__zenwatchLockKey;
+      delete window.__zenwatchLockCleanup;
+    };
+    return true;
+  })()`);
+}
+
+async function unlockTab(tabId) {
+  await evaluate(tabId, `(() => {
+    if (window.__zenwatchLockCleanup) window.__zenwatchLockCleanup();
+    return true;
+  })()`).catch(() => {});
+}
+
+async function setTabLockEnabled(tabId, enabled) {
+  await evaluate(tabId, `(() => {
+    const overlay = window.__zenwatchLockOverlay;
+    if (overlay) overlay.style.display = ${enabled ? "''" : "'none'"};
+    window.__zenwatchLockKey = ${enabled};
+    return true;
+  })()`);
+}
+
 async function clickAt(tabId, point) {
-  await sendCommand(tabId, 'Input.dispatchMouseEvent', {
-    type: 'mousePressed',
-    x: point.x,
-    y: point.y,
-    button: 'left',
-    clickCount: 1,
-  });
-  await sendCommand(tabId, 'Input.dispatchMouseEvent', {
-    type: 'mouseReleased',
-    x: point.x,
-    y: point.y,
-    button: 'left',
-    clickCount: 1,
-  });
+  await setTabLockEnabled(tabId, false);
+  try {
+    await sendCommand(tabId, 'Input.dispatchMouseEvent', {
+      type: 'mousePressed',
+      x: point.x,
+      y: point.y,
+      button: 'left',
+      clickCount: 1,
+    });
+    await sendCommand(tabId, 'Input.dispatchMouseEvent', {
+      type: 'mouseReleased',
+      x: point.x,
+      y: point.y,
+      button: 'left',
+      clickCount: 1,
+    });
+  } finally {
+    await setTabLockEnabled(tabId, true);
+  }
 }
 
 async function pressEnter(tabId) {
@@ -245,9 +327,14 @@ async function pressEnter(tabId) {
     windowsVirtualKeyCode: 13,
     nativeVirtualKeyCode: 13,
   };
-  await sendCommand(tabId, 'Input.dispatchKeyEvent', { type: 'rawKeyDown', ...base });
-  await sendCommand(tabId, 'Input.dispatchKeyEvent', { type: 'char', text: '\r', ...base });
-  await sendCommand(tabId, 'Input.dispatchKeyEvent', { type: 'keyUp', ...base });
+  await setTabLockEnabled(tabId, false);
+  try {
+    await sendCommand(tabId, 'Input.dispatchKeyEvent', { type: 'rawKeyDown', ...base });
+    await sendCommand(tabId, 'Input.dispatchKeyEvent', { type: 'char', text: '\r', ...base });
+    await sendCommand(tabId, 'Input.dispatchKeyEvent', { type: 'keyUp', ...base });
+  } finally {
+    await setTabLockEnabled(tabId, true);
+  }
 }
 
 function waitForFileChooser(tabId, timeoutMs = 8_000) {
@@ -393,9 +480,6 @@ async function executeJob(job, state) {
     throw new Error('Job không có ảnh để đăng.');
   }
 
-  await chrome.tabs.update(tabId, { active: true });
-  await chrome.windows.update(tab.windowId, { focused: true }).catch(() => {});
-
   let attached = false;
   const heartbeat = setInterval(() => {
     fetch(`${normalizeBackendUrl(state.backendUrl)}/api/zenwatch/zalo/bridge/heartbeat`, {
@@ -411,6 +495,8 @@ async function executeJob(job, state) {
       sendCommand(tabId, 'Page.enable'),
       sendCommand(tabId, 'Runtime.enable'),
     ]);
+    await sendCommand(tabId, 'Emulation.setFocusEmulationEnabled', { enabled: true });
+    await lockTab(tabId);
     await selectExactGroup(tabId, job.groupName);
     await choosePhotoFiles(tabId, job.filePaths);
     await sendComposerText(tabId, job.content);
@@ -425,7 +511,11 @@ async function executeJob(job, state) {
     throw error;
   } finally {
     clearInterval(heartbeat);
-    if (attached) await chrome.debugger.detach({ tabId }).catch(() => {});
+    if (attached) {
+      await unlockTab(tabId);
+      await sendCommand(tabId, 'Emulation.setFocusEmulationEnabled', { enabled: false }).catch(() => {});
+      await chrome.debugger.detach({ tabId }).catch(() => {});
+    }
   }
 }
 
