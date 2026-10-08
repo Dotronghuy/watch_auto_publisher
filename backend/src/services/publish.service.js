@@ -44,6 +44,7 @@ import { reelPropagationDelayMs, waitForReelPropagation } from './mobile-reel-re
 import { sanitizeGeneratedSocialContent } from './generated-content-sanitizer.js';
 import { validateSocialPostContent, REASON_FIX_TEXT } from './content-validator.js';
 import { sendAlert } from './alert.service.js';
+import { addNotification } from './notification.service.js';
 import { cleanupDebugScreenshots } from './ui-watch.service.js';
 
 export { getToneInstructionText };
@@ -2140,6 +2141,7 @@ export const autoPublishRoutine = async (retryContext = null, runOptions = {}) =
                   console.warn(`⚠️ FB Reels đã đăng nhưng không lưu được metric: ${metricError.message}`);
                 }
                 liveLog(`✅ [${account.name}] Đăng FB Reels thành công! (ID: ${postId})`, 'success', 'Facebook');
+                addNotification({ type: 'publish-success', title: 'Đã đăng Facebook Reels', details: `SKU ${selectedSku.name}` });
 
                 // --- ANDROID WORKER: TỰ ĐỘNG GẮN LINK SHOPEE CHO VIDEO/REELS ---
                 if (postId) {
@@ -2193,6 +2195,7 @@ export const autoPublishRoutine = async (retryContext = null, runOptions = {}) =
                     publishSucceeded = true;
                     successfulPlatforms.add('instagram');
                     liveLog(`✅ [${account.name}] Đăng IG Reels thành công!`, 'success', 'Instagram');
+                    addNotification({ type: 'publish-success', title: 'Đã đăng Instagram Reels', details: `SKU ${selectedSku.name}` });
                     break; 
                   } catch (igErr) {
                     if (i < 3) await new Promise(r => setTimeout(r, 15000));
@@ -2244,6 +2247,7 @@ export const autoPublishRoutine = async (retryContext = null, runOptions = {}) =
                     console.warn(`⚠️ Bài Facebook đã đăng nhưng không lưu được metric: ${metricError.message}`);
                   }
                   liveLog(`✅ [${account.name}] Đăng FB 1 ảnh thành công! (ID: ${postId})`, 'success', 'Facebook');
+                  addNotification({ type: 'publish-success', title: 'Đã đăng Facebook', details: `SKU ${selectedSku.name}` });
 
                   // --- ANDROID WORKER: TỰ ĐỘNG GẮN LINK SHOPEE ---
                   try {
@@ -2290,6 +2294,7 @@ export const autoPublishRoutine = async (retryContext = null, runOptions = {}) =
                     publishSucceeded = true;
                     successfulPlatforms.add('instagram');
                     liveLog(`✅ [${account.name}] Đăng IG 1 ảnh thành công!`, 'success', 'Instagram');
+                    addNotification({ type: 'publish-success', title: 'Đã đăng Instagram', details: `SKU ${selectedSku.name}` });
                   }
                } catch (e) {
                  liveLog(`❌ [${account.name}] Lỗi đăng FB 1 ảnh: ${e.response?.data?.error?.message || e.message}`, 'error', 'Facebook');

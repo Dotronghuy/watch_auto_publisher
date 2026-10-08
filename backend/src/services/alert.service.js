@@ -1,5 +1,6 @@
 import dotenv from 'dotenv';
 import fs from 'fs';
+import { addNotification } from './notification.service.js';
 
 dotenv.config();
 
@@ -46,7 +47,6 @@ const sendTelegramRaw = async (text, photoPath) => {
 };
 
 export const sendAlert = async ({ type = 'system', title, details = '', photoPath = null, dedupeMinutes = 15 }) => {
-    if (!alertsEnabled || !token || !chatId) return false;
     const key = `${type}:${(title || '').slice(0, 100)}`;
     const now = Date.now();
     if (recentAlerts.has(key) && now - recentAlerts.get(key) < dedupeMinutes * 60_000) {
@@ -57,5 +57,8 @@ export const sendAlert = async ({ type = 'system', title, details = '', photoPat
     const time = new Date().toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' });
     const text = `${icon} <b>${title}</b>\n${details}\n<i>${time}</i>`.slice(0, 4000);
     console.log(`🔔 [Alert] ${type}: ${title}`);
+    // Ghi vào chuông thông báo trong app — hoạt động kể cả khi Telegram chưa bật
+    addNotification({ type, title, details });
+    if (!alertsEnabled || !token || !chatId) return false;
     return await sendTelegramRaw(text, photoPath);
 };

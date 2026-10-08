@@ -12,10 +12,11 @@
   transition: background-color 0.45s ease;
 }
 
-/* ─── Search Bar ─── */
+/* ─── Search Bar (mở command palette) ─── */
 .topbar-search {
   display: flex;
   align-items: center;
+  gap: 8px;
   background-color: var(--dim-soft);
   border: 1px solid var(--border-light);
   border-radius: var(--radius-md);
@@ -23,36 +24,34 @@
   width: 420px;
   height: 40px;
   position: relative;
+  cursor: pointer;
+  font-family: inherit;
   transition: all 0.25s var(--ease-smooth);
 }
 
-.topbar-search:focus-within {
+.topbar-search:hover {
   border-color: var(--color-primary);
   background-color: var(--dim-overlay);
-  box-shadow: 0 0 0 3px rgba(255, 77, 141, 0.12), 0 0 18px rgba(255, 77, 141, 0.1);
+  box-shadow: 0 0 0 3px rgba(255, 77, 141, 0.1), 0 0 18px rgba(255, 77, 141, 0.08);
 }
 
 .search-icon {
   color: var(--color-text-dim);
-  margin-right: var(--space-2);
+  flex-shrink: 0;
 }
 
-.topbar-search:focus-within .search-icon {
+.topbar-search:hover .search-icon {
   color: var(--color-primary);
 }
 
-.search-input {
+.search-placeholder {
   flex: 1;
-  background: transparent;
-  border: none;
-  color: var(--color-text-main);
+  text-align: left;
   font-size: 13px;
-  outline: none;
-}
-
-.search-input::placeholder {
   color: var(--color-text-dim);
-  opacity: 0.7;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .search-shortcut {
@@ -65,79 +64,7 @@
   display: flex;
   align-items: center;
   font-weight: 600;
-}
-
-/* ─── Search Dropdown ─── */
-.search-dropdown {
-  position: absolute;
-  top: calc(100% + 8px);
-  left: 0;
-  width: 100%;
-  background: var(--glass-dropdown);
-  backdrop-filter: blur(20px);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  padding: 8px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  box-shadow: var(--shadow-3);
-  z-index: 100;
-  animation: slideDown 0.25s cubic-bezier(0.16, 1, 0.3, 1);
-}
-
-@keyframes slideDown {
-  from { opacity: 0; transform: translateY(-8px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-
-.search-result-item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 10px 12px;
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  transition: all 0.15s;
-  background: transparent;
-}
-
-.search-result-item:hover,
-.search-result-item.active {
-  background: var(--hint-soft);
-}
-
-.search-result-info h4 {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--color-text-main);
-  margin-bottom: 2px;
-}
-
-.search-result-info p {
-  font-size: 11px;
-  color: var(--color-text-dim);
-}
-
-.search-result-arrow {
-  color: var(--color-text-dim);
-  opacity: 0;
-  transform: translateX(-4px);
-  transition: all 0.2s;
-}
-
-.search-result-item:hover .search-result-arrow,
-.search-result-item.active .search-result-arrow {
-  opacity: 1;
-  transform: translateX(0);
-  color: var(--color-primary);
-}
-
-.search-empty {
-  padding: 24px 12px;
-  text-align: center;
-  color: var(--color-text-dim);
-  font-size: 12px;
+  flex-shrink: 0;
 }
 
 /* ─── Actions ─── */

@@ -1,3 +1,4 @@
+import { lazy, Suspense } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import Layout from './components/Layout';
 import { AuthProvider } from './context/AuthContext';
@@ -5,15 +6,28 @@ import ProtectedRoute from './components/ProtectedRoute';
 
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
-import DrivePage from './pages/DrivePage';
-import DriveManager from './pages/DriveManager';
-import Workflow from './pages/Workflow';
-import CalendarPage from './pages/Calendar';
-import SocialConnections from './pages/SocialConnections';
-import UserManagement from './pages/UserManagement';
-import InboxCRM from './pages/InboxCRM';
-import ShopeeManager from './pages/ShopeeManager';
-import ZenwatchZalo from './pages/ZenwatchZalo';
+
+// Code-splitting: các trang nặng tải riêng khi cần, giảm tải bundle chính
+const lazyPage = (factory) => {
+  const Page = lazy(factory);
+  return function LazyRoute() {
+    return (
+      <Suspense fallback={<div className="page-loading"><span className="page-loading-spinner"></span><p>Đang tải trang...</p></div>}>
+        <Page />
+      </Suspense>
+    );
+  };
+};
+
+const DrivePage = lazyPage(() => import('./pages/DrivePage'));
+const DriveManager = lazyPage(() => import('./pages/DriveManager'));
+const Workflow = lazyPage(() => import('./pages/Workflow'));
+const CalendarPage = lazyPage(() => import('./pages/Calendar'));
+const SocialConnections = lazyPage(() => import('./pages/SocialConnections'));
+const UserManagement = lazyPage(() => import('./pages/UserManagement'));
+const InboxCRM = lazyPage(() => import('./pages/InboxCRM'));
+const ShopeeManager = lazyPage(() => import('./pages/ShopeeManager'));
+const ZenwatchZalo = lazyPage(() => import('./pages/ZenwatchZalo'));
 
 function App() {
   return (
