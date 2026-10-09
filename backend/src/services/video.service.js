@@ -81,8 +81,7 @@ export const hasAudioStream = (videoPath) => {
 /**
  * Add an MP3 music track to an MP4 video.
  * The original video audio is replaced, and output is cut to the shortest input.
- */
-export const addMusicToVideo = (videoPath, audioPath, outputPath) => {
+ */export const addMusicToVideo = (videoPath, audioPath, outputPath) => {
   return new Promise((resolve, reject) => {
     console.log('Adding music to video...');
     let stderrLog = '';
@@ -109,6 +108,45 @@ export const addMusicToVideo = (videoPath, audioPath, outputPath) => {
       })
       .on('error', (err) => {
         console.error(`Failed to add music: ${err.message}`);
+        if (stderrLog) console.error(`FFmpeg stderr:\n${stderrLog.slice(-500)}`);
+        reject(err);
+      });
+  });
+};
+
+/**
+ * Convert a video to Facebook Story format:
+ * 9:16 (1080x1920), max 60 seconds, H.264 + AAC.
+ * Keeps the whole frame (letterbox padding) and original audio when present.
+ */
+export const toStoryFormat = (videoPath, outputPath) => {
+  return new Promise((resolve, reject) => {
+    console.log('Converting video to Story format (1080x1920, max 60s)...');
+    let stderrLog = '';
+    ffmpeg(videoPath)
+      .outputOptions([
+        '-vf scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2',
+        '-t 60',
+        '-r 30',
+        '-c:v libx264',
+        '-preset veryfast',
+        '-crf 23',
+        '-profile:v main',
+        '-pix_fmt yuv420p',
+        '-c:a aac',
+        '-b:a 128k',
+        '-ac 2',
+        '-movflags +faststart',
+        '-y',
+      ])
+      .save(outputPath)
+      .on('stderr', (line) => { stderrLog += line + '\n'; })
+      .on('end', () => {
+        console.log(`Converted to Story format: ${outputPath}`);
+        resolve(outputPath);
+      })
+      .on('error', (err) => {
+        console.error(`Failed to convert to Story format: ${err.message}`);
         if (stderrLog) console.error(`FFmpeg stderr:\n${stderrLog.slice(-500)}`);
         reject(err);
       });

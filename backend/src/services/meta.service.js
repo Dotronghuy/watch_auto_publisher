@@ -353,6 +353,73 @@ export const publishFBReels = async (videoPath, content, options = {}) => {
 };
 
 /**
+ * Đăng video lên Story Facebook Page.
+ * Theo docs chính thức (Page Stories API):
+ *   1. Resumable upload video lên /{page-id}/videos (start -> transfer -> finish)
+ *   2. POST /{page-id}/video_stories với video_id vừa upload
+ * Yêu cầu video: 9:16 (1080x1920), 3-60 giây, MP4 H.264.
+ */
+export const publishFBStoryVideo = async (videoPath, options = {}) => {
+  const pageToken = options.fbAccessToken || process.env.FB_PAGE_ACCESS_TOKEN;
+  if (!pageToken) throw new Error('Thiếu FB_PAGE_ACCESS_TOKEN');
+
+  // Lấy Page ID từ Token (bằng API /me)
+  const meRes = await axios.get(`${GRAPH_API_BASE}/me`, { params: { access_token: pageToken } });
+  const pageId = meRes.data.id;
+
+  const stats = fs.statSync(videoPath);
+
+  console.log('🎥 [FB Story] Bước 1: Khởi tạo Resumable Upload...');
+  const startRes = await axios.post(`${GRAPH_API_BASE}/${pageId}/videos`, {
+    upload_phase: 'start',
+    file_size: stats.size,
+    access_token: pageToken
+  });
+
+  const videoId = startRes.data.video_id;
+  const uploadUrl = startRes.data.upload_url;
+  if (!videoId || !uploadUrl) {
+    throw new Error(`Không nhận được video_id/upload_url từ FB: ${JSON.stringify(startRes.data)}`);
+  }
+
+  console.log(`🎥 [FB Story] Bước 2: Upload video (ID: ${videoId})...`);
+  const fileData = fs.readFileSync(videoPath);
+  try {
+    await axios.post(uploadUrl, fileData, {
+      headers: {
+        'Authorization': `OAuth ${pageToken}`,
+        'offset': '0',
+        'file_size': stats.size.toString(),
+        'Content-Length': stats.size.toString(),
+        'X-Entity-Length': stats.size.toString(),
+        'Content-Type': 'application/octet-stream'
+      }
+    });
+  } catch (err) {
+    console.error('❌ Lỗi chi tiết FB Story Upload:', err.response?.data || err.message);
+    throw err;
+  }
+
+  console.log('🎥 [FB Story] Bước 3: Hoàn tất upload video...');
+  await axios.post(`${GRAPH_API_BASE}/${pageId}/videos`, {
+    upload_phase: 'finish',
+    video_id: videoId,
+    access_token: pageToken
+  });
+
+  console.log('🎥 [FB Story] Bước 4: Đăng video lên Story...');
+  const storyRes = await axios.post(`${GRAPH_API_BASE}/${pageId}/video_stories`, {
+    video_id: videoId,
+    upload_phase: 'finish',
+    access_token: pageToken
+  });
+
+  const storyId = storyRes.data?.id || `${pageId}_${videoId}`;
+  console.log(`✅ [FB Story] Đăng thành công! Story ID: ${storyId}`);
+  return storyId;
+};
+
+/**
  * Đăng Video Reels lên Instagram (Dùng Resumable Upload API - Bỏ qua URL công khai)
  */
 export const publishIGReels = async (videoPath, content, hashtags = [], options = {}) => {
