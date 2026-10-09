@@ -409,6 +409,19 @@ async function runZaloTask(signal) {
 
 // ============== AI Content Generator (Playwright → gemini.google.com) ================= //
 
+// Đảm bảo bài đăng luôn có 2 thông số mặc định của hãng (yêu cầu của chủ shop)
+const ensureZaloDefaultSpecs = (text) => {
+  let result = String(text || '').trim();
+  const normalized = result.toLowerCase().replace(/\s+/g, ' ');
+  if (!normalized.includes('sapphire')) {
+    result += '\n💎 Mặt kính Sapphire chống trầy xước';
+  }
+  if (!normalized.includes('316l')) {
+    result += '\n🛡 Vỏ thép không gỉ 316L chắc chắn';
+  }
+  return result;
+};
+
 async function generateZaloContentSmart(product, imagePath, phone, toneKey, skuName, priority = '1') {
   // Khai báo ngoài try để khối catch (văn mẫu dự phòng) vẫn dùng được khi AI lỗi
   let priceK = 'Liên hệ';
@@ -483,9 +496,9 @@ Nhìn ảnh sản phẩm và viết bài đăng theo ĐÚNG FORMAT sau (giữ ng
 (1 emoji đồng hồ) I&W CARNIVAL ${product.id} [TỰ ĐỘNG/AUTOMATIC nếu có] – [TIÊU ĐỀ NGẮN GỌN, SÚC TÍCH, VIẾT HOA] (1 emoji sao)
 (1 emoji nổi bật) Điểm nổi bật:
 (1 emoji) Bộ máy: [tên bộ máy nếu biết, hoặc nhìn ảnh đoán]
-(1 emoji) Size mặt: [đường kính mm] – Độ dày: [mm]  
-(1 emoji) Chất liệu vỏ/dây: [thép không gỉ/da/...]
-(1 emoji) Mặt kính: [Sapphire/Mineral/...]
+(1 emoji) Size mặt: [đường kính mm] – Độ dày: [mm]
+(1 emoji) Chất liệu vỏ: Thép không gỉ 316L (mặc định của hãng)
+(1 emoji) Mặt kính: Sapphire (mặc định của hãng)
 (1 emoji) Chống nước: [ATM/mét]
 (1 emoji) Thiết kế: [mô tả ngắn 1 dòng về phong cách]
 
@@ -493,7 +506,9 @@ ${specsText ? `THÔNG SỐ TỪ HỆ THỐNG:\n${specsText}` : 'TỰ NHÌN ẢNH
 Giới tính: ${gender}
 
 QUY TẮC:
-- BẮT BUỘC PHẢI VIẾT ĐỦ 6 GẠCH ĐẦU DÒNG THÔNG SỐ (Bộ máy, Size mặt, Chất liệu, Mặt kính, Chống nước, Thiết kế), tuyệt đối không được thiếu dòng nào. Dựa vào thông số từ hệ thống để điền, nếu không có thì nhìn ảnh tự đoán.
+- BẮT BUỘC PHẢI VIẾT ĐỦ 6 GẠCH ĐẦU DÒNG THÔNG SỐ (Bộ máy, Size mặt, Chất liệu vỏ, Mặt kính, Chống nước, Thiết kế), tuyệt đối không được thiếu dòng nào. Dựa vào thông số từ hệ thống để điền, nếu không có thì nhìn ảnh tự đoán.
+- Mặt kính BẮT BUỘC ghi Sapphire, Chất liệu vỏ BẮT BUỘC ghi Thép không gỉ 316L (mặc định của hãng). KHÔNG được đổi sang Mineral hay thép thường, chỉ ghi khác khi THÔNG SỐ TỪ HỆ THỐNG nói khác.
+- Dòng Size mặt và Dòng Chống nước KHÔNG BAO GIỜ được bỏ, nếu hệ thống không có số liệu thì nhìn ảnh ước lượng hợp lý.
 - Thay các đoạn "(1 emoji...)" bằng 1 EMOJI THẬT sự sáng tạo, đa dạng, không lặp lại.
 - Tuyệt đối KHÔNG in ra chữ "(1 emoji)" trong bài viết.
 - KHÔNG viết hashtag
@@ -507,18 +522,20 @@ QUY TẮC:
 Nhìn ảnh và viết bài đăng theo style sau:
 
 (1 emoji sang trọng) I&W Carnival ${product.id} - [Câu mô tả ngắn hấp dẫn, viết hoa chữ cái đầu]
-(1 emoji) [Mô tả chi tiết mặt kính, chất liệu kính (VD: Sapphire nguyên khối...)]
+(1 emoji) Mặt kính Sapphire chống trầy xước, sáng bóng (mặc định của hãng)
 (1 emoji) [Mô tả chi tiết bộ máy (VD: Automatic tự động vận hành êm ái...)]
-(1 emoji) [Mô tả vỏ/dây (VD: Vỏ thép 316L không gỉ mạ PVD...)]
-(1 emoji) [Ghi thông số Size mặt (mm) và độ dày (mm)]
+(1 emoji) Vỏ thép không gỉ 316L chắc chắn, bền bỉ theo thời gian (mặc định của hãng)
+(1 emoji) Size mặt [đường kính mm] – Độ dày [mm], [nhận xét ngắn về độ vừa cổ tay]
 (1 emoji) [Mô tả dây đeo (VD: Dây da cao cấp/dây kim loại đúc đặc...)]
-(1 emoji) [Ghi thông số chịu nước (VD: Chống nước 5ATM/50M...)]
+(1 emoji) Chống nước [VD: 5ATM/50M] – rửa tay, đi mưa thoải mái
 
 ${specsText ? `THÔNG SỐ TỪ HỆ THỐNG:\n${specsText}` : 'TỰ NHÌN ẢNH phân tích thông số.'}
 Giới tính: ${gender}
 
 QUY TẮC:
-- BẮT BUỘC PHẢI CÓ ĐẦY ĐỦ TẤT CẢ 6 DÒNG THÔNG SỐ TRÊN, tuyệt đối không được gộp, không được bớt. Phải nhìn thông số từ hệ thống để chèn vào.
+- BẮT BUỘC PHẢI CÓ ĐẦY ĐỦ TẤT CẢ 7 DÒNG TRÊN (mặt kính, bộ máy, vỏ, size mặt, dây, chống nước), tuyệt đối không được gộp, không được bớt. Phải nhìn thông số từ hệ thống để chèn vào.
+- Mặt kính BẮT BUỘC ghi Sapphire, Vỏ BẮT BUỘC ghi Thép không gỉ 316L (mặc định của hãng). KHÔNG đổi sang Mineral hay thép thường, chỉ ghi khác khi THÔNG SỐ TỪ HỆ THỐNG nói khác.
+- Dòng Size mặt và Dòng Chống nước KHÔNG BAO GIỜ được bỏ, nếu hệ thống không có số liệu thì nhìn ảnh ước lượng hợp lý.
 - Thay các đoạn "(1 emoji...)" bằng 1 EMOJI THẬT sự đa dạng, liên quan đến nội dung dòng đó.
 - Tuyệt đối KHÔNG in ra chữ "(1 emoji)" trong bài viết.
 - Viết tự nhiên, cuốn hút, có cảm xúc, KHÔNG khô khan liệt kê
@@ -567,7 +584,7 @@ QUY TẮC:
           if (priority === '0') {
             return `🔥 NHẬN ĐẶT TRƯỚC – Model ${product.id}\nLiên hệ đặt cọc: ${phone}\n\n${aiResult}`;
           }
-          return `☎ /-v CTV: ${priceK}\nGiá đại lý/ sỉ/ số lượng lớn liên hệ: ${phone}\n\n${aiResult}`;
+          return `☎ /-v CTV: ${priceK}\nGiá đại lý/ sỉ/ số lượng lớn liên hệ: ${phone}\n\n${ensureZaloDefaultSpecs(aiResult)}`;
         }
       } catch (apiErr) {
         log(`   [Toggle] ⚠️ Gemini API lỗi, fallback về Playwright: ${apiErr.message}`, 'warning');
@@ -595,7 +612,7 @@ QUY TẮC:
       if (priority === '0') {
         return `🔥 NHẬN ĐẶT TRƯỚC – Model ${product.id}\nLiên hệ đặt cọc: ${phone}\n\n${aiDesc}`;
       }
-      return `☎ /-v CTV: ${priceK}\nGiá đại lý/ sỉ/ số lượng lớn liên hệ: ${phone}\n\n${aiDesc}`;
+      return `☎ /-v CTV: ${priceK}\nGiá đại lý/ sỉ/ số lượng lớn liên hệ: ${phone}\n\n${ensureZaloDefaultSpecs(aiDesc)}`;
     } finally {
       if (geminiSession) await geminiSession.close().catch(() => {});
     }
@@ -606,6 +623,6 @@ QUY TẮC:
     if (priority === '0') {
       return `🔥 NHẬN ĐẶT TRƯỚC – Model ${product.id}\nLiên hệ đặt cọc: ${phone}\n\n⌚ I&W CARNIVAL ${product.id} – SẮP VỀ HÀNG\n✨ Siêu phẩm mới, số lượng có hạn\n📩 Đặt hàng sớm để nhận giá ưu đãi!`;
     }
-    return `☎ /-v CTV: ${priceK}\nGiá đại lý/ sỉ/ số lượng lớn liên hệ: ${phone}\n\n⌚ I&W CARNIVAL ${product.id} – ĐẲNG CẤP TỪNG CHI TIẾT\n✨ Điểm nổi bật:\n✔️ Bộ máy bền bỉ, chính xác\n✔️ Mặt kính Sapphire chống trầy xước\n✔️ Thiết kế sang trọng, phù hợp mọi phong cách\n✔️ Vỏ thép không gỉ chắc chắn\n✔️ Chống nước tốt cho sử dụng hàng ngày`;
+    return `☎ /-v CTV: ${priceK}\nGiá đại lý/ sỉ/ số lượng lớn liên hệ: ${phone}\n\n⌚ I&W CARNIVAL ${product.id} – ĐẲNG CẤP TỪNG CHI TIẾT\n✨ Điểm nổi bật:\n✔️ Bộ máy bền bỉ, chính xác\n✔️ Mặt kính Sapphire chống trầy xước\n✔️ Thiết kế sang trọng, phù hợp mọi phong cách\n✔️ Vỏ thép không gỉ 316L chắc chắn\n✔️ Chống nước tốt cho sử dụng hàng ngày`;
   }
 }
