@@ -2074,6 +2074,57 @@ const findGeminiPrompt = async (page, timeout = 15000) => {
     return null;
 };
 
+const GEMINI_DISMISS_TEXT_PATTERNS = [
+    /^\s*not now\s*$/i,
+    /^\s*no thanks\s*$/i,
+    /^\s*để sau\s*$/i,
+    /^\s*không, cảm ơn\s*$/i,
+    /^\s*skip\s*$/i,
+    /^\s*bỏ qua\s*$/i,
+];
+
+// Gemini thỉnh thoảng hiện modal giới thiệu (Personal Intelligence, Get app...)
+// chặn luôn các thao tác phía dưới. Chủ động bấm nút từ chối trước khi thao tác.
+const dismissGeminiOnboardingDialogs = async (page) => {
+    for (const pattern of GEMINI_DISMISS_TEXT_PATTERNS) {
+        const locator = page.getByText(pattern);
+        const count = await locator.count().catch(() => 0);
+        for (let index = 0; index < count; index++) {
+            const candidate = locator.nth(index);
+            if (!await candidate.isVisible().catch(() => false)) continue;
+            try {
+                await candidate.click({ timeout: 2500 });
+                await page.waitForTimeout(400);
+                break;
+            } catch (error) {
+                // Phần tử text nằm trong nút lớn hơn; thử bấm nút cha gần nhất.
+                try {
+                    const clickableParent = candidate.locator('xpath=ancestor::button[1]');
+                    if (await clickableParent.isVisible().catch(() => false)) {
+                        await clickableParent.click({ timeout: 2500 });
+                        await page.waitForTimeout(400);
+                        break;
+                    }
+                } catch (parentError) {}
+            }
+        }
+    }
+
+    const closeButtons = page.locator([
+        '[role="dialog"] button[aria-label*="close" i]',
+        '[role="dialog"] button[aria-label*="đóng" i]',
+    ].join(', '));
+    const closeCount = await closeButtons.count().catch(() => 0);
+    for (let index = 0; index < closeCount; index++) {
+        const button = closeButtons.nth(index);
+        if (!await button.isVisible().catch(() => false)) continue;
+        try {
+            await button.click({ timeout: 2500 });
+            await page.waitForTimeout(300);
+        } catch (error) {}
+    }
+};
+
 const GEMINI_UPLOAD_MENU_TEXT_PATTERN = /(upload files?|upload from computer|tai (tep|file)( len)?|tai len( tu may tinh)?|chon tep)/i;
 
 const normalizeGeminiUiText = (value) => String(value || '')
@@ -2783,6 +2834,8 @@ export const createGeminiTextSession = async ({
                 requestsInCurrentConversation = 0;
             }
 
+            await dismissGeminiOnboardingDialogs(page);
+
             if (await isGeminiRateLimitVisible(page)) throw createGeminiRateLimitError();
 
             const promptLocator = await findGeminiPrompt(page);
@@ -2791,6 +2844,8 @@ export const createGeminiTextSession = async ({
                 error.code = 'GEMINI_SESSION_UNAVAILABLE';
                 throw error;
             }
+
+            await dismissGeminiOnboardingDialogs(page);
 
             if (image?.buffer) {
                 log('[Playwright] Đang đính kèm ảnh sản phẩm vào Gemini...');
