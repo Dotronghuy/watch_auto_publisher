@@ -34,14 +34,14 @@ async function refreshStatus() {
   if (state.lastError) showMessage(state.lastError, 'error');
 }
 
-connectButton.addEventListener('click', async () => {
+async function connect() {
   const code = pairCode.value.replace(/\D/g, '');
   if (code.length !== 6) {
     showMessage('Hãy nhập mã kết nối gồm đúng 6 số.', 'error');
     return;
   }
   connectButton.disabled = true;
-  showMessage('Đang kết nối tab hiện tại...');
+  showMessage('Đang kết nối...');
   try {
     const result = await sendMessage({
       type: 'pair-current-tab',
@@ -49,12 +49,21 @@ connectButton.addEventListener('click', async () => {
       backendUrl: backendUrl.value,
     });
     if (result?.error) throw new Error(result.error);
-    showMessage('Đã kết nối. Bạn có thể quay lại ZenWatch Tool.', 'success');
+    showMessage(`Đã kết nối với tab "${result?.title || 'Zalo Web'}". Bạn có thể quay lại ZenWatch Tool.`, 'success');
     await refreshStatus();
   } catch (error) {
     showMessage(error?.message || String(error), 'error');
   } finally {
     connectButton.disabled = false;
+  }
+}
+
+connectButton.addEventListener('click', connect);
+
+pairCode.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    connect();
   }
 });
 

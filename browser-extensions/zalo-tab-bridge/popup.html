@@ -28,17 +28,17 @@
         <label for="backendUrl">Địa chỉ ZenWatch Tool</label>
         <input id="backendUrl" value="http://127.0.0.1:3000" spellcheck="false">
 
-        <label for="pairCode">Mã kết nối 6 số</label>
-        <input id="pairCode" inputmode="numeric" maxlength="6" placeholder="123456" autocomplete="one-time-code">
+        <label for="pairCode">Mã kết nối 6 số (nhập xong ấn Enter)</label>
+        <input id="pairCode" inputmode="numeric" maxlength="6" placeholder="123456" autocomplete="one-time-code" enterkeyhint="go">
 
-        <button id="connectButton" class="primary">Kết nối tab Zalo hiện tại</button>
+        <button id="connectButton" class="primary">Kết nối tab Zalo đang mở</button>
       </section>
 
       <button id="disconnectButton" class="secondary" hidden>Ngắt kết nối</button>
       <p id="message" class="message"></p>
 
       <footer>
-        Tab phải có địa chỉ <strong>https://chat.zalo.me/</strong>. Trong lúc đăng bài, không mở DevTools trên tab này.
+        Extension tự tìm tab <strong>https://chat.zalo.me/</strong> đang mở — bạn có thể mở popup từ bất kỳ tab nào. Trong lúc đăng bài, không mở DevTools trên tab Zalo.
       </footer>
     </main>
     <script type="module" src="popup.js"></script>

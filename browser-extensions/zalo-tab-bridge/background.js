@@ -71,12 +71,24 @@ async function clearPairing(message = '') {
   await setBadge('OFF', '#6b7280');
 }
 
+async function findZaloTab() {
+  const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (activeTab?.id && String(activeTab.url || '').startsWith('https://chat.zalo.me/')) {
+    return activeTab;
+  }
+  const allTabs = await chrome.tabs.query({});
+  const zaloTabs = allTabs
+    .filter((tab) => Number.isInteger(tab.id) && String(tab.url || '').startsWith('https://chat.zalo.me/'))
+    .sort((a, b) => (b.lastAccessed || 0) - (a.lastAccessed || 0));
+  if (zaloTabs.length === 0) {
+    throw new Error('Không thấy tab https://chat.zalo.me/ đang mở. Hãy mở Zalo Web rồi bấm Kết nối.');
+  }
+  return zaloTabs[0];
+}
+
 async function pairCurrentTab({ code, backendUrl }) {
   const normalizedBackendUrl = normalizeBackendUrl(backendUrl);
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab?.id || !String(tab.url || '').startsWith('https://chat.zalo.me/')) {
-    throw new Error('Hãy mở đúng tab https://chat.zalo.me/ rồi bấm Kết nối.');
-  }
+  const tab = await findZaloTab();
 
   const previousState = await getBridgeState();
   const clientId = previousState.clientId || crypto.randomUUID();

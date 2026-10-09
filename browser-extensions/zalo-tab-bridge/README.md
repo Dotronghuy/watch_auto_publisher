@@ -14,7 +14,7 @@ Extension này cho phép ZenWatch Tool đăng bài bằng **đúng tab Zalo Web 
 
 1. Trong ZenWatch Tool, vào trang **Zalo Auto Post** và bấm **Tạo mã kết nối**.
 2. Mở tab `https://chat.zalo.me/` đã đăng nhập đúng tài khoản công việc.
-3. Bấm icon extension, nhập mã 6 số và chọn **Kết nối tab Zalo hiện tại**.
+3. Bấm icon extension, nhập mã 6 số rồi ấn **Enter** (hoặc bấm nút **Kết nối tab Zalo đang mở**). Extension tự tìm tab Zalo Web đang mở — bạn mở popup từ tab nào cũng được.
 4. Quay lại ZenWatch Tool. Trạng thái phải chuyển thành **Đã kết nối** trước khi bắt đầu chiến dịch.
 
 Sau lần ghép mã đầu tiên, extension lưu khóa thiết bị trong Chrome và tự xin session mới mỗi khi ZenWatch Tool khởi động lại. Bạn không cần tạo mã mới miễn là vẫn dùng extension và tab Zalo đã chọn.
