@@ -2938,20 +2938,82 @@ export const createGeminiTextSession = async ({
                 // Không bao giờ nhận text chứa chính prompt vừa gửi (container hội thoại)
                 if (normalized && promptHead && normalized.includes(promptHead)) normalized = '';
 
-                // Fallback khi UI mới không khớp selector: đọc text toàn trang sau khi
-                // đã gỡ các tin nhắn của người gửi (prompt), lấy phần sau câu prompt.
+                // Fallback khi UI mới không khớp selector: tìm khối tin nhắn người gửi
+                // theo cấu trúc DOM và xóa nó cùng mọi thứ đứng trước, chỉ giữ lại
+                // phần sau (câu trả lời của model). Không phụ thuộc khoảng trắng/dòng.
                 if (normalized.length < 20) {
                     const tail = await page.evaluate(({ flatPrompt, promptHead }) => {
                         const clone = document.body.cloneNode(true);
-                        clone.querySelectorAll(
-                            '[data-message-author-role="user"], user-query, .user-query-container, [class*="user-query"]'
-                        ).forEach((element) => element.remove());
-                        let text = (clone.innerText || '').replace(/\s+/g, ' ').trim();
-                        const fullStart = flatPrompt ? text.indexOf(flatPrompt) : -1;
-                        if (fullStart >= 0) text = text.slice(fullStart + flatPrompt.length);
+                        const originalText = (clone.innerText || '').replace(/\s+/g, ' ').trim();
+
+                        const findUserBubble = () => {
+                            const selectors = [
+                                '[data-message-author-role="user"]',
+                                'user-query',
+                                '.user-query-container',
+                                '[class*="user-query"]',
+                                '[data-test-id*="query" i]',
+                            ];
+                            let best = null;
+                            let bestLength = Infinity;
+                            const seen = new Set();
+                            for (const selector of selectors) {
+                                clone.querySelectorAll(selector).forEach((element) => {
+                                    if (seen.has(element)) return;
+                                    seen.add(element);
+                                    const text = (element.innerText || '').replace(/\s+/g, ' ').trim();
+                                    if (text.includes(promptHead) && text.length < bestLength) {
+                                        best = element;
+                                        bestLength = text.length;
+                                    }
+                                });
+                            }
+                            if (best) return best;
+                            // Quét chung: phần tử nhỏ nhất có chứa đầu prompt
+                            for (const element of clone.querySelectorAll('div, section, article, p, blockquote')) {
+                                if (element.children.length === 0) continue;
+                                const text = (element.innerText || '').replace(/\s+/g, ' ').trim();
+                                if (text.length > 8000) continue;
+                                if (text.includes(promptHead) && text.length < bestLength) {
+                                    best = element;
+                                    bestLength = text.length;
+                                }
+                            }
+                            return best;
+                        };
+
+                        // 1) Cắt theo cấu trúc: xóa bubble người gửi + mọi thứ trước nó
+                        const bubble = promptHead ? findUserBubble() : null;
+                        if (bubble) {
+                            let current = bubble;
+                            while (current && current !== clone) {
+                                const parent = current.parentElement;
+                                if (!parent) break;
+                                const siblings = [...parent.children];
+                                for (const sibling of siblings) {
+                                    if (sibling === current) break;
+                                    sibling.remove();
+                                }
+                                current = parent;
+                            }
+                            bubble.remove();
+                            const afterText = (clone.innerText || '').replace(/\s+/g, ' ').trim();
+                            if (afterText.length >= 20) return afterText;
+                        }
+
+                        // 2) Cắt theo text: cả prompt → đầu prompt → mốc tên sản phẩm
+                        let text = originalText;
+                        let start = flatPrompt ? text.indexOf(flatPrompt) : -1;
+                        if (start >= 0) text = text.slice(start + flatPrompt.length);
                         else {
                             const headStart = promptHead ? text.indexOf(promptHead) : -1;
                             if (headStart >= 0) text = text.slice(headStart + promptHead.length);
+                        }
+                        const productMatch = flatPrompt.match(/I&W\s*CARNIVAL[\s:：-]*([A-Z0-9]+)/i);
+                        if (productMatch) {
+                            const marker = `I&W CARNIVAL ${productMatch[1]}`;
+                            const markerIdx = text.lastIndexOf(marker);
+                            if (markerIdx > 0) text = text.slice(markerIdx);
                         }
                         return text.trim();
                     }, { flatPrompt, promptHead }).catch(() => '');
@@ -2961,7 +3023,20 @@ export const createGeminiTextSession = async ({
                         const bodyText = await page.evaluate(() => document.body?.innerText || '')
                             .catch(() => '');
                         if (bodyText.length > baselineBodyText.length + 20) {
-                            tailText = bodyText.slice(baselineBodyText.length);
+                            tailText = bodyText.slice(baselineBodyText.length).replace(/\s+/g, ' ');
+                            // Diff vẫn chứa cả prompt; cắt theo text như bước 2
+                            let cut = flatPrompt ? tailText.indexOf(flatPrompt) : -1;
+                            if (cut >= 0) tailText = tailText.slice(cut + flatPrompt.length);
+                            else {
+                                const headCut = promptHead ? tailText.indexOf(promptHead) : -1;
+                                if (headCut >= 0) tailText = tailText.slice(headCut + promptHead.length);
+                            }
+                            const productMatch = flatPrompt.match(/I&W\s*CARNIVAL[\s:：-]*([A-Z0-9]+)/i);
+                            if (productMatch) {
+                                const marker = `I&W CARNIVAL ${productMatch[1]}`;
+                                const markerIdx = tailText.lastIndexOf(marker);
+                                if (markerIdx > 0) tailText = tailText.slice(markerIdx);
+                            }
                         }
                     }
                     tailText = stripGeminiDisclaimers(tailText);
