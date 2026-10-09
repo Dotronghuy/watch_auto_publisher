@@ -1082,11 +1082,11 @@ const Workflow = () => {
           {/* ── TOOLBAR WORKFLOW EDITOR ── */}
           <div className="wf-toolbar">
             <div className="wf-toolbar-group">
-              <button className="wf-btn" onClick={handleUndo} disabled={past.length === 0} title="Hoàn tác (Ctrl+Z)"><Undo2 size={14} /></button>
-              <button className="wf-btn" onClick={handleRedo} disabled={future.length === 0} title="Làm lại (Ctrl+Shift+Z / Ctrl+Y)"><Redo2 size={14} /></button>
-              <button className="wf-btn danger" onClick={handleDeleteSelected} disabled={selectedIds.length === 0} title="Xóa node đã chọn (Delete)"><Trash2 size={14} /></button>
+              <button className="wf-btn icon" onClick={handleUndo} disabled={past.length === 0} title="Hoàn tác (Ctrl+Z)"><Undo2 size={14} /></button>
+              <button className="wf-btn icon" onClick={handleRedo} disabled={future.length === 0} title="Làm lại (Ctrl+Shift+Z / Ctrl+Y)"><Redo2 size={14} /></button>
+              <button className="wf-btn icon danger" onClick={handleDeleteSelected} disabled={selectedIds.length === 0} title="Xóa node đã chọn (Delete)"><Trash2 size={14} /></button>
               <div className="wf-dropdown">
-                <button className="wf-btn" onClick={() => setAddNodeOpen(o => !o)} title="Thêm node đã xóa"><Plus size={14} /></button>
+                <button className="wf-btn icon" onClick={() => setAddNodeOpen(o => !o)} title="Thêm node đã xóa"><Plus size={14} /></button>
                 {addNodeOpen && (
                   <div className="wf-dropdown-menu">
                     {NODE_CATALOG.filter(n => !nodes[n.id]).map(n => (
@@ -1105,7 +1105,7 @@ const Workflow = () => {
               <button className="wf-btn primary" onClick={handleRunNow} disabled={!isAiIdle} title="Đăng bài thật lên Facebook & Instagram ngay (Ctrl+Enter)">
                 <Play size={13} /> Đăng Bài Ngay
               </button>
-              <button className="wf-btn" onClick={handleDryRun} disabled={dryRunLoading || !isAiIdle} title="Chạy thử toàn bộ luồng AI nhưng KHÔNG đăng lên mạng xã hội (Ctrl+Shift+Enter)">
+              <button className="wf-btn try" onClick={handleDryRun} disabled={dryRunLoading || !isAiIdle} title="Chạy thử toàn bộ luồng AI nhưng KHÔNG đăng lên mạng xã hội (Ctrl+Shift+Enter)">
                 <FlaskConical size={13} /> Chạy Thử
               </button>
               <button className="wf-btn story" onClick={handleRunStoryNow} disabled={storyRunning} title="Đăng 1 Story Facebook ngay (Ctrl+Shift+S)">
@@ -1114,13 +1114,12 @@ const Workflow = () => {
             </div>
             <div className="wf-toolbar-divider" />
             <div className="wf-toolbar-group">
-              <button className="wf-btn" onClick={() => zoomBy(0.8)} title="Thu nhỏ (Ctrl+-)">−</button>
+              <button className="wf-btn icon" onClick={() => zoomBy(0.8)} title="Thu nhỏ (Ctrl+-)">−</button>
               <span className="wf-zoom-label">{Math.round(transform.scale * 100)}%</span>
-              <button className="wf-btn" onClick={() => zoomBy(1.2)} title="Phóng to (Ctrl+=)">+</button>
-              <button className="wf-btn" onClick={() => setTransform({ x: 0, y: 0, scale: 1 })} title="Về 100% (Ctrl+0)">1:1</button>
-              <button className="wf-btn" onClick={handleAutoFit} title="Tự động vừa màn hình (F)"><Maximize size={13} /></button>
-              <button className="wf-btn" onClick={() => setIsMonitorOpen(o => !o)} title="Ẩn / hiện Live Monitor (Ctrl+B)"><Terminal size={13} /></button>
-              <button className="wf-btn" onClick={() => setShowHelp(true)} title="Phím tắt bàn phím (?)"><HelpCircle size={14} /></button>
+              <button className="wf-btn icon" onClick={() => zoomBy(1.2)} title="Phóng to (Ctrl+=)">+</button>
+              <button className="wf-btn icon" onClick={handleAutoFit} title="Tự động vừa màn hình (F)"><Maximize size={13} /></button>
+              <button className="wf-btn icon" onClick={() => setIsMonitorOpen(o => !o)} title="Ẩn / hiện Live Monitor (Ctrl+B)"><Terminal size={13} /></button>
+              <button className="wf-btn icon" onClick={() => setShowHelp(true)} title="Phím tắt bàn phím (?)"><HelpCircle size={14} /></button>
             </div>
           </div>
 

@@ -948,13 +948,14 @@
   display: flex;
   align-items: center;
   gap: 6px;
+  row-gap: 6px;
   background: rgba(14, 14, 20, 0.88);
   backdrop-filter: blur(14px);
   border: 1px solid rgba(255, 255, 255, 0.09);
   border-radius: 12px;
   padding: 6px 10px;
   box-shadow: 0 10px 34px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.02) inset;
-  max-width: calc(100vw - 400px);
+  max-width: calc(100vw - 360px);
   flex-wrap: wrap;
   justify-content: center;
 }
@@ -967,23 +968,27 @@
 
 .wf-toolbar-divider {
   width: 1px;
-  height: 22px;
+  height: 20px;
   background: rgba(255, 255, 255, 0.1);
   margin: 0 4px;
   flex-shrink: 0;
+  align-self: center;
 }
 
 .wf-btn {
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 6px;
-  padding: 6px 10px;
-  border-radius: 8px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 7px;
   border: 1px solid transparent;
   background: transparent;
   color: var(--color-text-dim);
   font-size: 11px;
   font-weight: 600;
+  line-height: 1;
   cursor: pointer;
   transition: all 0.15s;
   white-space: nowrap;
@@ -1000,6 +1005,12 @@
   cursor: not-allowed;
 }
 
+.wf-btn.icon {
+  padding: 0;
+  width: 28px;
+  flex-shrink: 0;
+}
+
 .wf-btn.primary {
   background: linear-gradient(to right, #10b981, #059669);
   border-color: #059669;
@@ -1009,6 +1020,18 @@
 .wf-btn.primary:hover:not(:disabled) {
   background: linear-gradient(to right, #34d399, #10b981);
   color: #fff;
+}
+
+.wf-btn.try {
+  color: #fbbf24;
+  border-color: rgba(251, 191, 36, 0.35);
+  background: rgba(251, 191, 36, 0.1);
+}
+
+.wf-btn.try:hover:not(:disabled) {
+  background: rgba(251, 191, 36, 0.2);
+  border-color: rgba(251, 191, 36, 0.55);
+  color: #fde68a;
 }
 
 .wf-btn.story {
