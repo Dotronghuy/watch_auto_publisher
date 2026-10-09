@@ -410,6 +410,8 @@ async function runZaloTask(signal) {
 // ============== AI Content Generator (Playwright → gemini.google.com) ================= //
 
 async function generateZaloContentSmart(product, imagePath, phone, toneKey, skuName, priority = '1') {
+  // Khai báo ngoài try để khối catch (văn mẫu dự phòng) vẫn dùng được khi AI lỗi
+  let priceK = 'Liên hệ';
   try {
     // Lấy thông số SP từ Google Sheets (nếu có)
     let specsText = '';
@@ -432,7 +434,7 @@ async function generateZaloContentSmart(product, imagePath, phone, toneKey, skuN
     else if (/\dL$|L\d|\dL\d/.test(skuUp)) gender = 'Nữ';
 
     // Format giá: Ưu tiên Giá CTV từ Products Sheet, fallback về priceRaw từ Sheet cũ
-    let priceK = 'Liên hệ';
+    priceK = 'Liên hệ';
     if (giaCTV && parseInt(giaCTV) > 0) {
       priceK = Math.floor(parseInt(giaCTV) / 1000) + 'k';
     } else {

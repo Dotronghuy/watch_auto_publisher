@@ -2038,6 +2038,11 @@ const GEMINI_INPUT_SELECTORS = [
 const GEMINI_RESPONSE_SELECTORS = [
     'model-response',
     'message-content',
+    '[data-message-author-role="model"]',
+    '[data-test-id*="response"]',
+    '[data-testid*="response"]',
+    '[class*="model-response"]',
+    'ms-markdown',
     '.response-container',
     '.model-response-text',
 ].join(', ');
@@ -2618,10 +2623,12 @@ export const findNewGeminiResponseText = (responseTexts, baselineResponseTexts) 
     const baseline = baselineResponseTexts instanceof Set
         ? baselineResponseTexts
         : new Set(baselineResponseTexts || []);
-    return [...(responseTexts || [])]
-        .reverse()
-        .find((text) => text?.trim() && !baseline.has(text))
-        ?.trim() || '';
+    const candidates = [...(responseTexts || [])]
+        .filter((text) => text?.trim() && !baseline.has(text))
+        .map((text) => text.trim());
+    if (candidates.length === 0) return '';
+    // Ưu tiên khối text dài nhất (câu trả lời đầy đủ) thay vì phần tử cuối cùng
+    return candidates.sort((a, b) => b.length - a.length)[0] || '';
 };
 
 const findEnabledGeminiSendButton = async (page, timeout = 12000) => {
@@ -2869,6 +2876,8 @@ export const createGeminiTextSession = async ({
             // data-* tự gắn vì Gemini có thể render lại DOM và làm mất dấu,
             // khiến tool nhận nhầm phản hồi cũ là phản hồi của prompt hiện tại.
             const baselineResponseTexts = new Set(await getGeminiResponseTexts(page));
+            const baselineBodyText = await page.evaluate(() => document.body?.innerText || '')
+                .catch(() => '');
 
             await fillGeminiPrompt({
                 page,
@@ -2878,19 +2887,59 @@ export const createGeminiTextSession = async ({
                 checkStop: shouldStop,
             });
             await submitGeminiPrompt({ page, promptLocator, log, checkStop: shouldStop });
-            log('[Playwright] Đang chờ Gemini trả JSON...');
+            log('[Playwright] Đang chờ Gemini trả lời...');
+            const promptHead = String(prompt || '').trim().slice(0, 60).replace(/\s+/g, ' ');
             let lastText = '';
             let stableCount = 0;
+            let diagnosticLogged = false;
             for (let attempt = 0; attempt < 150; attempt++) {
                 if (shouldStop?.()) throw new Error('STOP_REQUESTED');
                 if (await isGeminiRateLimitVisible(page)) throw createGeminiRateLimitError();
                 await page.waitForTimeout(2000);
 
                 const responseTexts = await getGeminiResponseTexts(page);
-                const normalized = findNewGeminiResponseText(
+                let normalized = findNewGeminiResponseText(
                     responseTexts,
                     baselineResponseTexts
                 );
+
+                // Fallback khi UI mới không khớp selector: đọc toàn bộ text trang
+                // và lấy phần nằm sau câu prompt vừa gửi.
+                if (normalized.length < 20) {
+                    const bodyText = await page.evaluate(() => document.body?.innerText || '')
+                        .catch(() => '');
+                    let tail = '';
+                    if (promptHead) {
+                        const flatBody = bodyText.replace(/\s+/g, ' ');
+                        const promptStart = flatBody.indexOf(promptHead);
+                        if (promptStart >= 0) {
+                            tail = flatBody.slice(promptStart + promptHead.length);
+                        } else if (bodyText.length > baselineBodyText.length + 20) {
+                            tail = bodyText.slice(baselineBodyText.length);
+                        }
+                    } else if (bodyText.length > baselineBodyText.length + 20) {
+                        tail = bodyText.slice(baselineBodyText.length);
+                    }
+                    tail = String(tail || '')
+                        .split('\n')
+                        .filter((line) => !/^(Gemini có thể mắc lỗi|Gemini can make mistakes)/i.test(line.trim()))
+                        .join('\n')
+                        .trim();
+                    if (tail.length >= 20) normalized = tail;
+                }
+
+                if (!diagnosticLogged && attempt >= 25) {
+                    diagnosticLogged = true;
+                    const counts = {};
+                    for (const selector of GEMINI_RESPONSE_SELECTORS.split(', ')) {
+                        counts[selector] = await page.locator(selector).count().catch(() => -1);
+                    }
+                    const bodySample = (await page.evaluate(() => document.body?.innerText || '')
+                        .catch(() => '')).replace(/\s+/g, ' ').slice(-400);
+                    log(`[Gemini] ⚠️ Chưa thấy phản hồi sau ~50s. Số phần tử theo selector: ${JSON.stringify(counts)}`);
+                    log(`[Gemini] 📋 Text cuối trang: ${bodySample}`);
+                }
+
                 if (normalized.length < 20) continue;
                 if (isGeminiRateLimitText(normalized)) throw createGeminiRateLimitError();
 
