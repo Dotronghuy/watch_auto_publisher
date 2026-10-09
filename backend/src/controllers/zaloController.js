@@ -1,4 +1,3 @@
-import { chromium } from 'playwright';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
@@ -7,6 +6,7 @@ import { PrismaClient } from '@prisma/client';
 import { getFoldersInFolder, getImagesInFolder, downloadFileFromDrive } from '../services/drive.service.js';
 import { getProductInfoBySku } from '../services/sheet.service.js';
 import { readFromSheet } from '../services/sheets.service.js';
+import { createGeminiTextSession } from '../services/playwright.service.js';
 import {
   dispatchZaloTabJob,
   getZaloTabBridgeStatus,
@@ -432,7 +432,7 @@ async function generateZaloContentSmart(product, imagePath, phone, toneKey, skuN
     else if (/\dL$|L\d|\dL\d/.test(skuUp)) gender = 'Nữ';
 
     // Format giá: Ưu tiên Giá CTV từ Products Sheet, fallback về priceRaw từ Sheet cũ
-    let priceK;
+    let priceK = 'Liên hệ';
     if (giaCTV && parseInt(giaCTV) > 0) {
       priceK = Math.floor(parseInt(giaCTV) / 1000) + 'k';
     } else {
@@ -572,202 +572,30 @@ QUY TẮC:
       }
     }
 
-    // ====== Playwright → gemini.google.com ======
+    // ====== Playwright → gemini.google.com (dùng bộ helper dùng chung đã cập nhật UI mới) ======
     log('   🌐 Mở Gemini trên trình duyệt...', 'info');
-    const geminiDataDir = path.join(__dirname, '../../chrome_data_gemini');
-    if (!fs.existsSync(geminiDataDir)) fs.mkdirSync(geminiDataDir, { recursive: true });
-
-    const geminiCtx = await chromium.launchPersistentContext(geminiDataDir, {
-      headless: false,
-      args: ['--window-position=1300,0', '--window-size=900,700'],
-      viewport: { width: 900, height: 700 }
-    });
-
-    const geminiPage = geminiCtx.pages().length > 0 ? geminiCtx.pages()[0] : await geminiCtx.newPage();
-
+    let geminiSession = null;
     try {
-      await geminiPage.goto('https://gemini.google.com/app', { waitUntil: 'domcontentloaded', timeout: 30000 });
-      await geminiPage.waitForTimeout(3000);
-
-      // Upload ảnh sản phẩm lên Gemini (UI mới: click "+" → "Files")
-      if (imagePath && fs.existsSync(imagePath)) {
-        log('   📤 Upload ảnh sản phẩm lên Gemini...', 'info');
-        let imgUploaded = false;
-
-        // Cách 1: Tìm input[type=file] ẩn (UI cũ)
-        try {
-          const fileInputs = await geminiPage.$$('input[type="file"]');
-          if (fileInputs.length > 0) {
-            await fileInputs[fileInputs.length - 1].setInputFiles([imagePath]);
-            await geminiPage.waitForTimeout(3000);
-            // Kiểm tra xem có thumbnail ảnh xuất hiện không
-            const hasPreview = await geminiPage.$('img[class*="preview"], img[class*="thumbnail"], [class*="attachment"], [class*="chip"]');
-            if (hasPreview) {
-              imgUploaded = true;
-              log('   ✅ Upload ảnh qua input[file] thành công', 'info');
-            }
+      geminiSession = await createGeminiTextSession({
+        log: (msg) => log(`   ${msg}`, 'info'),
+      });
+      const geminiImage = imagePath && fs.existsSync(imagePath)
+        ? {
+            name: path.basename(imagePath),
+            mimeType: imagePath.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg',
+            buffer: fs.readFileSync(imagePath),
           }
-        } catch (e) {}
+        : null;
 
-        // Cách 2: Click nút "+" mở popup menu → click "Files" (UI mới Gemini 2025+)
-        if (!imgUploaded) {
-          try {
-            log('   🔍 Thử upload qua menu "+" của Gemini...', 'info');
-            // Tìm nút "+" (thường là nút đầu tiên gần ô nhập)
-            const plusBtnSelectors = [
-              'button[aria-label*="Add"]',
-              'button[aria-label*="Thêm"]',
-              'button[aria-label*="attachment"]',
-              'button[aria-label*="more"]',
-              'button[aria-label*="More"]',
-              '.input-area-container button',
-            ];
-
-            let menuOpened = false;
-            for (const sel of plusBtnSelectors) {
-              try {
-                const btns = await geminiPage.$$(sel);
-                for (const btn of btns) {
-                  if (await btn.isVisible()) {
-                    await btn.click();
-                    await geminiPage.waitForTimeout(1500);
-                    // Kiểm tra popup menu có mở không (tìm text "Files")
-                    const filesText = await geminiPage.$('text=Files');
-                    if (filesText) {
-                      menuOpened = true;
-                      break;
-                    }
-                    // Đóng popup nếu không đúng
-                    await geminiPage.keyboard.press('Escape');
-                    await geminiPage.waitForTimeout(300);
-                  }
-                }
-                if (menuOpened) break;
-              } catch (e) {}
-            }
-
-            if (menuOpened) {
-              // Click "Files" trong popup
-              const [fileChooser] = await Promise.all([
-                geminiPage.waitForEvent('filechooser', { timeout: 8000 }),
-                geminiPage.locator('text=Files').first().click()
-              ]);
-              await fileChooser.setFiles([imagePath]);
-              await geminiPage.waitForTimeout(4000);
-              imgUploaded = true;
-              log('   ✅ Upload ảnh qua menu Files thành công!', 'info');
-            }
-          } catch (e) {
-            log(`   ⚠️ Menu Files lỗi: ${e.message}`, 'warning');
-            // Đóng popup nếu đang mở
-            try { await geminiPage.keyboard.press('Escape'); } catch (e2) {}
-          }
-        }
-
-        if (!imgUploaded) {
-          log('   ⚠️ Không upload được ảnh, AI sẽ viết dựa trên thông số', 'warning');
-          try { await geminiPage.keyboard.press('Escape'); } catch (e) {}
-          await geminiPage.waitForTimeout(500);
-        }
-      }
-
-      // Tìm ô nhập và gõ prompt
-      const GEMINI_INPUT_SELECTORS = [
-        'div.ql-editor[contenteditable="true"]',
-        'rich-textarea div[contenteditable="true"]',
-        'div[contenteditable="true"][aria-label]',
-        '.text-input-field div[contenteditable="true"]',
-        'div[contenteditable="true"]',
-      ];
-
-      let inputLocator = null;
-      for (const sel of GEMINI_INPUT_SELECTORS) {
-        try {
-          await geminiPage.waitForSelector(sel, { state: 'visible', timeout: 8000 });
-          inputLocator = geminiPage.locator(sel).first();
-          break;
-        } catch (e) {}
-      }
-
-      if (!inputLocator) {
-        throw new Error('Không tìm thấy ô nhập Gemini! Hãy đăng nhập trước.');
-      }
-
-      await inputLocator.click();
-      await geminiPage.waitForTimeout(500);
-      await inputLocator.fill(prompt);
-      await geminiPage.waitForTimeout(1000);
-
-      // Bấm nút Send
-      log('   🚀 Gửi prompt cho Gemini...', 'info');
-      try {
-        const sendBtn = await geminiPage.waitForSelector('button.send-button, button[aria-label*="Send"], button[aria-label*="Gửi"], button[data-at="send"]', { timeout: 5000 });
-        if (sendBtn) await sendBtn.click();
-        else await geminiPage.keyboard.press('Enter');
-      } catch (e) {
-        await geminiPage.keyboard.press('Enter');
-      }
-
-      // Chờ response
-      log('   ⏳ Chờ Gemini viết content...', 'info');
-      let aiDesc = null;
-      let lastAiDesc = null;
-      let sameTextCount = 0;
-
-      for (let attempt = 0; attempt < 60; attempt++) {
-        await geminiPage.waitForTimeout(2000);
-
-        // Lấy text response mới nhất
-        try {
-          aiDesc = await geminiPage.evaluate(() => {
-            // Lấy tất cả các block trả lời
-            const responseEls = document.querySelectorAll(
-              'message-content .markdown, model-response .markdown, .response-container .markdown, .model-response-text'
-            );
-            if (responseEls.length > 0) {
-              return responseEls[responseEls.length - 1].innerText;
-            }
-            // Fallback
-            const fallbackEls = document.querySelectorAll('[class*="response"] p, [class*="answer"] p');
-            if (fallbackEls.length > 0) {
-              return Array.from(fallbackEls).map(el => el.innerText).join('\n');
-            }
-            return null;
-          });
-        } catch (e) {}
-
-        // Kiểm tra logic dừng: text phải > 50 ký tự và KHÔNG thay đổi trong 5 lần lặp (tức ~10 giây)
-        if (aiDesc && aiDesc.trim().length > 50) {
-          if (aiDesc === lastAiDesc) {
-            sameTextCount++;
-            if (sameTextCount >= 5) {
-              // 10 giây không có text mới -> Chắc chắn Gemini đã viết xong
-              break;
-            }
-          } else {
-            sameTextCount = 0;
-            lastAiDesc = aiDesc;
-          }
-        }
-      }
-
-      await geminiCtx.close();
-
-      if (!aiDesc || aiDesc.trim().length < 20) {
-        throw new Error('Gemini không trả về nội dung hợp lệ');
-      }
-
-      aiDesc = aiDesc.trim();
+      const aiDesc = (await geminiSession.generate(prompt, geminiImage)).trim();
       log(`   ✅ Gemini đã viết xong (${aiDesc.length} ký tự)`, 'success');
 
       if (priority === '0') {
         return `🔥 NHẬN ĐẶT TRƯỚC – Model ${product.id}\nLiên hệ đặt cọc: ${phone}\n\n${aiDesc}`;
       }
       return `☎ /-v CTV: ${priceK}\nGiá đại lý/ sỉ/ số lượng lớn liên hệ: ${phone}\n\n${aiDesc}`;
-
-    } catch (innerErr) {
-      try { await geminiCtx.close(); } catch (e) {}
-      throw innerErr;
+    } finally {
+      if (geminiSession) await geminiSession.close().catch(() => {});
     }
 
   } catch (error) {
