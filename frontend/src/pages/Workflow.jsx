@@ -105,6 +105,8 @@ const Workflow = () => {
   const [storyRunning, setStoryRunning] = useState(false);
   const [storyActive, setStoryActive] = useState(false);
   const [lastStoryLog, setLastStoryLog] = useState(null);
+  const [timeSlots, setTimeSlots] = useState([]);
+  const [lastWorkflowLog, setLastWorkflowLog] = useState(null);
   const [prompts, setPrompts] = useState(INITIAL_PROMPTS);
   const [editingPrompt, setEditingPrompt] = useState(null);
   const [mdFiles, setMdFiles] = useState({ gpt: [], gemini: [] });
@@ -156,6 +158,7 @@ const Workflow = () => {
     fetchSampleImages();
     fetch('/api/settings').then(res => res.json()).then(data => {
       if (data.prioritySkus) setPrioritySkus(data.prioritySkus);
+      if (Array.isArray(data.timeSlots)) setTimeSlots(data.timeSlots);
       setStoryEnabled(data.storyEnabled === true || data.storyEnabled === 'true');
       setStoryIntervalMinutes(parseInt(data.storyIntervalMinutes, 10) || 45);
     }).catch(e => console.error(e));
@@ -474,6 +477,10 @@ const Workflow = () => {
            // Khôi phục trạng thái Story gần nhất
            const storyLogs = data.logs.filter(l => l.message && l.message.includes('[Story]'));
            if (storyLogs.length > 0) setLastStoryLog(storyLogs[storyLogs.length - 1]);
+
+           // Khôi phục lần chạy luồng newfeeds gần nhất
+           const wfLogs = data.logs.filter(l => l.message && /Hoàn tất|Luồng kết thúc|Lỗi luồng|Đã dừng/.test(l.message) && !l.message.includes('[Story]'));
+           if (wfLogs.length > 0) setLastWorkflowLog(wfLogs[wfLogs.length - 1]);
            
            setTimeout(() => terminalEndRef.current?.scrollIntoView({ behavior: 'auto' }), 100);
            return;
@@ -498,6 +505,9 @@ const Workflow = () => {
             setLastStoryLog({ time: data.time, sender: data.sender, message: data.message, type: data.type });
             if (/Đã chọn video|Đã xếp job Story/.test(data.message)) setStoryActive(true);
             else if (/thành công|Lỗi đăng|hết hạn|Không còn video|chưa bật/i.test(data.message)) setStoryActive(false);
+          } else if (/Hoàn tất|Luồng kết thúc|Lỗi luồng|Đã dừng/.test(data.message)) {
+            // Lần chạy luồng đăng newfeeds gần nhất
+            setLastWorkflowLog({ time: data.time, sender: data.sender, message: data.message, type: data.type });
           }
         }
 
@@ -1092,6 +1102,18 @@ const Workflow = () => {
             </div>
             <div className="wf-toolbar-divider" />
             <div className="wf-toolbar-group">
+              <button className="wf-btn primary" onClick={handleRunNow} disabled={!isAiIdle} title="Chạy luồng đăng bài thật ngay (Ctrl+Enter)">
+                <Play size={13} /> Chạy Thật
+              </button>
+              <button className="wf-btn" onClick={handleDryRun} disabled={dryRunLoading || !isAiIdle} title="Chạy thử toàn bộ luồng AI, không đăng (Ctrl+Shift+Enter)">
+                <FlaskConical size={13} /> Dry Run
+              </button>
+              <button className="wf-btn story" onClick={handleRunStoryNow} disabled={storyRunning} title="Chạy 1 Story Facebook ngay (Ctrl+Shift+S)">
+                {storyRunning ? <span className="spin-icon">⟳</span> : <Smartphone size={13} />} Story
+              </button>
+            </div>
+            <div className="wf-toolbar-divider" />
+            <div className="wf-toolbar-group">
               <button className="wf-btn" onClick={() => zoomBy(0.8)} title="Thu nhỏ (Ctrl+-)">−</button>
               <span className="wf-zoom-label">{Math.round(transform.scale * 100)}%</span>
               <button className="wf-btn" onClick={() => zoomBy(1.2)} title="Phóng to (Ctrl+=)">+</button>
@@ -1390,32 +1412,45 @@ const Workflow = () => {
                   </div>
                 </div>
 
-                <div className="field" style={{marginTop: '10px', display: 'flex', gap: '6px', flexWrap: 'wrap'}}>
-                  <button
-                    className="btn-dry-run"
-                    onClick={(e) => { e.stopPropagation(); handleRunNow(); }}
-                    onMouseDown={e => e.stopPropagation()}
-                    disabled={!isAiIdle}
-                    title={!isAiIdle ? "AI đang bận..." : "Chạy đăng bài thật NGAY LẬP TỨC"}
-                    style={{flex: '1 1 100%', background: 'linear-gradient(to right, #10b981, #059669)', color: 'white', borderColor: '#059669', marginBottom: '6px'}}
-                  >
-                    <><Share2 size={13} /> Chạy Thật Ngay!</>
-                  </button>
-                  <button
-                    id="btn-dry-run"
-                    className="btn-dry-run"
-                    onClick={(e) => { e.stopPropagation(); handleDryRun(); }}
-                    onMouseDown={e => e.stopPropagation()}
-                    disabled={dryRunLoading || !isAiIdle}
-                    title={!isAiIdle ? "AI đang bận..." : "Chạy thử toàn bộ luồng AI nhưng KHÔNG đăng lên MXH"}
-                    style={{flex: '1 1 100%'}}
-                  >
-                    {dryRunLoading && trainMode === 'full' ? (
-                      <><span className="spin-icon">⟳</span> Đang chạy thử...</>
+                <div className="field" style={{marginTop: '10px'}}>
+                  <label>Trạng thái hệ thống</label>
+                  <div className="value" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <span style={{
+                      width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
+                      background: isAiIdle ? '#34d399' : '#ffcc00',
+                      boxShadow: isAiIdle ? '0 0 8px rgba(52,211,153,0.8)' : '0 0 8px rgba(255,204,0,0.8)',
+                      animation: isAiIdle ? 'none' : 'pulse 1.2s infinite'
+                    }} />
+                    <span style={{ color: isAiIdle ? '#34d399' : '#ffcc00' }}>{isAiIdle ? 'AI sẵn sàng' : 'AI đang chạy...'}</span>
+                  </div>
+                  <div className="value" style={{ marginTop: '6px', fontSize: '10px', maxHeight: '60px', overflowY: 'auto' }}>
+                    {lastWorkflowLog ? (
+                      <span style={{ color: lastWorkflowLog.type === 'success' ? '#34d399' : lastWorkflowLog.type === 'error' ? '#f87171' : '#eab308' }}>
+                        {lastWorkflowLog.time} — {lastWorkflowLog.message}
+                      </span>
                     ) : (
-                      <><FlaskConical size={13} /> Chạy Thử (Dry Run)</>
+                      <span style={{ color: 'var(--color-text-dim)' }}>Chưa có lượt chạy nào trong phiên này.</span>
                     )}
-                  </button>
+                  </div>
+                </div>
+
+                <div className="field">
+                  <label>Lịch đăng tự động (giờ vàng)</label>
+                  <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+                    {timeSlots.length > 0 ? (
+                      timeSlots.map(t => (
+                        <span key={t} style={{
+                          fontSize: '10px', padding: '2px 8px', borderRadius: '4px', fontWeight: 600,
+                          background: 'rgba(52,211,153,0.15)', border: '1px solid rgba(52,211,153,0.3)', color: '#34d399'
+                        }}>🕐 {t}</span>
+                      ))
+                    ) : (
+                      <span style={{ fontSize: '10px', color: 'var(--color-text-dim)' }}>Chưa cài lịch — chỉ chạy thủ công</span>
+                    )}
+                  </div>
+                </div>
+
+                <div className="field" style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
                   <button
                     className="btn-dry-run btn-train-image"
                     onClick={(e) => { e.stopPropagation(); handleTrainImage(); }}
@@ -1552,16 +1587,12 @@ const Workflow = () => {
                     )}
                   </div>
                 </div>
-                <button
-                  className="btn-dry-run btn-story-run"
-                  style={{ width: '100%' }}
-                  onClick={(e) => { e.stopPropagation(); handleRunStoryNow(); }}
-                  onMouseDown={e => e.stopPropagation()}
-                  disabled={storyRunning}
-                  title="Chạy 1 Story Facebook ngay (Ctrl+Shift+S)"
-                >
-                  {storyRunning ? <><span className="spin-icon">⟳</span> Đang xếp job...</> : <><Play size={12} /> Chạy 1 Story Ngay</>}
-                </button>
+                <div className="value" style={{
+                  border: '1px dashed rgba(192,132,252,0.4)', background: 'rgba(192,132,252,0.06)',
+                  color: '#c084fc', fontSize: '10px', textAlign: 'center', lineHeight: 1.6
+                }}>
+                  ⚡ Chạy nhanh: nút <b>Story</b> trên thanh công cụ<br />hoặc phím tắt <b>Ctrl+Shift+S</b>
+                </div>
               </div>
             </div>
             )}
