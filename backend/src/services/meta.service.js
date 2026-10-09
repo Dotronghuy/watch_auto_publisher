@@ -354,9 +354,11 @@ export const publishFBReels = async (videoPath, content, options = {}) => {
 
 /**
  * Đăng video lên Story Facebook Page.
- * Theo docs chính thức (Page Stories API):
- *   1. Resumable upload video lên /{page-id}/videos (start -> transfer -> finish)
- *   2. POST /{page-id}/video_stories với video_id vừa upload
+ * Theo docs chính thức (Page Stories API) — toàn bộ luồng dùng endpoint /video_stories:
+ *   1. POST /{page-id}/video_stories (upload_phase=start) → nhận video_id + upload_url
+ *   2. POST file lên upload_url (rupload.facebook.com)
+ *   3. POST /{page-id}/video_stories (upload_phase=finish, video_id) → story được đăng
+ * Lưu ý: endpoint /videos KHÔNG trả upload_url nên không dùng cho story.
  * Yêu cầu video: 9:16 (1080x1920), 3-60 giây, MP4 H.264.
  */
 export const publishFBStoryVideo = async (videoPath, options = {}) => {
@@ -366,13 +368,11 @@ export const publishFBStoryVideo = async (videoPath, options = {}) => {
   // Lấy Page ID từ Token (bằng API /me)
   const meRes = await axios.get(`${GRAPH_API_BASE}/me`, { params: { access_token: pageToken } });
   const pageId = meRes.data.id;
-
   const stats = fs.statSync(videoPath);
 
   console.log('🎥 [FB Story] Bước 1: Khởi tạo Resumable Upload...');
-  const startRes = await axios.post(`${GRAPH_API_BASE}/${pageId}/videos`, {
+  const startRes = await axios.post(`${GRAPH_API_BASE}/${pageId}/video_stories`, {
     upload_phase: 'start',
-    file_size: stats.size,
     access_token: pageToken
   });
 
@@ -391,7 +391,6 @@ export const publishFBStoryVideo = async (videoPath, options = {}) => {
         'offset': '0',
         'file_size': stats.size.toString(),
         'Content-Length': stats.size.toString(),
-        'X-Entity-Length': stats.size.toString(),
         'Content-Type': 'application/octet-stream'
       }
     });
@@ -400,17 +399,10 @@ export const publishFBStoryVideo = async (videoPath, options = {}) => {
     throw err;
   }
 
-  console.log('🎥 [FB Story] Bước 3: Hoàn tất upload video...');
-  await axios.post(`${GRAPH_API_BASE}/${pageId}/videos`, {
-    upload_phase: 'finish',
-    video_id: videoId,
-    access_token: pageToken
-  });
-
-  console.log('🎥 [FB Story] Bước 4: Đăng video lên Story...');
+  console.log('🎥 [FB Story] Bước 3: Hoàn tất & đăng Story...');
   const storyRes = await axios.post(`${GRAPH_API_BASE}/${pageId}/video_stories`, {
-    video_id: videoId,
     upload_phase: 'finish',
+    video_id: videoId,
     access_token: pageToken
   });
 
