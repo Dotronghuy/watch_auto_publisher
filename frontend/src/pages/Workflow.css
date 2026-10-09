@@ -937,3 +937,244 @@
   .img-placeholder { height: 140px; }
   .search-box { width: 200px; }
 }
+
+/* ══════════ WORKFLOW EDITOR (TOOLBAR + SELECTION + STORY) ══════════ */
+.wf-toolbar {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 120;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(14, 14, 20, 0.88);
+  backdrop-filter: blur(14px);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 12px;
+  padding: 6px 10px;
+  box-shadow: 0 10px 34px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.02) inset;
+  max-width: calc(100vw - 400px);
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.wf-toolbar-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.wf-toolbar-divider {
+  width: 1px;
+  height: 22px;
+  background: rgba(255, 255, 255, 0.1);
+  margin: 0 4px;
+  flex-shrink: 0;
+}
+
+.wf-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--color-text-dim);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+  font-family: inherit;
+}
+
+.wf-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.09);
+  color: #fff;
+}
+
+.wf-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.wf-btn.primary {
+  background: linear-gradient(to right, #10b981, #059669);
+  border-color: #059669;
+  color: #fff;
+}
+
+.wf-btn.primary:hover:not(:disabled) {
+  background: linear-gradient(to right, #34d399, #10b981);
+  color: #fff;
+}
+
+.wf-btn.story {
+  color: #c084fc;
+  border-color: rgba(192, 132, 252, 0.35);
+  background: rgba(168, 85, 247, 0.12);
+}
+
+.wf-btn.story:hover:not(:disabled) {
+  background: rgba(168, 85, 247, 0.24);
+  border-color: rgba(192, 132, 252, 0.6);
+  color: #e9d5ff;
+}
+
+.wf-btn.danger {
+  color: #f87171;
+}
+
+.wf-btn.danger:hover:not(:disabled) {
+  background: rgba(239, 68, 68, 0.15);
+  color: #fca5a5;
+}
+
+.wf-zoom-label {
+  font-size: 11px;
+  color: var(--color-text-dim);
+  min-width: 40px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.wf-dropdown {
+  position: relative;
+}
+
+.wf-dropdown-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  min-width: 210px;
+  background: rgba(14, 14, 20, 0.98);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  z-index: 300;
+  box-shadow: 0 14px 44px rgba(0, 0, 0, 0.65);
+}
+
+.wf-dropdown-menu button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border: none;
+  background: transparent;
+  color: var(--color-text);
+  font-size: 11px;
+  border-radius: 6px;
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+  transition: background 0.12s;
+}
+
+.wf-dropdown-menu button:hover {
+  background: rgba(255, 255, 255, 0.09);
+}
+
+.wf-node-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+/* Node được chọn */
+.node-card.selected {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 1px var(--color-primary), 0 0 26px rgba(255, 77, 141, 0.28), 0 4px 20px rgba(0, 0, 0, 0.6);
+}
+
+/* ── Luồng Story Facebook ── */
+.story-node {
+  border-color: rgba(168, 85, 247, 0.28);
+}
+
+.story-node:hover {
+  border-color: rgba(168, 85, 247, 0.55);
+}
+
+.toggle.off {
+  background-color: rgba(255, 255, 255, 0.16);
+}
+
+.toggle.off::after {
+  right: auto;
+  left: 2px;
+}
+
+.btn-story-run {
+  background: linear-gradient(135deg, rgba(168, 85, 247, 0.2), rgba(139, 92, 246, 0.1)) !important;
+  border-color: rgba(168, 85, 247, 0.5) !important;
+  color: #c084fc !important;
+}
+
+.btn-story-run:hover:not(:disabled) {
+  background: linear-gradient(135deg, rgba(168, 85, 247, 0.32), rgba(139, 92, 246, 0.18)) !important;
+  border-color: #a855f7 !important;
+  box-shadow: 0 0 12px rgba(168, 85, 247, 0.3) !important;
+}
+
+.story-status {
+  max-height: 56px;
+  overflow-y: auto;
+  font-size: 10px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ── Modal phím tắt ── */
+.shortcuts-modal {
+  width: 560px;
+  max-width: 92vw;
+}
+
+.shortcuts-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 16px 20px;
+  overflow-y: auto;
+  max-height: 68vh;
+}
+
+.shortcut-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  font-size: 12px;
+  color: var(--color-text);
+}
+
+.shortcut-keys {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+  align-items: center;
+}
+
+.shortcut-keys kbd {
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  padding: 2px 7px;
+  font-size: 10px;
+  font-family: inherit;
+  color: #fff;
+  white-space: nowrap;
+}

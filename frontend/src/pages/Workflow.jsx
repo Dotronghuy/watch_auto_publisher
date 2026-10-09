@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { ChevronLeft, ChevronRight, Cloud, Settings, Share2, Search, Pause, Terminal, Image as ImageIcon, BrainCircuit, FileText, UploadCloud, RotateCcw, Trash2, FlaskConical, X, MessageSquare, Camera, Zap, CheckCircle, Palette, PenTool, Maximize } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Cloud, Settings, Share2, Search, Pause, Terminal, Image as ImageIcon, BrainCircuit, FileText, UploadCloud, RotateCcw, Trash2, FlaskConical, X, MessageSquare, Camera, Zap, CheckCircle, Palette, PenTool, Maximize, Undo2, Redo2, Play, Plus, HelpCircle, Film, Music2, Smartphone } from 'lucide-react';
 import Swal from 'sweetalert2';
 import { useAuth } from '../context/AuthContext';
 import './Workflow.css';
@@ -9,7 +9,38 @@ const INITIAL_NODES = {
   gpt: { id: 'gpt', x: 370, y: 30 },
   gemini: { id: 'gemini', x: 670, y: 150 },
   publish: { id: 'publish', x: 980, y: 150 },
+  storySource: { id: 'storySource', x: 40, y: 590 },
+  storyProcess: { id: 'storyProcess', x: 370, y: 590 },
+  storyPublish: { id: 'storyPublish', x: 700, y: 590 },
 };
+
+const NODE_CATALOG = [
+  { id: 'source', label: 'Nguồn Dữ Liệu', color: '#60a5fa' },
+  { id: 'gpt', label: 'GPT-5.5 (Sinh Ảnh)', color: '#f472b6' },
+  { id: 'gemini', label: 'GPT-5.5 (Sinh Content)', color: '#a78bfa' },
+  { id: 'publish', label: 'Đăng bài Đa kênh', color: '#34d399' },
+  { id: 'storySource', label: 'Nguồn Video Story', color: '#22d3ee' },
+  { id: 'storyProcess', label: 'Xử Lý Video Story', color: '#fbbf24' },
+  { id: 'storyPublish', label: 'Đăng Story Facebook', color: '#c084fc' },
+];
+
+const SHORTCUTS = [
+  { keys: ['Click', 'node'], label: 'Chọn node · Click nền hoặc Esc để bỏ chọn' },
+  { keys: ['Shift', '+ Click'], label: 'Chọn nhiều node cùng lúc' },
+  { keys: ['Space', '+ Kéo'], label: 'Pan canvas · Lăn chuột để zoom' },
+  { keys: ['Delete'], label: 'Xóa node đã chọn (thêm lại bằng nút + trên thanh công cụ)' },
+  { keys: ['Ctrl', '+ Z'], label: 'Hoàn tác (undo)' },
+  { keys: ['Ctrl', '+ Shift + Z'], label: 'Làm lại (redo)' },
+  { keys: ['← ↑ ↓ →'], label: 'Dịch node 1px · giữ Shift để dịch 10px' },
+  { keys: ['Ctrl', '+ A'], label: 'Chọn tất cả node' },
+  { keys: ['Ctrl', '+ Enter'], label: 'Chạy luồng đăng bài thật ngay' },
+  { keys: ['Ctrl', '+ Shift + Enter'], label: 'Chạy thử (Dry Run) toàn bộ luồng AI' },
+  { keys: ['Ctrl', '+ Shift + S'], label: 'Chạy 1 Story Facebook ngay' },
+  { keys: ['Ctrl', '+ B'], label: 'Ẩn / hiện Live Monitor' },
+  { keys: ['Ctrl', '+ / - / 0'], label: 'Phóng to / thu nhỏ / về 100%' },
+  { keys: ['F'], label: 'Tự động vừa màn hình (fit view)' },
+  { keys: ['?'], label: 'Mở bảng phím tắt này' },
+];
 
 const INITIAL_PROMPTS = {
   gpt: 'Tạo 4-6 ảnh mới với góc nhìn và ánh sáng khác nhau, giữ phong cách luxury, 8k resolution.',
@@ -22,12 +53,15 @@ const NODE_HEIGHT_SOURCE = 190;
 const NODE_HEIGHT_GPT = 170;
 const NODE_HEIGHT_GEMINI = 220;
 const NODE_HEIGHT_PUBLISH = 110;
+const NODE_HEIGHT_STORY_SOURCE = 165;
+const NODE_HEIGHT_STORY_PROCESS = 190;
+const NODE_HEIGHT_STORY_PUBLISH = 235;
 
-// Đọc vị trí node đã lưu từ localStorage
+// Đọc vị trí node đã lưu từ localStorage (merge với node mới nếu phiên bản cũ chưa có)
 const getSavedNodes = () => {
   try {
     const saved = localStorage.getItem('workflow_node_positions');
-    if (saved) return JSON.parse(saved);
+    if (saved) return { ...INITIAL_NODES, ...JSON.parse(saved) };
   } catch (e) {}
   return INITIAL_NODES;
 };
@@ -44,8 +78,29 @@ const Workflow = () => {
   const [isMonitorOpen, setIsMonitorOpen] = useState(true);
   const [isGPTActive, setIsGPTActive] = useState(false);
   const [nodes, setNodes] = useState(getSavedNodes);
-  const [nodeHeights, setNodeHeights] = useState({ source: NODE_HEIGHT_SOURCE, gpt: NODE_HEIGHT_GPT, gemini: NODE_HEIGHT_GEMINI, publish: NODE_HEIGHT_PUBLISH });
-  const nodeRefs = useRef({ source: null, gpt: null, gemini: null, publish: null });
+  const [nodeHeights, setNodeHeights] = useState({
+    source: NODE_HEIGHT_SOURCE, gpt: NODE_HEIGHT_GPT, gemini: NODE_HEIGHT_GEMINI, publish: NODE_HEIGHT_PUBLISH,
+    storySource: NODE_HEIGHT_STORY_SOURCE, storyProcess: NODE_HEIGHT_STORY_PROCESS, storyPublish: NODE_HEIGHT_STORY_PUBLISH,
+  });
+  const nodeRefs = useRef({ source: null, gpt: null, gemini: null, publish: null, storySource: null, storyProcess: null, storyPublish: null });
+  // Workflow editor: selection + undo/redo
+  const [selectedIds, setSelectedIds] = useState([]);
+  const [past, setPast] = useState([]);
+  const [future, setFuture] = useState([]);
+  const [addNodeOpen, setAddNodeOpen] = useState(false);
+  const [showHelp, setShowHelp] = useState(false);
+  const nodesRef = useRef(nodes);
+  const selectedIdsRef = useRef(selectedIds);
+  const dragStartNodes = useRef(null);
+  const nudgingRef = useRef(false);
+  useEffect(() => { nodesRef.current = nodes; }, [nodes]);
+  useEffect(() => { selectedIdsRef.current = selectedIds; }, [selectedIds]);
+  // Story flow state
+  const [storyEnabled, setStoryEnabled] = useState(false);
+  const [storyIntervalMinutes, setStoryIntervalMinutes] = useState(45);
+  const [storyRunning, setStoryRunning] = useState(false);
+  const [storyActive, setStoryActive] = useState(false);
+  const [lastStoryLog, setLastStoryLog] = useState(null);
   const [prompts, setPrompts] = useState(INITIAL_PROMPTS);
   const [editingPrompt, setEditingPrompt] = useState(null);
   const [mdFiles, setMdFiles] = useState({ gpt: [], gemini: [] });
@@ -97,6 +152,8 @@ const Workflow = () => {
     fetchSampleImages();
     fetch('/api/settings').then(res => res.json()).then(data => {
       if (data.prioritySkus) setPrioritySkus(data.prioritySkus);
+      setStoryEnabled(data.storyEnabled === true || data.storyEnabled === 'true');
+      setStoryIntervalMinutes(parseInt(data.storyIntervalMinutes, 10) || 45);
     }).catch(e => console.error(e));
   }, [fetchMdFiles]);
 
@@ -272,6 +329,112 @@ const Workflow = () => {
     });
   }, [nodes, nodeHeights]);
 
+  // ─── WORKFLOW EDITOR: HISTORY / SELECTION / STORY ACTIONS ───
+  const snapNodes = useCallback(() => (
+    Object.fromEntries(Object.entries(nodesRef.current).map(([k, v]) => [k, { ...v }]))
+  ), []);
+
+  const savePositions = useCallback((nodeMap) => {
+    try { localStorage.setItem('workflow_node_positions', JSON.stringify(nodeMap)); } catch (e) {}
+  }, []);
+
+  const commitHistory = useCallback((nextNodes) => {
+    setPast(p => [...p.slice(-49), snapNodes()]);
+    setFuture([]);
+    setNodes(nextNodes);
+    savePositions(nextNodes);
+  }, [snapNodes, savePositions]);
+
+  const handleUndo = useCallback(() => {
+    if (past.length === 0) return;
+    const last = past[past.length - 1];
+    setFuture(f => [...f.slice(-49), snapNodes()]);
+    setPast(p => p.slice(0, -1));
+    setNodes(last);
+    savePositions(last);
+    setSelectedIds([]);
+  }, [past, snapNodes, savePositions]);
+
+  const handleRedo = useCallback(() => {
+    if (future.length === 0) return;
+    const next = future[future.length - 1];
+    setPast(p => [...p.slice(-49), snapNodes()]);
+    setFuture(f => f.slice(0, -1));
+    setNodes(next);
+    savePositions(next);
+    setSelectedIds([]);
+  }, [future, snapNodes, savePositions]);
+
+  const handleDeleteSelected = useCallback(() => {
+    if (selectedIds.length === 0) return;
+    const next = { ...nodesRef.current };
+    selectedIds.forEach(id => { delete next[id]; });
+    commitHistory(next);
+    setSelectedIds([]);
+  }, [selectedIds, commitHistory]);
+
+  const handleAddNode = (id) => {
+    if (nodesRef.current[id]) return;
+    commitHistory({ ...nodesRef.current, [id]: { ...INITIAL_NODES[id] } });
+    setAddNodeOpen(false);
+  };
+
+  const handleResetLayout = () => {
+    commitHistory({ ...INITIAL_NODES });
+    setSelectedIds([]);
+    setAddNodeOpen(false);
+  };
+
+  const nudgeSelected = useCallback((key, step) => {
+    if (selectedIdsRef.current.length === 0) return;
+    if (!nudgingRef.current) {
+      setPast(p => [...p.slice(-49), snapNodes()]);
+      setFuture([]);
+      nudgingRef.current = true;
+    }
+    const dx = key === 'ArrowLeft' ? -step : key === 'ArrowRight' ? step : 0;
+    const dy = key === 'ArrowUp' ? -step : key === 'ArrowDown' ? step : 0;
+    setNodes(prev => {
+      const next = { ...prev };
+      selectedIdsRef.current.forEach(id => {
+        if (next[id]) next[id] = { ...next[id], x: next[id].x + dx, y: next[id].y + dy };
+      });
+      return next;
+    });
+  }, [snapNodes]);
+
+  const zoomBy = useCallback((factor) => {
+    setTransform(p => ({ ...p, scale: Math.min(3, Math.max(0.2, +(p.scale * factor).toFixed(2))) }));
+  }, []);
+
+  // ─── STORY ACTIONS ───
+  const toggleStoryEnabled = () => {
+    const next = !storyEnabled;
+    setStoryEnabled(next);
+    autoSaveSettings({ storyEnabled: next });
+  };
+
+  const saveStoryInterval = (value) => {
+    const n = Math.max(5, parseInt(value, 10) || 45);
+    setStoryIntervalMinutes(n);
+    autoSaveSettings({ storyIntervalMinutes: String(n) });
+  };
+
+  const handleRunStoryNow = async () => {
+    if (storyRunning) return;
+    setStoryRunning(true);
+    try {
+      const res = await fetch('/api/trigger-story', { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Không thể chạy Story');
+      Swal.fire({ title: '🎬 Đã xếp job Story!', text: 'Worker sẽ chạy ngay. Theo dõi tiến độ tại node Story hoặc Live Monitor.', icon: 'success', toast: true, position: 'top-end', showConfirmButton: false, timer: 3500, background: 'var(--color-surface)', color: 'white' });
+    } catch (err) {
+      Swal.fire({ title: 'Lỗi chạy Story', text: err.message, icon: 'error', background: 'var(--color-surface)', color: 'white' });
+    } finally {
+      setStoryRunning(false);
+    }
+  };
+
   useEffect(() => {
     const timer = setTimeout(() => handleAutoFit(), 100);
     return () => clearTimeout(timer);
@@ -303,6 +466,10 @@ const Workflow = () => {
            
            const previewsTH = data.logs.filter(l => l.thContent).map(l => l.thContent);
            if (previewsTH.length > 0) setPreviewTH(previewsTH[previewsTH.length - 1]);
+
+           // Khôi phục trạng thái Story gần nhất
+           const storyLogs = data.logs.filter(l => l.message && l.message.includes('[Story]'));
+           if (storyLogs.length > 0) setLastStoryLog(storyLogs[storyLogs.length - 1]);
            
            setTimeout(() => terminalEndRef.current?.scrollIntoView({ behavior: 'auto' }), 100);
            return;
@@ -321,6 +488,13 @@ const Workflow = () => {
           else if (data.message.includes('[REELS]') || data.message.includes('Chế độ REELS')) setActiveBranch(3);
           // Reset khi luồng kết thúc
           if (data.message.includes('Hoàn tất') || data.message.includes('thất bại') || data.message.includes('Đã dừng')) setActiveBranch(null);
+
+          // Cập nhật trạng thái luồng Story
+          if (data.message.includes('[Story]')) {
+            setLastStoryLog({ time: data.time, sender: data.sender, message: data.message, type: data.type });
+            if (/Đã chọn video|Đã xếp job Story/.test(data.message)) setStoryActive(true);
+            else if (/thành công|Lỗi đăng|hết hạn|Không còn video|chưa bật/i.test(data.message)) setStoryActive(false);
+          }
         }
 
         // Xử lý ảnh: thêm vào gallery và nhảy tới ảnh mới nhất
@@ -348,20 +522,57 @@ const Workflow = () => {
     e.preventDefault();
     e.stopPropagation();
     // startX/Y là vị trí chuột trong toạ độ "world" (trước scale)
+    dragStartNodes.current = snapNodes();
     dragging.current = {
       nodeId,
+      moved: false,
+      shiftKey: e.shiftKey,
       startX: (e.clientX - transform.x) / transform.scale - nodes[nodeId].x,
       startY: (e.clientY - transform.y) / transform.scale - nodes[nodeId].y,
     };
-  }, [nodes, transform]);
+  }, [nodes, transform, snapNodes]);
 
-  // ─── PAN + DRAG + ZOOM ───
+  // ─── PAN + DRAG + ZOOM + PHÍM TẮT ───
+  const handlersRef = useRef({});
+
   useEffect(() => {
+    const isEditable = (e) => {
+      const tag = e.target?.tagName;
+      return tag === 'TEXTAREA' || tag === 'INPUT' || tag === 'SELECT' || e.target?.isContentEditable;
+    };
+
     const onKeyDown = (e) => {
-      if (e.code === 'Space' && e.target.tagName !== 'TEXTAREA' && e.target.tagName !== 'INPUT') {
+      if (e.code === 'Space' && !isEditable(e)) {
         e.preventDefault();
         spaceHeld.current = true;
         if (canvasRef.current) canvasRef.current.style.cursor = 'grab';
+        return;
+      }
+      if (isEditable(e)) return;
+      const H = handlersRef.current;
+      const mod = e.ctrlKey || e.metaKey;
+      const key = e.key.toLowerCase();
+
+      if (mod && key === 'z') { e.preventDefault(); if (e.shiftKey) H.handleRedo(); else H.handleUndo(); return; }
+      if (mod && key === 'y') { e.preventDefault(); H.handleRedo(); return; }
+      if (mod && key === 'a') { e.preventDefault(); setSelectedIds(Object.keys(nodesRef.current)); return; }
+      if (mod && key === 's' && e.shiftKey) { e.preventDefault(); H.handleRunStoryNow(); return; }
+      if (mod && key === 'enter') { e.preventDefault(); if (e.shiftKey) H.handleDryRun(); else H.handleRunNow(); return; }
+      if (mod && (key === '=' || key === '+')) { e.preventDefault(); H.zoomBy(1.2); return; }
+      if (mod && key === '-') { e.preventDefault(); H.zoomBy(0.8); return; }
+      if (mod && key === '0') { e.preventDefault(); setTransform({ x: 0, y: 0, scale: 1 }); return; }
+      if (mod && key === 'b') { e.preventDefault(); setIsMonitorOpen(o => !o); return; }
+      if (key === 'f' && !mod && !e.shiftKey) { e.preventDefault(); H.handleAutoFit(); return; }
+      if (key === '?' || (e.shiftKey && key === '/')) { e.preventDefault(); setShowHelp(true); return; }
+      if (key === 'delete' || key === 'backspace') { e.preventDefault(); H.handleDeleteSelected(); return; }
+      if (key === 'escape') { setSelectedIds([]); setAddNodeOpen(false); setShowHelp(false); return; }
+      if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(key)) {
+        if (selectedIdsRef.current.length > 0) {
+          e.preventDefault();
+          const map = { arrowup: 'ArrowUp', arrowdown: 'ArrowDown', arrowleft: 'ArrowLeft', arrowright: 'ArrowRight' };
+          H.nudgeSelected(map[key], e.shiftKey ? 10 : 1);
+        }
+        return;
       }
     };
     const onKeyUp = (e) => {
@@ -369,6 +580,12 @@ const Workflow = () => {
         spaceHeld.current = false;
         panning.current = null;
         if (canvasRef.current) canvasRef.current.style.cursor = '';
+      }
+      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
+        if (nudgingRef.current) {
+          nudgingRef.current = false;
+          savePositions(nodesRef.current);
+        }
       }
     };
 
@@ -383,6 +600,7 @@ const Workflow = () => {
         return;
       }
       if (!dragging.current) return;
+      dragging.current.moved = true;
       const { nodeId, startX, startY } = dragging.current;
       const wx = (e.clientX - transform.x) / transform.scale - startX;
       const wy = (e.clientY - transform.y) / transform.scale - startY;
@@ -393,19 +611,36 @@ const Workflow = () => {
       if (spaceHeld.current) {
         if (canvasRef.current) canvasRef.current.style.cursor = 'grabbing';
         panning.current = { startX: e.clientX, startY: e.clientY, originX: transform.x, originY: transform.y };
+        return;
+      }
+      // Click vùng trống trên canvas → bỏ chọn node
+      if (canvasRef.current && canvasRef.current.contains(e.target) && !e.target.closest('button, input, textarea, select')) {
+        setSelectedIds([]);
       }
     };
 
     const onMouseUp = () => {
-      // Lưu vị trí node khi thả chuột
       if (dragging.current) {
-        setNodes(prev => {
-          try { localStorage.setItem('workflow_node_positions', JSON.stringify(prev)); } catch (e) {}
-          return prev;
-        });
+        const { nodeId, moved, shiftKey } = dragging.current;
+        if (moved) {
+          // Commit vị trí TRƯỚC khi kéo vào history
+          if (dragStartNodes.current) {
+            setPast(p => [...p.slice(-49), dragStartNodes.current]);
+            setFuture([]);
+          }
+          savePositions(nodesRef.current);
+        } else {
+          // Click (không kéo) → chọn / bỏ chọn node
+          setSelectedIds(prev => {
+            const isSelected = prev.includes(nodeId);
+            const base = shiftKey ? prev : [];
+            return isSelected ? base.filter(id => id !== nodeId) : [...base, nodeId];
+          });
+        }
       }
       dragging.current = null;
       panning.current = null;
+      dragStartNodes.current = null;
       if (canvasRef.current && spaceHeld.current) canvasRef.current.style.cursor = 'grab';
     };
 
@@ -441,13 +676,13 @@ const Workflow = () => {
       window.removeEventListener('mouseup', onMouseUp);
       ref?.removeEventListener('wheel', onWheel);
     };
-  }, [transform]);
+  }, [transform, savePositions]);
 
   // ───────────────── ĐO CHIỀU CAO THỰC TẾ CỦA NODE ─────────────────
   useEffect(() => {
     const observer = new ResizeObserver(() => {
       const newHeights = {};
-      for (const key of ['source', 'gpt', 'gemini', 'publish']) {
+      for (const key of Object.keys(INITIAL_NODES)) {
         const el = nodeRefs.current[key];
         if (el) newHeights[key] = el.offsetHeight;
       }
@@ -455,7 +690,7 @@ const Workflow = () => {
         setNodeHeights(prev => ({ ...prev, ...newHeights }));
       }
     });
-    for (const key of ['source', 'gpt', 'gemini', 'publish']) {
+    for (const key of Object.keys(INITIAL_NODES)) {
       if (nodeRefs.current[key]) observer.observe(nodeRefs.current[key]);
     }
     return () => observer.disconnect();
@@ -467,27 +702,41 @@ const Workflow = () => {
     return `M ${from.x} ${from.y} C ${cx} ${from.y}, ${cx} ${to.y}, ${to.x} ${to.y}`;
   };
 
-  const { source, gpt, gemini, publish } = nodes;
-  const hS = nodeHeights.source, hG = nodeHeights.gpt, hM = nodeHeights.gemini, hP = nodeHeights.publish;
+  const portPoint = (nodeId, side, ratio) => {
+    const node = nodes[nodeId];
+    if (!node) return null;
+    const h = nodeHeights[nodeId] || 200;
+    return {
+      x: side === 'right' ? node.x + NODE_WIDTH : node.x,
+      y: node.y + h * ratio,
+    };
+  };
 
-  // Tọa độ path = node.x/y + chiều cao thực * tỉ lệ port CSS
-  // Source ports: 30%, 60%, 90%
-  const path1_from = { x: source.x + NODE_WIDTH, y: source.y + hS * 0.30 };
-  const path2_from = { x: source.x + NODE_WIDTH, y: source.y + hS * 0.60 };
-  const path3_from = { x: source.x + NODE_WIDTH, y: source.y + hS * 0.90 };
+  // Render 1 cạnh nối giữa 2 node (bỏ qua nếu 1 trong 2 đã bị xóa)
+  const renderEdge = (fromId, toId, fromRatio, toRatio, isActive) => {
+    const from = portPoint(fromId, 'right', fromRatio);
+    const to = portPoint(toId, 'left', toRatio);
+    if (!from || !to) return null;
+    const key = `${fromId}-${toId}-${fromRatio}-${toRatio}`;
+    return (
+      <g key={key}>
+        <path d={cubicPath(from, to)} className={`path-line ${isActive ? 'active-path' : 'dim-path'}`} />
+        <circle cx={to.x} cy={to.y} r={isActive ? 4 : 3} fill={isActive ? 'var(--color-primary)' : 'rgba(160,160,180,0.5)'} />
+      </g>
+    );
+  };
 
-  // GPT port-in: 50%, port-out: 50%
-  const path1_to   = { x: gpt.x, y: gpt.y + hG * 0.50 };
-  const pathGPT_from = { x: gpt.x + NODE_WIDTH, y: gpt.y + hG * 0.50 };
-
-  // Gemini ports-in: 30%, 70%, 90% | port-out: 50%
-  const pathGPT_to   = { x: gemini.x, y: gemini.y + hM * 0.30 };
-  const path2_to     = { x: gemini.x, y: gemini.y + hM * 0.70 };
-  const path3_to     = { x: gemini.x, y: gemini.y + hM * 0.90 };
-  const pathPub_from = { x: gemini.x + NODE_WIDTH, y: gemini.y + hM * 0.50 };
-
-  // Publish port-in: 50%
-  const pathPub_to = { x: publish.x, y: publish.y + hP * 0.50 };
+  const edges = (
+    <svg style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', overflow: 'visible', pointerEvents: 'none' }}>
+      {renderEdge('source', 'gpt', 0.30, 0.50, activeBranch === 1)}
+      {renderEdge('source', 'gemini', 0.60, 0.70, activeBranch === 2)}
+      {renderEdge('source', 'gemini', 0.90, 0.90, activeBranch === 3)}
+      {renderEdge('gpt', 'gemini', 0.50, 0.30, activeBranch === 1)}
+      {renderEdge('gemini', 'publish', 0.50, 0.50, Boolean(activeBranch))}
+      {renderEdge('storySource', 'storyProcess', 0.50, 0.50, storyActive)}
+      {renderEdge('storyProcess', 'storyPublish', 0.50, 0.50, storyActive)}
+    </svg>
+  );
 
   const handleSavePrompt = async (key, value) => {
     setPrompts(prev => ({ ...prev, [key]: value }));
@@ -804,17 +1053,68 @@ const Workflow = () => {
     }
   };
 
+  // Cập nhật tham chiếu handler mới nhất cho listener phím tắt (tránh stale closure)
+  handlersRef.current = {
+    handleUndo, handleRedo, handleDeleteSelected, nudgeSelected,
+    handleAutoFit, handleRunNow, handleDryRun, handleRunStoryNow, zoomBy,
+  };
+
   return (
     <div className="workflow-page">
       <div className="workflow-content">
         <div className="canvas-area" ref={canvasRef}>
 
-          {/* ── ZOOM CONTROLS ── */}
+          {/* ── TOOLBAR WORKFLOW EDITOR ── */}
+          <div className="wf-toolbar">
+            <div className="wf-toolbar-group">
+              <button className="wf-btn" onClick={handleUndo} disabled={past.length === 0} title="Hoàn tác (Ctrl+Z)"><Undo2 size={14} /></button>
+              <button className="wf-btn" onClick={handleRedo} disabled={future.length === 0} title="Làm lại (Ctrl+Shift+Z / Ctrl+Y)"><Redo2 size={14} /></button>
+              <button className="wf-btn danger" onClick={handleDeleteSelected} disabled={selectedIds.length === 0} title="Xóa node đã chọn (Delete)"><Trash2 size={14} /></button>
+              <div className="wf-dropdown">
+                <button className="wf-btn" onClick={() => setAddNodeOpen(o => !o)} title="Thêm node đã xóa"><Plus size={14} /></button>
+                {addNodeOpen && (
+                  <div className="wf-dropdown-menu">
+                    {NODE_CATALOG.filter(n => !nodes[n.id]).map(n => (
+                      <button key={n.id} onClick={() => handleAddNode(n.id)}>
+                        <span className="wf-node-dot" style={{ background: n.color }} />{n.label}
+                      </button>
+                    ))}
+                    {NODE_CATALOG.every(n => nodes[n.id]) && <div style={{ padding: '6px 10px', fontSize: '10px', color: 'var(--color-text-dim)' }}>Tất cả node đã có trên canvas.</div>}
+                    <button onClick={handleResetLayout}><RotateCcw size={12} /> Đặt lại bố cục gốc</button>
+                  </div>
+                )}
+              </div>
+            </div>
+            <div className="wf-toolbar-divider" />
+            <div className="wf-toolbar-group">
+              <button className="wf-btn primary" onClick={handleRunNow} disabled={!isAiIdle} title="Chạy luồng đăng bài thật ngay (Ctrl+Enter)">
+                <Play size={13} /> Chạy Thật
+              </button>
+              <button className="wf-btn" onClick={handleDryRun} disabled={dryRunLoading || !isAiIdle} title="Chạy thử toàn bộ luồng AI, không đăng (Ctrl+Shift+Enter)">
+                <FlaskConical size={13} /> Dry Run
+              </button>
+              <button className="wf-btn story" onClick={handleRunStoryNow} disabled={storyRunning} title="Chạy 1 Story Facebook ngay (Ctrl+Shift+S)">
+                {storyRunning ? <span className="spin-icon">⟳</span> : <Smartphone size={13} />} Story
+              </button>
+            </div>
+            <div className="wf-toolbar-divider" />
+            <div className="wf-toolbar-group">
+              <button className="wf-btn" onClick={() => zoomBy(0.8)} title="Thu nhỏ (Ctrl+-)">−</button>
+              <span className="wf-zoom-label">{Math.round(transform.scale * 100)}%</span>
+              <button className="wf-btn" onClick={() => zoomBy(1.2)} title="Phóng to (Ctrl+=)">+</button>
+              <button className="wf-btn" onClick={() => setTransform({ x: 0, y: 0, scale: 1 })} title="Về 100% (Ctrl+0)">1:1</button>
+              <button className="wf-btn" onClick={handleAutoFit} title="Tự động vừa màn hình (F)"><Maximize size={13} /></button>
+              <button className="wf-btn" onClick={() => setIsMonitorOpen(o => !o)} title="Ẩn / hiện Live Monitor (Ctrl+B)"><Terminal size={13} /></button>
+              <button className="wf-btn" onClick={() => setShowHelp(true)} title="Phím tắt bàn phím (?)"><HelpCircle size={14} /></button>
+            </div>
+          </div>
+
+          {/* ── ZOOM CONTROLS (GÓC TRÁI DƯỚI) ── */}
           <div style={{ position: 'absolute', bottom: 16, left: 16, zIndex: 100, display: 'flex', flexDirection: 'column', gap: 6 }}>
-            <button onClick={() => setTransform(p => ({ ...p, scale: Math.min(3, +(p.scale * 1.2).toFixed(2)) }))} style={{ width: 32, height: 32, borderRadius: 8, background: 'rgba(30,30,30,0.9)', border: '1px solid rgba(255,255,255,0.15)', color: '#fff', cursor: 'pointer', fontSize: 18, display: 'flex', alignItems: 'center', justifyContent: 'center' }} title="Phóng to">+</button>
-            <button onClick={() => setTransform(p => ({ ...p, scale: Math.max(0.2, +(p.scale * 0.8).toFixed(2)) }))} style={{ width: 32, height: 32, borderRadius: 8, background: 'rgba(30,30,30,0.9)', border: '1px solid rgba(255,255,255,0.15)', color: '#fff', cursor: 'pointer', fontSize: 22, display: 'flex', alignItems: 'center', justifyContent: 'center', lineHeight: 1 }} title="Thu nhỏ">−</button>
-            <button onClick={() => setTransform({ x: 0, y: 0, scale: 1 })} style={{ width: 32, height: 32, borderRadius: 8, background: 'rgba(255,77,141,0.18)', border: '1px solid rgba(255,77,141,0.35)', color: 'var(--color-primary)', cursor: 'pointer', fontSize: 12, display: 'flex', alignItems: 'center', justifyContent: 'center' }} title="Đặt lại">1:1</button>
-            <button onClick={handleAutoFit} style={{ width: 32, height: 32, borderRadius: 8, background: 'rgba(52,211,153,0.18)', border: '1px solid rgba(52,211,153,0.35)', color: '#34d399', cursor: 'pointer', fontSize: 12, display: 'flex', alignItems: 'center', justifyContent: 'center' }} title="Tự động vừa màn hình"><Maximize size={14}/></button>
+            <button onClick={() => zoomBy(1.2)} style={{ width: 32, height: 32, borderRadius: 8, background: 'rgba(30,30,30,0.9)', border: '1px solid rgba(255,255,255,0.15)', color: '#fff', cursor: 'pointer', fontSize: 18, display: 'flex', alignItems: 'center', justifyContent: 'center' }} title="Phóng to (Ctrl+=)">+</button>
+            <button onClick={() => zoomBy(0.8)} style={{ width: 32, height: 32, borderRadius: 8, background: 'rgba(30,30,30,0.9)', border: '1px solid rgba(255,255,255,0.15)', color: '#fff', cursor: 'pointer', fontSize: 22, display: 'flex', alignItems: 'center', justifyContent: 'center', lineHeight: 1 }} title="Thu nhỏ (Ctrl+-)">−</button>
+            <button onClick={() => setTransform({ x: 0, y: 0, scale: 1 })} style={{ width: 32, height: 32, borderRadius: 8, background: 'rgba(255,77,141,0.18)', border: '1px solid rgba(255,77,141,0.35)', color: 'var(--color-primary)', cursor: 'pointer', fontSize: 12, display: 'flex', alignItems: 'center', justifyContent: 'center' }} title="Về 100% (Ctrl+0)">1:1</button>
+            <button onClick={handleAutoFit} style={{ width: 32, height: 32, borderRadius: 8, background: 'rgba(52,211,153,0.18)', border: '1px solid rgba(52,211,153,0.35)', color: '#34d399', cursor: 'pointer', fontSize: 12, display: 'flex', alignItems: 'center', justifyContent: 'center' }} title="Tự động vừa màn hình (F)"><Maximize size={14}/></button>
           </div>
 
           {/* ── ZOOM LEVEL INDICATOR ── */}
@@ -829,35 +1129,16 @@ const Workflow = () => {
             transformOrigin: '0 0',
             transform: `translate(${transform.x}px, ${transform.y}px) scale(${transform.scale})`,
           }}>
-            {/* SVG đường nối */}
-            <svg style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', overflow: 'visible', pointerEvents: 'none' }}>
-              {/* Nhánh 1: Source → GPT */}
-              <path d={cubicPath(path1_from, path1_to)} className={`path-line ${activeBranch === 1 ? 'active-path' : 'dim-path'}`} />
-              <circle cx={path1_to.x} cy={path1_to.y} r={activeBranch === 1 ? 4 : 3} fill={activeBranch === 1 ? 'var(--color-primary)' : 'rgba(160,160,180,0.5)'} />
-
-              {/* Nhánh 2: Source → Gemini (ảnh gốc) */}
-              <path d={cubicPath(path2_from, path2_to)} className={`path-line ${activeBranch === 2 ? 'active-path' : 'dim-path'}`} />
-              <circle cx={path2_to.x} cy={path2_to.y} r={activeBranch === 2 ? 4 : 3} fill={activeBranch === 2 ? 'var(--color-primary)' : 'rgba(160,160,180,0.5)'} />
-
-              {/* Nhánh 3: Source → Gemini (video) */}
-              <path d={cubicPath(path3_from, path3_to)} className={`path-line ${activeBranch === 3 ? 'active-path' : 'faint-path'}`} />
-              <circle cx={path3_to.x} cy={path3_to.y} r={activeBranch === 3 ? 4 : 3} fill={activeBranch === 3 ? 'var(--color-primary)' : 'rgba(120,120,140,0.35)'} />
-
-              {/* GPT → Gemini */}
-              <path d={cubicPath(pathGPT_from, pathGPT_to)} className={`path-line ${activeBranch === 1 ? 'active-path' : 'dim-path'}`} />
-              <circle cx={pathGPT_to.x} cy={pathGPT_to.y} r={activeBranch === 1 ? 4 : 3} fill={activeBranch === 1 ? 'var(--color-primary)' : 'rgba(160,160,180,0.5)'} />
-
-              {/* Gemini → Publish */}
-              <path d={cubicPath(pathPub_from, pathPub_to)} className={`path-line ${activeBranch ? 'active-path' : 'dim-path'}`} />
-              <circle cx={pathPub_to.x} cy={pathPub_to.y} r={activeBranch ? 4 : 3} fill={activeBranch ? 'var(--color-primary)' : 'rgba(160,160,180,0.5)'} />
-            </svg>
+            {/* SVG đường nối (tự ẩn cạnh nếu node bị xóa) */}
+            {edges}
 
             {/* Nối node cards */}
             <div style={{ position: 'relative', width: '100%', height: '100%' }}>
+              {nodes.source && (
               <div
                 ref={el => nodeRefs.current.source = el}
-                className="node-card drive-node"
-                style={{ top: source.y, left: source.x, cursor: 'grab' }}
+                className={`node-card drive-node ${selectedIds.includes('source') ? 'selected' : ''}`}
+                style={{ top: nodes.source.y, left: nodes.source.x, cursor: 'grab' }}
                 onMouseDown={e => onMouseDown(e, 'source')}
               >
               <div className="node-header"><Cloud size={14} className="blue" /> Nguồn Dữ Liệu<div className="toggle active"></div></div>
@@ -876,13 +1157,15 @@ const Workflow = () => {
               <div className="port" style={{top:'30%', right:'-5px', background: activeBranch === 1 ? 'var(--color-primary)' : 'rgba(160,160,180,0.5)'}} title="Nhánh 1 AVT"></div>
               <div className="port" style={{top:'60%', right:'-5px', background: activeBranch === 2 ? 'var(--color-primary)' : undefined}} title="Nhánh 2 Ảnh Thật"></div>
               <div className="port" style={{top:'90%', right:'-5px', opacity: activeBranch === 3 ? 1 : 0.5, background: activeBranch === 3 ? 'var(--color-primary)' : undefined}} title="Nhánh 3 Video"></div>
-            </div>{/* end node source */}
+            </div>
+              )}
 
               {/* ───── NODE 2: GPT-4 VISION ───── */}
+            {nodes.gpt && (
             <div
               ref={el => nodeRefs.current.gpt = el}
-              className={`node-card gpt-node ${isGPTActive ? 'active-glow' : ''}`}
-              style={{ top: gpt.y, left: gpt.x, cursor: 'grab' }}
+              className={`node-card gpt-node ${isGPTActive ? 'active-glow' : ''} ${selectedIds.includes('gpt') ? 'selected' : ''}`}
+              style={{ top: nodes.gpt.y, left: nodes.gpt.x, cursor: 'grab' }}
               onMouseDown={e => onMouseDown(e, 'gpt')}
             >
               <div className="port" style={{top:'50%', left:'-5px'}} title="Input từ Nhánh 1"></div>
@@ -1041,12 +1324,14 @@ const Workflow = () => {
               </div>
               <div className="port" style={{top:'50%', right:'-5px'}} title="Output → Gemini"></div>
             </div>
+            )}
 
             {/* ───── NODE 3: GEMINI 1.5 PRO ───── */}
+            {nodes.gemini && (
             <div
               ref={el => nodeRefs.current.gemini = el}
-              className="node-card gemini-node"
-              style={{ top: gemini.y, left: gemini.x, cursor: 'grab' }}
+              className={`node-card gemini-node ${selectedIds.includes('gemini') ? 'selected' : ''}`}
+              style={{ top: nodes.gemini.y, left: nodes.gemini.x, cursor: 'grab' }}
               onMouseDown={e => onMouseDown(e, 'gemini')}
             >
               <div className="port" style={{top:'30%', left:'-5px', background:'var(--color-primary)'}} title="Input từ GPT"></div>
@@ -1091,12 +1376,14 @@ const Workflow = () => {
               </div>
               <div className="port" style={{top:'50%', right:'-5px'}} title="Output → Publisher"></div>
             </div>
+            )}
 
             {/* ───── NODE 4: PUBLISH ───── */}
+            {nodes.publish && (
             <div
               ref={el => nodeRefs.current.publish = el}
-              className="node-card publish-node"
-              style={{ top: publish.y, left: publish.x, cursor: 'grab', minHeight: NODE_HEIGHT_PUBLISH + 70 }}
+              className={`node-card publish-node ${selectedIds.includes('publish') ? 'selected' : ''}`}
+              style={{ top: nodes.publish.y, left: nodes.publish.x, cursor: 'grab', minHeight: NODE_HEIGHT_PUBLISH + 70 }}
               onMouseDown={e => onMouseDown(e, 'publish')}
             >
               <div className="port" style={{top:'50%', left:'-5px'}} title="Input từ Gemini"></div>
@@ -1176,7 +1463,134 @@ const Workflow = () => {
                   </button>
                 </div>
               </div>
-            </div>{/* end node publish */}
+            </div>
+            )}
+
+            {/* ───── LUỒNG STORY FACEBOOK ───── */}
+            {/* NODE 5: NGUỒN VIDEO STORY */}
+            {nodes.storySource && (
+            <div
+              ref={el => nodeRefs.current.storySource = el}
+              className={`node-card story-node ${selectedIds.includes('storySource') ? 'selected' : ''}`}
+              style={{ top: nodes.storySource.y, left: nodes.storySource.x, cursor: 'grab' }}
+              onMouseDown={e => onMouseDown(e, 'storySource')}
+            >
+              <div className="node-header"><Film size={14} style={{ color: '#22d3ee' }} /> Nguồn Video Story</div>
+              <div className="node-body">
+                <div className="field">
+                  <label>Nguồn</label>
+                  <div className="value">Google Drive → 3_Video_Doc</div>
+                </div>
+                <div className="field mt-2">
+                  <label>Quy tắc chọn video</label>
+                  <div className="condition-pill" style={{ borderLeft: `2px solid ${storyActive ? 'var(--color-primary)' : '#555'}` }}>🎲 SKU ngẫu nhiên, ưu tiên video mới</div>
+                  <div className="condition-pill" style={{ borderLeft: `2px solid ${storyActive ? 'var(--color-primary)' : '#555'}` }}>🕓 Bỏ qua video đã đăng (story_history.json)</div>
+                </div>
+              </div>
+              <div className="port" style={{top:'50%', right:'-5px', background: storyActive ? 'var(--color-primary)' : undefined}} title="Output → Xử Lý Video"></div>
+            </div>
+            )}
+
+            {/* NODE 6: XỬ LÝ VIDEO STORY */}
+            {nodes.storyProcess && (
+            <div
+              ref={el => nodeRefs.current.storyProcess = el}
+              className={`node-card story-node ${selectedIds.includes('storyProcess') ? 'selected' : ''}`}
+              style={{ top: nodes.storyProcess.y, left: nodes.storyProcess.x, cursor: 'grab' }}
+              onMouseDown={e => onMouseDown(e, 'storyProcess')}
+            >
+              <div className="port" style={{top:'50%', left:'-5px', background: storyActive ? 'var(--color-primary)' : undefined}} title="Input từ Nguồn Video"></div>
+              <div className="node-header"><Music2 size={14} style={{ color: '#fbbf24' }} /> Xử Lý Video Story</div>
+              <div className="node-body">
+                <div className="field">
+                  <label>Luồng xử lý tự động</label>
+                  <div className="condition-pill" style={{ borderLeft: `2px solid ${storyActive ? 'var(--color-primary)' : '#555'}` }}>🎵 Video có nhạc → giữ nguyên</div>
+                  <div className="condition-pill" style={{ borderLeft: `2px solid ${storyActive ? 'var(--color-primary)' : '#555'}` }}>🔇 Video không nhạc → ghép nhạc (music_library)</div>
+                  <div className="condition-pill" style={{ borderLeft: `2px solid ${storyActive ? 'var(--color-primary)' : '#555'}` }}>📱 Chuyển 9:16 (1080×1920, ≤60s, H.264+AAC)</div>
+                </div>
+              </div>
+              <div className="port" style={{top:'50%', right:'-5px', background: storyActive ? 'var(--color-primary)' : undefined}} title="Output → Đăng Story"></div>
+            </div>
+            )}
+
+            {/* NODE 7: ĐĂNG STORY FACEBOOK */}
+            {nodes.storyPublish && (
+            <div
+              ref={el => nodeRefs.current.storyPublish = el}
+              className={`node-card story-node ${selectedIds.includes('storyPublish') ? 'selected' : ''}`}
+              style={{ top: nodes.storyPublish.y, left: nodes.storyPublish.x, cursor: 'grab' }}
+              onMouseDown={e => onMouseDown(e, 'storyPublish')}
+            >
+              <div className="port" style={{top:'50%', left:'-5px', background: storyActive ? 'var(--color-primary)' : undefined}} title="Input từ Xử Lý Video"></div>
+              <div className="node-header"><Smartphone size={14} style={{ color: '#c084fc' }} /> Đăng Story Facebook</div>
+              <div className="node-body">
+                <div className="field">
+                  <label>Kích hoạt luồng Story (tự động)</label>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <button
+                      type="button"
+                      className={`toggle ${storyEnabled ? '' : 'off'}`}
+                      style={{ border: 'none', cursor: 'pointer', marginLeft: 0, flexShrink: 0 }}
+                      onClick={(e) => { e.stopPropagation(); toggleStoryEnabled(); }}
+                      title={storyEnabled ? 'Tắt luồng Story tự động' : 'Bật luồng Story tự động'}
+                    />
+                    <span style={{ fontSize: '10px', color: storyEnabled ? '#34d399' : 'var(--color-text-dim)' }}>
+                      {storyEnabled ? 'Đang bật' : 'Đang tắt'}
+                    </span>
+                  </div>
+                </div>
+                <div className="field">
+                  <label>Tần suất tự động (phút)</label>
+                  <input
+                    type="number"
+                    min={5}
+                    value={storyIntervalMinutes}
+                    disabled={!storyEnabled}
+                    onChange={(e) => setStoryIntervalMinutes(e.target.value)}
+                    onKeyDown={(e) => { e.stopPropagation(); if (e.key === 'Enter') e.target.blur(); }}
+                    style={{
+                      width: '100%',
+                      background: 'rgba(0,0,0,0.3)',
+                      border: '1px solid rgba(255,255,255,0.05)',
+                      color: '#fff',
+                      padding: '8px 10px',
+                      borderRadius: '6px',
+                      fontSize: '11px',
+                      outline: 'none',
+                      marginTop: '4px',
+                      opacity: storyEnabled ? 1 : 0.5,
+                      transition: 'border-color 0.2s'
+                    }}
+                    onFocus={(e) => e.target.style.borderColor = 'var(--color-primary)'}
+                    onBlur={(e) => { e.target.style.borderColor = 'rgba(255,255,255,0.05)'; saveStoryInterval(e.target.value); }}
+                    title="Cứ mỗi N phút hệ thống tự đăng 1 story"
+                  />
+                </div>
+                <div className="field">
+                  <label>Trạng thái lần chạy gần nhất</label>
+                  <div className="value story-status">
+                    {lastStoryLog ? (
+                      <span style={{ color: lastStoryLog.type === 'success' ? '#34d399' : lastStoryLog.type === 'error' ? '#f87171' : '#eab308' }}>
+                        {lastStoryLog.time} — {lastStoryLog.message}
+                      </span>
+                    ) : (
+                      <span style={{ color: 'var(--color-text-dim)' }}>Chưa chạy Story nào.</span>
+                    )}
+                  </div>
+                </div>
+                <button
+                  className="btn-dry-run btn-story-run"
+                  style={{ width: '100%' }}
+                  onClick={(e) => { e.stopPropagation(); handleRunStoryNow(); }}
+                  onMouseDown={e => e.stopPropagation()}
+                  disabled={storyRunning}
+                  title="Chạy 1 Story Facebook ngay (Ctrl+Shift+S)"
+                >
+                  {storyRunning ? <><span className="spin-icon">⟳</span> Đang xếp job...</> : <><Play size={12} /> Chạy 1 Story Ngay</>}
+                </button>
+              </div>
+            </div>
+            )}
             </div>{/* end nodes relative wrapper */}
           </div>{/* end single canvas container */}
         </div>{/* end canvas-area */}
@@ -1490,6 +1904,41 @@ const Workflow = () => {
                 {testTonesResults.length === 0 && !testTonesProgress && (
                   <div style={{ textAlign: 'center', color: 'var(--color-text-dim)', padding: '40px' }}>Chưa có kết quả.</div>
                 )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ───── MODAL PHÍM TẮT BÀN PHÍM ───── */}
+        {showHelp && (
+          <div className="dry-run-overlay" onClick={() => setShowHelp(false)}>
+            <div className="dry-run-modal shortcuts-modal" onClick={e => e.stopPropagation()}>
+              <div className="dry-run-modal-header">
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <HelpCircle size={20} color="var(--color-primary)" />
+                  <div>
+                    <h2 style={{ margin: 0, fontSize: '16px', color: 'white' }}>Phím Tắt Bàn Phím</h2>
+                    <p style={{ margin: 0, fontSize: '11px', color: 'var(--color-text-dim)' }}>Thao tác workflow nhanh như editor hiện đại</p>
+                  </div>
+                </div>
+                <button className="dry-run-close" onClick={() => setShowHelp(false)} title="Đóng (Esc)">
+                  <X size={18} />
+                </button>
+              </div>
+              <div className="shortcuts-body">
+                {SHORTCUTS.map((s, i) => (
+                  <div className="shortcut-row" key={i}>
+                    <span>{s.label}</span>
+                    <span className="shortcut-keys">
+                      {s.keys.map((k, j) => (
+                        <span key={j} style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                          {j > 0 && <span style={{ color: 'var(--color-text-dim)', fontSize: '10px' }}>+</span>}
+                          <kbd>{k}</kbd>
+                        </span>
+                      ))}
+                    </span>
+                  </div>
+                ))}
               </div>
             </div>
           </div>
