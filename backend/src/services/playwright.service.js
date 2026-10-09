@@ -2604,18 +2604,36 @@ const isGeminiRateLimitVisible = async (page) => {
 const getGeminiResponseTexts = async (page) => page
     .locator(GEMINI_RESPONSE_SELECTORS)
     .evaluateAll((elements) => {
-        const uniqueTexts = [];
+        const selectorSet = [
+            'model-response',
+            'message-content',
+            '[data-message-author-role]',
+            '[data-test-id*="response"]',
+            '[data-testid*="response"]',
+            '[class*="model-response"]',
+            'ms-markdown',
+            '.response-container',
+            '.model-response-text',
+        ].join(', ');
+        const results = [];
         const seen = new Set();
         for (const element of elements) {
+            const roleEl = element.matches?.('[data-message-author-role]')
+                ? element
+                : element.closest?.('[data-message-author-role]');
+            const role = roleEl?.getAttribute('data-message-author-role') || null;
+            if (role === 'user') continue; // bỏ tin nhắn prompt của tool
+            // Bỏ container chứa nhiều tin nhắn: chỉ giữ phần tử "lá" của câu trả lời
+            if (element.querySelector?.(selectorSet)) continue;
             const markdown = element.matches?.('.markdown')
                 ? element
                 : element.querySelector?.('.markdown');
             const text = (markdown || element).innerText?.trim() || '';
             if (!text || seen.has(text)) continue;
             seen.add(text);
-            uniqueTexts.push(text);
+            results.push({ text, role: role || 'unknown' });
         }
-        return uniqueTexts;
+        return results;
     })
     .catch(() => []);
 
@@ -2630,6 +2648,15 @@ export const findNewGeminiResponseText = (responseTexts, baselineResponseTexts) 
     // Ưu tiên khối text dài nhất (câu trả lời đầy đủ) thay vì phần tử cuối cùng
     return candidates.sort((a, b) => b.length - a.length)[0] || '';
 };
+
+// Loại bỏ dòng ghi chú trách nhiệm của Gemini khỏi nội dung trả về
+const stripGeminiDisclaimers = (value) => String(value || '')
+    .split('\n')
+    .filter((line) => !/^(Gemini có thể mắc lỗi|Gemini can make mistakes|Pro Gemini is AI and can make mistakes)/i.test(line.trim()))
+    .join('\n')
+    .trim()
+    .replace(/\s+(Gemini có thể mắc lỗi[^]*|Gemini can make mistakes[^]*|Pro Gemini is AI and can make mistakes[^]*)$/i, '')
+    .trim();
 
 const findEnabledGeminiSendButton = async (page, timeout = 12000) => {
     const deadline = Date.now() + timeout;
@@ -2875,7 +2902,9 @@ export const createGeminiTextSession = async ({
             // Chụp chữ ký phản hồi cũ sau khi UI tải/đính kèm xong. Không dùng
             // data-* tự gắn vì Gemini có thể render lại DOM và làm mất dấu,
             // khiến tool nhận nhầm phản hồi cũ là phản hồi của prompt hiện tại.
-            const baselineResponseTexts = new Set(await getGeminiResponseTexts(page));
+            const baselineResponseTexts = new Set(
+                (await getGeminiResponseTexts(page)).map((item) => item.text)
+            );
             const baselineBodyText = await page.evaluate(() => document.body?.innerText || '')
                 .catch(() => '');
 
@@ -2888,7 +2917,8 @@ export const createGeminiTextSession = async ({
             });
             await submitGeminiPrompt({ page, promptLocator, log, checkStop: shouldStop });
             log('[Playwright] Đang chờ Gemini trả lời...');
-            const promptHead = String(prompt || '').trim().slice(0, 60).replace(/\s+/g, ' ');
+            const flatPrompt = String(prompt || '').replace(/\s+/g, ' ').trim();
+            const promptHead = flatPrompt.slice(0, 60);
             let lastText = '';
             let stableCount = 0;
             let diagnosticLogged = false;
@@ -2897,35 +2927,45 @@ export const createGeminiTextSession = async ({
                 if (await isGeminiRateLimitVisible(page)) throw createGeminiRateLimitError();
                 await page.waitForTimeout(2000);
 
-                const responseTexts = await getGeminiResponseTexts(page);
-                let normalized = findNewGeminiResponseText(
-                    responseTexts,
-                    baselineResponseTexts
-                );
+                const responseItems = await getGeminiResponseTexts(page);
+                const modelTexts = responseItems
+                    .filter((item) => item.role === 'model')
+                    .map((item) => item.text);
+                const candidateTexts = modelTexts.length > 0
+                    ? modelTexts
+                    : responseItems.map((item) => item.text);
+                let normalized = findNewGeminiResponseText(candidateTexts, baselineResponseTexts);
+                // Không bao giờ nhận text chứa chính prompt vừa gửi (container hội thoại)
+                if (normalized && promptHead && normalized.includes(promptHead)) normalized = '';
 
-                // Fallback khi UI mới không khớp selector: đọc toàn bộ text trang
-                // và lấy phần nằm sau câu prompt vừa gửi.
+                // Fallback khi UI mới không khớp selector: đọc text toàn trang sau khi
+                // đã gỡ các tin nhắn của người gửi (prompt), lấy phần sau câu prompt.
                 if (normalized.length < 20) {
-                    const bodyText = await page.evaluate(() => document.body?.innerText || '')
-                        .catch(() => '');
-                    let tail = '';
-                    if (promptHead) {
-                        const flatBody = bodyText.replace(/\s+/g, ' ');
-                        const promptStart = flatBody.indexOf(promptHead);
-                        if (promptStart >= 0) {
-                            tail = flatBody.slice(promptStart + promptHead.length);
-                        } else if (bodyText.length > baselineBodyText.length + 20) {
-                            tail = bodyText.slice(baselineBodyText.length);
+                    const tail = await page.evaluate(({ flatPrompt, promptHead }) => {
+                        const clone = document.body.cloneNode(true);
+                        clone.querySelectorAll(
+                            '[data-message-author-role="user"], user-query, .user-query-container, [class*="user-query"]'
+                        ).forEach((element) => element.remove());
+                        let text = (clone.innerText || '').replace(/\s+/g, ' ').trim();
+                        const fullStart = flatPrompt ? text.indexOf(flatPrompt) : -1;
+                        if (fullStart >= 0) text = text.slice(fullStart + flatPrompt.length);
+                        else {
+                            const headStart = promptHead ? text.indexOf(promptHead) : -1;
+                            if (headStart >= 0) text = text.slice(headStart + promptHead.length);
                         }
-                    } else if (bodyText.length > baselineBodyText.length + 20) {
-                        tail = bodyText.slice(baselineBodyText.length);
+                        return text.trim();
+                    }, { flatPrompt, promptHead }).catch(() => '');
+
+                    let tailText = tail;
+                    if (tailText.length < 20) {
+                        const bodyText = await page.evaluate(() => document.body?.innerText || '')
+                            .catch(() => '');
+                        if (bodyText.length > baselineBodyText.length + 20) {
+                            tailText = bodyText.slice(baselineBodyText.length);
+                        }
                     }
-                    tail = String(tail || '')
-                        .split('\n')
-                        .filter((line) => !/^(Gemini có thể mắc lỗi|Gemini can make mistakes)/i.test(line.trim()))
-                        .join('\n')
-                        .trim();
-                    if (tail.length >= 20) normalized = tail;
+                    tailText = stripGeminiDisclaimers(tailText);
+                    if (tailText.length >= 20) normalized = tailText;
                 }
 
                 if (!diagnosticLogged && attempt >= 25) {
@@ -2951,7 +2991,7 @@ export const createGeminiTextSession = async ({
                 if (stableCount >= 3) {
                     requestsInCurrentConversation++;
                     lastGenerationCompletedAt = Date.now();
-                    return normalized;
+                    return stripGeminiDisclaimers(normalized);
                 }
             }
 
