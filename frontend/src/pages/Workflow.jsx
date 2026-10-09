@@ -31,9 +31,9 @@ const SHORTCUTS = [
   { keys: ['Ctrl', '+ Shift + Z'], label: 'Làm lại (redo)' },
   { keys: ['← ↑ ↓ →'], label: 'Dịch node 1px · giữ Shift để dịch 10px' },
   { keys: ['Ctrl', '+ A'], label: 'Chọn tất cả node' },
-  { keys: ['Ctrl', '+ Enter'], label: 'Chạy luồng đăng bài thật ngay' },
-  { keys: ['Ctrl', '+ Shift + Enter'], label: 'Chạy thử (Dry Run) toàn bộ luồng AI' },
-  { keys: ['Ctrl', '+ Shift + S'], label: 'Chạy 1 Story Facebook ngay' },
+  { keys: ['Ctrl', '+ Enter'], label: 'Đăng bài thật ngay (Facebook + Instagram)' },
+  { keys: ['Ctrl', '+ Shift + Enter'], label: 'Chạy thử toàn bộ luồng AI (không đăng)' },
+  { keys: ['Ctrl', '+ Shift + S'], label: 'Đăng 1 Story Facebook ngay' },
   { keys: ['Ctrl', '+ B'], label: 'Ẩn / hiện Live Monitor' },
   { keys: ['Ctrl', '+ / - / 0'], label: 'Phóng to / thu nhỏ / về 100%' },
   { keys: ['F'], label: 'Tự động vừa màn hình (fit view)' },
@@ -1102,14 +1102,14 @@ const Workflow = () => {
             </div>
             <div className="wf-toolbar-divider" />
             <div className="wf-toolbar-group">
-              <button className="wf-btn primary" onClick={handleRunNow} disabled={!isAiIdle} title="Chạy luồng đăng bài thật ngay (Ctrl+Enter)">
-                <Play size={13} /> Chạy Thật
+              <button className="wf-btn primary" onClick={handleRunNow} disabled={!isAiIdle} title="Đăng bài thật lên Facebook & Instagram ngay (Ctrl+Enter)">
+                <Play size={13} /> Đăng Bài Ngay
               </button>
-              <button className="wf-btn" onClick={handleDryRun} disabled={dryRunLoading || !isAiIdle} title="Chạy thử toàn bộ luồng AI, không đăng (Ctrl+Shift+Enter)">
-                <FlaskConical size={13} /> Dry Run
+              <button className="wf-btn" onClick={handleDryRun} disabled={dryRunLoading || !isAiIdle} title="Chạy thử toàn bộ luồng AI nhưng KHÔNG đăng lên mạng xã hội (Ctrl+Shift+Enter)">
+                <FlaskConical size={13} /> Chạy Thử
               </button>
-              <button className="wf-btn story" onClick={handleRunStoryNow} disabled={storyRunning} title="Chạy 1 Story Facebook ngay (Ctrl+Shift+S)">
-                {storyRunning ? <span className="spin-icon">⟳</span> : <Smartphone size={13} />} Story
+              <button className="wf-btn story" onClick={handleRunStoryNow} disabled={storyRunning} title="Đăng 1 Story Facebook ngay (Ctrl+Shift+S)">
+                {storyRunning ? <span className="spin-icon">⟳</span> : <Smartphone size={13} />} Chạy Story
               </button>
             </div>
             <div className="wf-toolbar-divider" />
@@ -1591,7 +1591,7 @@ const Workflow = () => {
                   border: '1px dashed rgba(192,132,252,0.4)', background: 'rgba(192,132,252,0.06)',
                   color: '#c084fc', fontSize: '10px', textAlign: 'center', lineHeight: 1.6
                 }}>
-                  ⚡ Chạy nhanh: nút <b>Story</b> trên thanh công cụ<br />hoặc phím tắt <b>Ctrl+Shift+S</b>
+                  ⚡ Chạy nhanh: nút <b>Chạy Story</b> trên thanh công cụ<br />hoặc phím tắt <b>Ctrl+Shift+S</b>
                 </div>
               </div>
             </div>
