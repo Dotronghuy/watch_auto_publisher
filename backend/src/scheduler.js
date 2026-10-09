@@ -97,6 +97,46 @@ const redisScheduleMatchesSettings = async (settings) => {
   return storedPolicyVersion === AUTO_PUBLISH_POLICY_VERSION;
 };
 
+/**
+ * Lịch job Story Facebook — luồng RIÊNG với lịch newfeeds:
+ * cứ storyIntervalMinutes phút đăng 1 story (chạy liên tục, dày hơn newfeeds).
+ * Bật/tắt bằng settings.storyEnabled trong settings.json.
+ */
+const ensureStorySchedule = async (settings) => {
+  const enabled = settings.storyEnabled === true || settings.storyEnabled === 'true';
+  const intervalMinutes = Math.max(1, parseInt(settings.storyIntervalMinutes, 10) || 60);
+  const storyPattern = `*/${intervalMinutes} * * * *`;
+
+  try {
+    const repeatableJobs = await publishQueue.getRepeatableJobs();
+    const existingStoryJobs = repeatableJobs.filter((job) => job.name === 'storyPublishJob');
+
+    if (!enabled) {
+      for (const job of existingStoryJobs) {
+        await publishQueue.removeRepeatableByKey(job.key);
+      }
+      if (existingStoryJobs.length > 0) {
+        console.log('🧹 [Story] storyEnabled đã tắt, gỡ bỏ lịch đăng Story.');
+      }
+      return;
+    }
+
+    const patternMatches = existingStoryJobs.length > 0
+      && existingStoryJobs.every((job) => job.pattern === storyPattern);
+    if (patternMatches) return;
+
+    for (const job of existingStoryJobs) {
+      await publishQueue.removeRepeatableByKey(job.key);
+    }
+    await publishQueue.add('storyPublishJob', {}, createAutoPublishJobOptions({
+      repeat: { pattern: storyPattern, tz: 'Asia/Ho_Chi_Minh' }
+    }));
+    console.log(`✅ [Story] Đã lên lịch đăng Story mỗi ${intervalMinutes} phút (Cron: ${storyPattern})`);
+  } catch (error) {
+    console.warn('⚠️ [Story] Không cập nhật được lịch đăng Story:', error.message);
+  }
+};
+
 export const startScheduler = async (isSettingsUpdate = false) => {
   if (isSchedulerRunning) {
     console.log('⚠️ Scheduler đang chạy, bỏ qua lần gọi thứ 2.');
@@ -189,6 +229,7 @@ export const startScheduler = async (isSettingsUpdate = false) => {
 
       if (timeSlots.length === 0) {
         console.log('⚠️ Không có khung giờ nào được cài đặt! Hệ thống Auto sẽ TẠM NGƯNG cho đến khi bạn thêm khung giờ.');
+        await ensureStorySchedule(settings);
         isSchedulerRunning = false;
         return;
       }
@@ -322,6 +363,10 @@ export const startScheduler = async (isSettingsUpdate = false) => {
   syncHashesFromSheets()
     .then(() => syncLocalImageEmbeddingIndex())
     .catch(e => console.error('Lỗi cập nhật nhanh bộ nhận diện ảnh khi khởi động:', e));
+
+  // Lịch job Story Facebook (luồng riêng) — chạy sau mọi nhánh để Hot Reload
+  // không làm mất lịch story.
+  await ensureStorySchedule(readSchedulerSettings());
 
   isSchedulerRunning = false; // Reset để cho phép gọi lại khi user thay đổi settings
 };

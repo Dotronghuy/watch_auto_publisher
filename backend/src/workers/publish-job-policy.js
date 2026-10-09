@@ -48,7 +48,9 @@ export const hasExhaustedAttempts = (job) => {
 };
 
 export const buildRecoveryJob = (job, error, now = Date.now()) => {
-  if (!job || !hasExhaustedAttempts(job) || isManualStopError(error)) return null;
+  // Chỉ tạo job bù cho luồng newfeeds (autoPublishJob). Các job khác
+  // (VD: storyPublishJob) có lịch riêng và không cần cơ chế chạy bù này.
+  if (!job || job.name !== 'autoPublishJob' || !hasExhaustedAttempts(job) || isManualStopError(error)) return null;
 
   const recoveryCount = Math.max(0, Number(job.data?.recoveryCount) || 0);
   if (recoveryCount >= AUTO_PUBLISH_MAX_RECOVERY_JOBS) return null;

@@ -24,8 +24,8 @@ import { PrismaClient } from '@prisma/client';
 const prisma = new PrismaClient();
 import { generateImageWithEngine } from './image-engine.service.js';
 import { telegramEvents, sendBatchToTelegram } from './telegram.service.js';
-import { publishToInstagram, publishCarouselToInstagram, publishFBReels, publishIGReels, publishThreadChain, publishFBStoryVideo } from './meta.service.js';
-import { addMusicToVideo, hasAudioStream, toStoryFormat } from './video.service.js';
+import { publishToInstagram, publishCarouselToInstagram, publishFBReels, publishIGReels, publishThreadChain } from './meta.service.js';
+import { addMusicToVideo, hasAudioStream } from './video.service.js';
 import { addActivity } from '../utils/activity.js';
 import { liveLog } from '../utils/liveLog.js';
 import { readJsonFileSync } from '../utils/json-file.js';
@@ -418,7 +418,7 @@ export const dryRunRoutine = async () => {
     };
 
     const shuffledSkus = await getSmartFilteredSkus(skuFolders, allProductsInfo);
-    const folderTypes = ['0_Anh_AVT', '1_Anh_Hang', '2_Anh_Tu_Chup', '3_Video_Doc', '4_Video_Story'];
+    const folderTypes = ['0_Anh_AVT', '1_Anh_Hang', '2_Anh_Tu_Chup', '3_Video_Doc'];
     let selectedImages = [];
     let selectedSku = null;
     let postMode = 'SINGLE';
@@ -445,7 +445,7 @@ export const dryRunRoutine = async () => {
         if (!targetFolderId) continue;
 
         let mediaFiles = [];
-        if (folderName === '3_Video_Doc' || folderName === '4_Video_Story') {
+        if (folderName === '3_Video_Doc') {
           mediaFiles = await getVideosInFolder(targetFolderId);
         } else {
           mediaFiles = await getImagesInFolder(targetFolderId);
@@ -460,9 +460,6 @@ export const dryRunRoutine = async () => {
           } else if (folderName === '3_Video_Doc') {
             selectedImages = [freshMedia[Math.floor(Math.random() * freshMedia.length)]];
             postMode = 'REELS';
-          } else if (folderName === '4_Video_Story') {
-            selectedImages = [freshMedia[Math.floor(Math.random() * freshMedia.length)]];
-            postMode = 'STORY';
           } else {
             const numToPick = Math.min(freshMedia.length, Math.floor(Math.random() * 5) + 4);
             // Ảnh số 1 (theo tên file) luôn ở đầu, còn lại random
@@ -738,7 +735,7 @@ If Image 2 HAS a human hand or wrist, apply these MANDATORY rules:
           liveLog(`🚀 Sinh Content test cho tài khoản: ${account.name}...`, 'info', 'System');
           checkAbort();
           
-          if (postMode === 'REELS' || postMode === 'STORY') {
+          if (postMode === 'REELS') {
             let reelsPrompt = '';
             if (selectedSku.name.toUpperCase().includes('DAILY VLOG')) {
                reelsPrompt = `Đây là một video Daily Vlog (hoạt động hằng ngày: đóng hàng, giao hàng, vệ sinh đồng hồ...). Hãy đóng vai nhân viên của I&W Carnival, viết một đoạn caption thật ngắn gọn, tự nhiên, vui vẻ, thân thiện. Tuyệt đối KHÔNG quảng cáo hay chèo kéo mua hàng. Chỉ dùng hashtag #iwcarnivalvietnam #iwcarnival #dailyvlog`;
@@ -1328,7 +1325,6 @@ const pickFallbackDriveMediaForSku = async (skuFolder, postedIds) => {
     { folder: '2_Anh_Tu_Chup', mode: 'ALBUM', video: false },
     { folder: '1_Anh_Hang', mode: 'ALBUM', video: false },
     { folder: '3_Video_Doc', mode: 'REELS', video: true },
-    { folder: '4_Video_Story', mode: 'STORY', video: true },
   ];
   for (const option of fallbackOptions) {
     try {
@@ -1483,13 +1479,13 @@ export const autoPublishRoutine = async (retryContext = null, runOptions = {}) =
     const shuffledSkus = await getSmartFilteredSkus(eligibleSkus, []);
 
     const folderTypes = forcedContentKind === 'video'
-      ? ['3_Video_Doc', '4_Video_Story']
+      ? ['3_Video_Doc']
       : forcedContentKind === 'post'
         ? ['0_Anh_AVT', '1_Anh_Hang', '2_Anh_Tu_Chup']
-        : ['0_Anh_AVT', '1_Anh_Hang', '2_Anh_Tu_Chup', '3_Video_Doc', '4_Video_Story'];
+        : ['0_Anh_AVT', '1_Anh_Hang', '2_Anh_Tu_Chup', '3_Video_Doc'];
     let selectedImages = [];
     let selectedSku = null;
-    let postMode = 'SINGLE'; // SINGLE (AI), ALBUM, REELS, hoặc STORY
+    let postMode = 'SINGLE'; // SINGLE (AI), ALBUM, hoặc REELS
 
     // Tìm ảnh/video chưa đăng
     for (const skuFolder of shuffledSkus) {
@@ -1514,7 +1510,7 @@ export const autoPublishRoutine = async (retryContext = null, runOptions = {}) =
         if (!targetFolderId) continue;
 
         let mediaFiles = [];
-        if (folderName === '3_Video_Doc' || folderName === '4_Video_Story') {
+        if (folderName === '3_Video_Doc') {
           mediaFiles = await getVideosInFolder(targetFolderId);
         } else {
           mediaFiles = await getImagesInFolder(targetFolderId);
@@ -1533,10 +1529,6 @@ export const autoPublishRoutine = async (retryContext = null, runOptions = {}) =
             // Chế độ Reels: Lấy 1 Video
             selectedImages = [freshMedia[Math.floor(Math.random() * freshMedia.length)]];
             postMode = 'REELS';
-          } else if (folderName === '4_Video_Story') {
-            // Chế độ Story: Lấy 1 Video đăng lên Story Facebook
-            selectedImages = [freshMedia[Math.floor(Math.random() * freshMedia.length)]];
-            postMode = 'STORY';
           } else {
             // Chế độ Album: Bốc ngẫu nhiên 4-8 tấm
             const numToPick = Math.min(freshMedia.length, Math.floor(Math.random() * 5) + 4); // Random 4 đến 8
@@ -1833,9 +1825,7 @@ export const autoPublishRoutine = async (retryContext = null, runOptions = {}) =
               postMode = driveFallback.postMode;
               const fallbackDesc = postMode === 'REELS'
                 ? '1 video có sẵn'
-                : postMode === 'STORY'
-                  ? '1 video Story có sẵn'
-                  : `${newPaths.length} ảnh thật có sẵn`;
+                : `${newPaths.length} ảnh thật có sẵn`;
               liveLog(
                 `🔄 [AUTO PUBLISH] Tạo ảnh AI thất bại (${pwError.message}). Đã chuyển luồng: đăng ${fallbackDesc} trong Drive của SKU ${selectedSku.name}.`,
                 'warning',
@@ -1937,7 +1927,7 @@ export const autoPublishRoutine = async (retryContext = null, runOptions = {}) =
             }
 
             let contentPromptUsed = '';
-            if (postMode === 'REELS' || postMode === 'STORY') {
+            if (postMode === 'REELS') {
               let reelsPrompt = '';
               if (selectedSku.name.toUpperCase().includes('DAILY VLOG')) {
                  reelsPrompt = `Đây là một video Daily Vlog (hoạt động hằng ngày: đóng hàng, giao hàng, vệ sinh đồng hồ...). Hãy đóng vai nhân viên của I&W Carnival, viết một đoạn caption thật ngắn gọn, tự nhiên, vui vẻ, thân thiện. Tuyệt đối KHÔNG quảng cáo hay chèo kéo mua hàng. Chỉ dùng hashtag #iwcarnivalvietnam #iwcarnival #dailyvlog`;
@@ -2023,7 +2013,7 @@ export const autoPublishRoutine = async (retryContext = null, runOptions = {}) =
                 retryPrompt = `${contentPromptUsed}\n\n[LẦN SỬA ${contentRegenAttempts}: Nội dung lần trước chưa đạt chuẩn: ${failedParts.join('; ')}. Hãy viết lại HOÀN TOÀN MỚI và khắc phục các lỗi đó. Giữ đúng format tiêu đề FACEBOOK: và INSTAGRAM:.]`;
                 liveLog(`🔄 [${account.name}] Nội dung chưa đạt chuẩn (${failedParts.join('; ')}). Đang sinh lại lần ${contentRegenAttempts}...`, 'warning', 'System');
               }
-              if (postMode === 'REELS' || postMode === 'STORY') {
+              if (postMode === 'REELS') {
                 const reelsContent = await generateContentOnChatGPT(retryPrompt, 'reels', targetImgPathForGemini);
                 fbContent = reelsContent;
                 igContent = reelsContent;
@@ -2230,44 +2220,6 @@ export const autoPublishRoutine = async (retryContext = null, runOptions = {}) =
 
             if (finalVideoPath !== localFilePaths[0] && fs.existsSync(finalVideoPath)) {
               fs.unlinkSync(finalVideoPath);
-            }
-
-         } else if (postMode === 'STORY') {
-            // Đăng video lên Story Facebook (yêu cầu 9:16, tối đa 60 giây)
-            let finalStoryPath = localFilePaths[0];
-            if (pageToken) {
-               try {
-                  const storyOutPath = localFilePaths[0].replace(/\.[^/.]+$/, `_story_${Date.now()}.mp4`);
-                  try {
-                     finalStoryPath = await toStoryFormat(localFilePaths[0], storyOutPath);
-                  } catch (fmtErr) {
-                     liveLog(`⚠️ [${account.name}] Không chuyển được video sang định dạng Story (${fmtErr.message}). Dùng video gốc.`, 'warning', 'System');
-                     finalStoryPath = localFilePaths[0];
-                  }
-                  const storyId = await publishFBStoryVideo(finalStoryPath, { fbAccessToken: pageToken });
-                  if (storyId) {
-                     publishSucceeded = true;
-                     successfulPlatforms.add('facebook');
-                     try {
-                        await addPostMetric('facebook_story', storyId, selectedSku.name, postContent, metricMetadata);
-                     } catch (metricError) {
-                        console.warn(`⚠️ FB Story đã đăng nhưng không lưu được metric: ${metricError.message}`);
-                     }
-                     liveLog(`✅ [${account.name}] Đăng FB Story thành công! (ID: ${storyId})`, 'success', 'Facebook');
-                     addNotification({ type: 'publish-success', title: 'Đã đăng Facebook Story', details: `SKU ${selectedSku.name}` });
-                  }
-               } catch (e) {
-                  liveLog(`❌ [${account.name}] Lỗi FB Story: ${e.message}`, 'error', 'Facebook');
-                  await sendAlert({
-                     type: 'publish-error',
-                     title: 'Lỗi đăng Facebook Story',
-                     details: `Tài khoản: ${account.name}\nSKU: ${selectedSku.name}\nLỗi: ${e.message}`,
-                  });
-               } finally {
-                  if (finalStoryPath !== localFilePaths[0] && fs.existsSync(finalStoryPath)) {
-                     fs.unlinkSync(finalStoryPath);
-                  }
-               }
             }
 
          } else if (localFilePaths.length === 1) {

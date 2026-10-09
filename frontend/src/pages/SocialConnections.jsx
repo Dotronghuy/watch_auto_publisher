@@ -17,6 +17,11 @@ const SocialConnections = () => {
   const [igDelayMin, setIgDelayMin] = useState(10);
   const [igDelayMax, setIgDelayMax] = useState(20);
   const [prioritySkus, setPrioritySkus] = useState('');
+
+  // Luồng Story Facebook (job riêng, lịch riêng)
+  const [storyEnabled, setStoryEnabled] = useState(false);
+  const [storyIntervalMinutes, setStoryIntervalMinutes] = useState(45);
+  const [isRunningStory, setIsRunningStory] = useState(false);
   
   // Sao lưu & khôi phục
   const [backups, setBackups] = useState([]);
@@ -78,6 +83,8 @@ const SocialConnections = () => {
         setIgDelayMin(data.igDelayMin || 10);
         setIgDelayMax(data.igDelayMax || 20);
         setPrioritySkus(data.prioritySkus || '');
+        setStoryEnabled(data.storyEnabled === true || data.storyEnabled === 'true');
+        setStoryIntervalMinutes(data.storyIntervalMinutes || 45);
         
         setBotEnabled(data.botEnabled || false);
         setBotPauseHours(data.botPauseHours || 2);
@@ -341,6 +348,28 @@ const SocialConnections = () => {
     autoSaveSettings({ timeSlots: updated });
   };
 
+  const triggerStoryNow = async () => {
+    if (isRunningStory) return;
+    setIsRunningStory(true);
+    try {
+      const res = await fetch('/api/trigger-story', { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || 'Không xếp được job Story');
+      Swal.fire({
+        toast: true, position: 'top-end', icon: 'success',
+        title: 'Đã xếp job Story — worker sẽ chạy ngay.',
+        showConfirmButton: false, timer: 3000
+      });
+    } catch (e) {
+      Swal.fire({
+        toast: true, position: 'top-end', icon: 'error',
+        title: e.message || 'Lỗi khi chạy Story',
+        showConfirmButton: false, timer: 3000
+      });
+    }
+    setIsRunningStory(false);
+  };
+
   const loadBackups = async () => {
     try {
       const res = await fetch('/api/backup/list');
@@ -541,6 +570,49 @@ const SocialConnections = () => {
                     <input className="delay-input" type="number" autoComplete="off" value={igDelayMax} onChange={e => setIgDelayMax(e.target.value)} onBlur={() => autoSaveSettings({ igDelayMax })} min="0" disabled={mode === 'test'} />
                     <span className="delay-label">Phút</span>
                   </div>
+                </div>
+
+                {/* Story Facebook — luồng job RIÊNG, lịch riêng */}
+                <div className="schedule-panel">
+                  <h4>📱 Story Facebook</h4>
+                  <p className="panel-desc">
+                    Luồng riêng biệt với bài newfeeds: lấy video từ thư mục 3_Video_Doc, tự ghép nhạc nếu video không có nhạc, rồi đăng lên Story.
+                  </p>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '15px', marginTop: '10px' }}>
+                    <label className="switch" style={{ position: 'relative', display: 'inline-block', width: '50px', height: '24px' }}>
+                      <input
+                        type="checkbox"
+                        checked={storyEnabled}
+                        onChange={(e) => { setStoryEnabled(e.target.checked); autoSaveSettings({ storyEnabled: e.target.checked }); }}
+                        style={{ opacity: 0, width: 0, height: 0, margin: 0 }}
+                      />
+                      <span className="slider round" style={{
+                        position: 'absolute', cursor: 'pointer', top: 0, left: 0, right: 0, bottom: 0,
+                        backgroundColor: storyEnabled ? '#10b981' : '#3f4147', borderRadius: '24px', transition: '.4s'
+                      }}>
+                        <span style={{
+                          position: 'absolute', content: '""', height: '18px', width: '18px', left: storyEnabled ? '28px' : '3px',
+                          bottom: '3px', backgroundColor: 'white', borderRadius: '50%', transition: '.4s'
+                        }}></span>
+                      </span>
+                    </label>
+                    <span style={{ color: storyEnabled ? '#10b981' : '#8a8b91', fontWeight: 'bold' }}>
+                      {storyEnabled ? 'Đang bật' : 'Đang tắt'}
+                    </span>
+                  </div>
+                  <div className="delay-row" style={{ marginTop: '14px' }}>
+                    <span className="delay-label">Cứ mỗi</span>
+                    <input className="delay-input" type="number" autoComplete="off" value={storyIntervalMinutes} onChange={e => setStoryIntervalMinutes(e.target.value)} onBlur={() => autoSaveSettings({ storyIntervalMinutes })} min="1" disabled={!storyEnabled} />
+                    <span className="delay-label">phút đăng 1 story</span>
+                  </div>
+                  <button
+                    className="btn-outline"
+                    onClick={triggerStoryNow}
+                    disabled={isRunningStory}
+                    style={{ marginTop: '14px', padding: '6px 14px', fontSize: '12px' }}
+                  >
+                    <Play size={14} /> {isRunningStory ? 'Đang xếp job...' : 'Chạy 1 story ngay'}
+                  </button>
                 </div>
               </div>
 

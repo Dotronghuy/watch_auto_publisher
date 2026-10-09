@@ -514,6 +514,18 @@ router.post('/trigger-workflow', async (req, res) => {
   res.json({ success: true, message: 'Luồng thật đã được khởi động!' });
 });
 
+// 4c. Chạy 1 job Story Facebook ngay (luồng story riêng)
+router.post('/trigger-story', async (req, res) => {
+  try {
+    const job = await publishQueue.add('storyPublishJob', { manual: true });
+    console.log(`🎬 Đã xếp job Story thủ công vào hàng đợi (Job ID: ${job.id})`);
+    sendLogToClients({ time: new Date().toLocaleTimeString(), sender: 'System', message: '🎬 Đã xếp job Story vào hàng đợi, worker sẽ chạy ngay...', type: 'info' });
+    res.json({ success: true, jobId: job.id, message: 'Đã xếp job Story vào hàng đợi.' });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
 // 4b. Dừng Luồng NGAY LẬP TỨC (Abrupt Stop)
 router.post('/stop-workflow', async (req, res) => {
   triggerGlobalStop(); // Phát tín hiệu abort ngay lập tức

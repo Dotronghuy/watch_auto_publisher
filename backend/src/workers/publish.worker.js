@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import { Worker } from 'bullmq';
 import { autoPublishRoutine, resetGlobalStop } from '../services/publish.service.js';
+import { autoStoryRoutine } from '../services/story-publish.service.js';
 import {
   hasSuccessfulPublishResult,
   markLastSuccessfulRun,
@@ -30,6 +31,17 @@ export const worker = new Worker('publishQueue', async job => {
       console.error(`[Worker] Bài đã đăng nhưng không thể cập nhật last_run: ${stateError.message}`);
     }
 
+    return result;
+  }
+
+  if (job.name === 'storyPublishJob') {
+    console.log(`[Worker] Bắt đầu xử lý Job Story Facebook (ID: ${job.id})`);
+    const result = await autoStoryRoutine();
+    if (result?.storyPosted) {
+      console.log(`[Worker] Job Story hoàn tất: SKU ${result.sku} (${result.accounts} tài khoản).`);
+    } else {
+      console.log(`[Worker] Job Story bỏ qua: ${result?.skipped || 'không xác định'}.`);
+    }
     return result;
   }
 }, { 
