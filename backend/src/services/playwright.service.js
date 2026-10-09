@@ -2642,8 +2642,8 @@ export const findNewGeminiResponseText = (responseTexts, baselineResponseTexts) 
         ? baselineResponseTexts
         : new Set(baselineResponseTexts || []);
     const candidates = [...(responseTexts || [])]
-        .filter((text) => text?.trim() && !baseline.has(text))
-        .map((text) => text.trim());
+        .map((text) => stripGeminiDisclaimers(String(text || '').trim()))
+        .filter((text) => text.length >= 20 && !baseline.has(text));
     if (candidates.length === 0) return '';
     // Ưu tiên khối text dài nhất (câu trả lời đầy đủ) thay vì phần tử cuối cùng
     return candidates.sort((a, b) => b.length - a.length)[0] || '';
