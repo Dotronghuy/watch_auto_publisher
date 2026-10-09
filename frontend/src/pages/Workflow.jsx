@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { ChevronLeft, ChevronRight, Cloud, Settings, Share2, Search, Pause, Terminal, Image as ImageIcon, BrainCircuit, FileText, UploadCloud, RotateCcw, Trash2, FlaskConical, X, MessageSquare, Camera, Zap, CheckCircle, Palette, PenTool, Maximize, Undo2, Redo2, Play, Plus, HelpCircle, Film, Music2, Smartphone } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Cloud, Settings, Share2, Search, Pause, Terminal, Image as ImageIcon, BrainCircuit, FileText, UploadCloud, RotateCcw, Trash2, FlaskConical, X, MessageSquare, Camera, Zap, CheckCircle, Palette, PenTool, Maximize, Undo2, Redo2, Play, Plus, HelpCircle, Music2, Smartphone } from 'lucide-react';
 import Swal from 'sweetalert2';
 import { useAuth } from '../context/AuthContext';
 import './Workflow.css';
@@ -9,9 +9,8 @@ const INITIAL_NODES = {
   gpt: { id: 'gpt', x: 370, y: 30 },
   gemini: { id: 'gemini', x: 670, y: 150 },
   publish: { id: 'publish', x: 980, y: 150 },
-  storySource: { id: 'storySource', x: 40, y: 590 },
-  storyProcess: { id: 'storyProcess', x: 370, y: 590 },
-  storyPublish: { id: 'storyPublish', x: 700, y: 590 },
+  storyProcess: { id: 'storyProcess', x: 420, y: 590 },
+  storyPublish: { id: 'storyPublish', x: 750, y: 590 },
 };
 
 const NODE_CATALOG = [
@@ -19,7 +18,6 @@ const NODE_CATALOG = [
   { id: 'gpt', label: 'GPT-5.5 (Sinh Ảnh)', color: '#f472b6' },
   { id: 'gemini', label: 'GPT-5.5 (Sinh Content)', color: '#a78bfa' },
   { id: 'publish', label: 'Đăng bài Đa kênh', color: '#34d399' },
-  { id: 'storySource', label: 'Nguồn Video Story', color: '#22d3ee' },
   { id: 'storyProcess', label: 'Xử Lý Video Story', color: '#fbbf24' },
   { id: 'storyPublish', label: 'Đăng Story Facebook', color: '#c084fc' },
 ];
@@ -53,15 +51,21 @@ const NODE_HEIGHT_SOURCE = 190;
 const NODE_HEIGHT_GPT = 170;
 const NODE_HEIGHT_GEMINI = 220;
 const NODE_HEIGHT_PUBLISH = 110;
-const NODE_HEIGHT_STORY_SOURCE = 165;
 const NODE_HEIGHT_STORY_PROCESS = 190;
 const NODE_HEIGHT_STORY_PUBLISH = 235;
 
-// Đọc vị trí node đã lưu từ localStorage (merge với node mới nếu phiên bản cũ chưa có)
+// Đọc vị trí node đã lưu từ localStorage (merge với node mới, bỏ node đã xóa khỏi thiết kế)
 const getSavedNodes = () => {
   try {
     const saved = localStorage.getItem('workflow_node_positions');
-    if (saved) return { ...INITIAL_NODES, ...JSON.parse(saved) };
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      const filtered = {};
+      for (const key of Object.keys(INITIAL_NODES)) {
+        if (parsed[key]) filtered[key] = parsed[key];
+      }
+      return { ...INITIAL_NODES, ...filtered };
+    }
   } catch (e) {}
   return INITIAL_NODES;
 };
@@ -80,9 +84,9 @@ const Workflow = () => {
   const [nodes, setNodes] = useState(getSavedNodes);
   const [nodeHeights, setNodeHeights] = useState({
     source: NODE_HEIGHT_SOURCE, gpt: NODE_HEIGHT_GPT, gemini: NODE_HEIGHT_GEMINI, publish: NODE_HEIGHT_PUBLISH,
-    storySource: NODE_HEIGHT_STORY_SOURCE, storyProcess: NODE_HEIGHT_STORY_PROCESS, storyPublish: NODE_HEIGHT_STORY_PUBLISH,
+    storyProcess: NODE_HEIGHT_STORY_PROCESS, storyPublish: NODE_HEIGHT_STORY_PUBLISH,
   });
-  const nodeRefs = useRef({ source: null, gpt: null, gemini: null, publish: null, storySource: null, storyProcess: null, storyPublish: null });
+  const nodeRefs = useRef({ source: null, gpt: null, gemini: null, publish: null, storyProcess: null, storyPublish: null });
   // Workflow editor: selection + undo/redo
   const [selectedIds, setSelectedIds] = useState([]);
   const [past, setPast] = useState([]);
@@ -733,7 +737,8 @@ const Workflow = () => {
       {renderEdge('source', 'gemini', 0.90, 0.90, activeBranch === 3)}
       {renderEdge('gpt', 'gemini', 0.50, 0.30, activeBranch === 1)}
       {renderEdge('gemini', 'publish', 0.50, 0.50, Boolean(activeBranch))}
-      {renderEdge('storySource', 'storyProcess', 0.50, 0.50, storyActive)}
+      {/* Story lấy video từ chính nhánh Video_Doc (3_Video_Doc) của node Nguồn Dữ Liệu */}
+      {renderEdge('source', 'storyProcess', 0.90, 0.50, storyActive)}
       {renderEdge('storyProcess', 'storyPublish', 0.50, 0.50, storyActive)}
     </svg>
   );
@@ -1087,18 +1092,6 @@ const Workflow = () => {
             </div>
             <div className="wf-toolbar-divider" />
             <div className="wf-toolbar-group">
-              <button className="wf-btn primary" onClick={handleRunNow} disabled={!isAiIdle} title="Chạy luồng đăng bài thật ngay (Ctrl+Enter)">
-                <Play size={13} /> Chạy Thật
-              </button>
-              <button className="wf-btn" onClick={handleDryRun} disabled={dryRunLoading || !isAiIdle} title="Chạy thử toàn bộ luồng AI, không đăng (Ctrl+Shift+Enter)">
-                <FlaskConical size={13} /> Dry Run
-              </button>
-              <button className="wf-btn story" onClick={handleRunStoryNow} disabled={storyRunning} title="Chạy 1 Story Facebook ngay (Ctrl+Shift+S)">
-                {storyRunning ? <span className="spin-icon">⟳</span> : <Smartphone size={13} />} Story
-              </button>
-            </div>
-            <div className="wf-toolbar-divider" />
-            <div className="wf-toolbar-group">
               <button className="wf-btn" onClick={() => zoomBy(0.8)} title="Thu nhỏ (Ctrl+-)">−</button>
               <span className="wf-zoom-label">{Math.round(transform.scale * 100)}%</span>
               <button className="wf-btn" onClick={() => zoomBy(1.2)} title="Phóng to (Ctrl+=)">+</button>
@@ -1151,7 +1144,7 @@ const Workflow = () => {
                   <label>Phân nhánh Thư mục</label>
               <div className="condition-pill" style={{borderLeft: `2px solid ${activeBranch === 1 ? 'var(--color-primary)' : '#555'}`, opacity: activeBranch === 1 ? 1 : 0.5}}>① Anh_AVT → Sinh 4-6 ảnh (GPT)</div>
                   <div className="condition-pill" style={{borderLeft: `2px solid ${activeBranch === 2 ? 'var(--color-primary)' : '#555'}`, opacity: activeBranch === 2 ? 1 : 0.5}}>② Anh_Hang/Tu_Chup → Random 4-8 ảnh</div>
-                  <div className="condition-pill" style={{borderLeft: `2px solid ${activeBranch === 3 ? 'var(--color-primary)' : '#555'}`, opacity: activeBranch === 3 ? 1 : 0.4}}>③ Video_Doc → 1 ảnh → Kịch bản</div>
+                  <div className="condition-pill" style={{borderLeft: `2px solid ${activeBranch === 3 ? 'var(--color-primary)' : '#555'}`, opacity: activeBranch === 3 ? 1 : 0.4}}>③ 3_Video_Doc → Kịch bản REELS + Story</div>
                 </div>
               </div>
               <div className="port" style={{top:'30%', right:'-5px', background: activeBranch === 1 ? 'var(--color-primary)' : 'rgba(160,160,180,0.5)'}} title="Nhánh 1 AVT"></div>
@@ -1466,32 +1459,8 @@ const Workflow = () => {
             </div>
             )}
 
-            {/* ───── LUỒNG STORY FACEBOOK ───── */}
-            {/* NODE 5: NGUỒN VIDEO STORY */}
-            {nodes.storySource && (
-            <div
-              ref={el => nodeRefs.current.storySource = el}
-              className={`node-card story-node ${selectedIds.includes('storySource') ? 'selected' : ''}`}
-              style={{ top: nodes.storySource.y, left: nodes.storySource.x, cursor: 'grab' }}
-              onMouseDown={e => onMouseDown(e, 'storySource')}
-            >
-              <div className="node-header"><Film size={14} style={{ color: '#22d3ee' }} /> Nguồn Video Story</div>
-              <div className="node-body">
-                <div className="field">
-                  <label>Nguồn</label>
-                  <div className="value">Google Drive → 3_Video_Doc</div>
-                </div>
-                <div className="field mt-2">
-                  <label>Quy tắc chọn video</label>
-                  <div className="condition-pill" style={{ borderLeft: `2px solid ${storyActive ? 'var(--color-primary)' : '#555'}` }}>🎲 SKU ngẫu nhiên, ưu tiên video mới</div>
-                  <div className="condition-pill" style={{ borderLeft: `2px solid ${storyActive ? 'var(--color-primary)' : '#555'}` }}>🕓 Bỏ qua video đã đăng (story_history.json)</div>
-                </div>
-              </div>
-              <div className="port" style={{top:'50%', right:'-5px', background: storyActive ? 'var(--color-primary)' : undefined}} title="Output → Xử Lý Video"></div>
-            </div>
-            )}
-
-            {/* NODE 6: XỬ LÝ VIDEO STORY */}
+            {/* ───── LUỒNG STORY FACEBOOK (nhận video từ nhánh ③ của Nguồn Dữ Liệu) ───── */}
+            {/* NODE 5: XỬ LÝ VIDEO STORY */}
             {nodes.storyProcess && (
             <div
               ref={el => nodeRefs.current.storyProcess = el}
@@ -1499,9 +1468,14 @@ const Workflow = () => {
               style={{ top: nodes.storyProcess.y, left: nodes.storyProcess.x, cursor: 'grab' }}
               onMouseDown={e => onMouseDown(e, 'storyProcess')}
             >
-              <div className="port" style={{top:'50%', left:'-5px', background: storyActive ? 'var(--color-primary)' : undefined}} title="Input từ Nguồn Video"></div>
+              <div className="port" style={{top:'50%', left:'-5px', background: storyActive ? 'var(--color-primary)' : undefined}} title="Input từ Nguồn Dữ Liệu (3_Video_Doc)"></div>
               <div className="node-header"><Music2 size={14} style={{ color: '#fbbf24' }} /> Xử Lý Video Story</div>
               <div className="node-body">
+                <div className="field">
+                  <label>Chọn video từ 3_Video_Doc</label>
+                  <div className="condition-pill" style={{ borderLeft: `2px solid ${storyActive ? 'var(--color-primary)' : '#555'}` }}>🎲 SKU ngẫu nhiên, ưu tiên video mới</div>
+                  <div className="condition-pill" style={{ borderLeft: `2px solid ${storyActive ? 'var(--color-primary)' : '#555'}` }}>🕓 Bỏ qua video đã đăng (story_history.json)</div>
+                </div>
                 <div className="field">
                   <label>Luồng xử lý tự động</label>
                   <div className="condition-pill" style={{ borderLeft: `2px solid ${storyActive ? 'var(--color-primary)' : '#555'}` }}>🎵 Video có nhạc → giữ nguyên</div>
@@ -1513,7 +1487,7 @@ const Workflow = () => {
             </div>
             )}
 
-            {/* NODE 7: ĐĂNG STORY FACEBOOK */}
+            {/* NODE 6: ĐĂNG STORY FACEBOOK */}
             {nodes.storyPublish && (
             <div
               ref={el => nodeRefs.current.storyPublish = el}
