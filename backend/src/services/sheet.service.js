@@ -87,6 +87,23 @@ export const getShopeeLinkFromProductInfo = (productInfo) => {
   return '';
 };
 
+// Danh sách tab trong file Products (để nhân viên chọn tab shop của mình trên giao diện web)
+export const listCatalogSheetTabs = async () => {
+  try {
+    const meta = await sheets.spreadsheets.get({ spreadsheetId: getSheetId() });
+    const tabs = (meta.data.sheets || [])
+      .map((s) => s.properties?.title)
+      .filter((t) => typeof t === 'string' && t.length > 0);
+    return {
+      tabs,
+      currentTab: getShopTab() || tabs[0] || ''
+    };
+  } catch (error) {
+    console.error(`❌ [PRODUCTS] Không đọc được danh sách tab của Sheet ${getSheetId()}: ${error.message}`);
+    return { tabs: [], currentTab: getShopTab() || '' };
+  }
+};
+
 const buildProductInfoMap = (rows) => {
   if (!rows || rows.length === 0) return new Map();
   const headers = rows[0];

@@ -67,6 +67,53 @@
   flex-shrink: 0;
 }
 
+/* ─── Chọn tab dữ liệu (shop) ─── */
+.sheet-tab-picker {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--hint-soft);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  height: 36px;
+  padding: 0 6px 0 10px;
+  transition: all 0.25s var(--ease-smooth);
+}
+
+.sheet-tab-picker:hover {
+  border-color: var(--color-primary);
+  background-color: var(--dim-overlay);
+}
+
+.sheet-tab-icon {
+  color: var(--color-text-dim);
+  flex-shrink: 0;
+}
+
+.sheet-tab-select {
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--color-text-main);
+  font-size: 12px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  height: 100%;
+  padding-right: 2px;
+  max-width: 180px;
+}
+
+.sheet-tab-select:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+
+.sheet-tab-select option {
+  background: #1a1a24;
+  color: #fff;
+}
+
 /* ─── Actions ─── */
 .topbar-actions {
   display: flex;

@@ -10,7 +10,7 @@ import multer from 'multer';
 import { spawn } from 'child_process';
 import { startScheduler } from '../scheduler.js';
 import { autoPublishRoutine, dryRunRoutine, resetGlobalStop, triggerGlobalStop, getIsRunning, forceResetRunningState, trainImageOnly, trainContentOnly } from '../services/publish.service.js';
-import { getProductInfoBySku } from '../services/sheet.service.js';
+import { getProductInfoBySku, listCatalogSheetTabs } from '../services/sheet.service.js';
 import { openLoginHelper, generateContentOnChatGPT, analyzeNewSampleImages, isAiIdle, getAiSessionStatus, verifyAiLoginStatus } from '../services/playwright.service.js';
 import { generateImageWithEngine } from '../services/image-engine.service.js';
 import { connection as redisConnection, publishQueue } from '../workers/queue.js';
@@ -967,6 +967,15 @@ router.get('/settings', (req, res) => {
     }
   } catch (e) {
     res.status(500).json({ error: 'Cannot read settings' });
+  }
+});
+
+// 6b. Danh sách tab trong file Products + tab máy này đang dùng
+router.get('/settings/sheet-tabs', async (req, res) => {
+  try {
+    res.json(await listCatalogSheetTabs());
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
 });
 

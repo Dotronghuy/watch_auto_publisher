@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Search, User, RefreshCw, Play, Square, Command } from 'lucide-react';
+import { Search, User, RefreshCw, Play, Square, Command, Layers } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import Swal from 'sweetalert2';
 import { useAuth } from '../context/AuthContext';
@@ -11,6 +11,9 @@ const Topbar = () => {
   const { user } = useAuth();
   const [isRunning, setIsRunning] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [sheetTabs, setSheetTabs] = useState([]);
+  const [currentTab, setCurrentTab] = useState('');
+  const [tabChanging, setTabChanging] = useState(false);
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -25,6 +28,44 @@ const Topbar = () => {
     const interval = setInterval(checkStatus, 3000);
     return () => clearInterval(interval);
   }, []);
+
+  // Tab dữ liệu (shop) mà máy này đang đọc
+  useEffect(() => {
+    const loadTabs = async () => {
+      try {
+        const res = await fetch('/api/settings/sheet-tabs');
+        const data = await res.json();
+        setSheetTabs(Array.isArray(data.tabs) ? data.tabs : []);
+        setCurrentTab(data.currentTab || '');
+      } catch (e) {}
+    };
+    loadTabs();
+  }, []);
+
+  const handleTabChange = async (e) => {
+    const tab = e.target.value;
+    if (!tab || tab === currentTab || tabChanging) return;
+    setTabChanging(true);
+    try {
+      const res = await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ shopTab: tab })
+      });
+      if (!res.ok) throw new Error('Save failed');
+      setCurrentTab(tab);
+      Swal.fire({
+        title: 'Đã đổi tab dữ liệu',
+        text: `Máy này giờ đọc tab "${tab}". Các lần chạy tiếp theo sẽ lấy link Shopee từ tab này.`,
+        icon: 'success', toast: true, position: 'top-end', showConfirmButton: false, timer: 3500,
+        background: 'var(--color-surface)', color: 'var(--color-text)'
+      });
+    } catch (err) {
+      Swal.fire('Lỗi', 'Không đổi được tab dữ liệu', 'error');
+    } finally {
+      setTabChanging(false);
+    }
+  };
 
   // Mở palette bằng Ctrl+K / Cmd+K hoặc phím "/"
   useEffect(() => {
@@ -62,6 +103,22 @@ const Topbar = () => {
       </button>
 
       <div className="topbar-actions">
+        {sheetTabs.length > 0 && (
+          <div className="sheet-tab-picker" title="Tab dữ liệu sản phẩm máy này đang đọc (chọn shop của mình)">
+            <Layers size={14} className="sheet-tab-icon" />
+            <select
+              className="sheet-tab-select"
+              value={currentTab}
+              onChange={handleTabChange}
+              disabled={tabChanging}
+            >
+              {sheetTabs.map(t => (
+                <option key={t} value={t}>{t}</option>
+              ))}
+            </select>
+          </div>
+        )}
+
         <button className="btn-outline" onClick={async () => {
           try {
             await fetch('/api/trigger-sync', { method: 'POST' });
