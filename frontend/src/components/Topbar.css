@@ -69,20 +69,38 @@
 
 /* ─── Chọn tab dữ liệu (shop) ─── */
 .sheet-tab-picker {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.sheet-tab-trigger {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 7px;
   background: var(--hint-soft);
   border: 1px solid var(--border-light);
   border-radius: var(--radius-md);
   height: 36px;
-  padding: 0 6px 0 10px;
+  padding: 0 12px;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
   transition: all 0.25s var(--ease-smooth);
 }
 
-.sheet-tab-picker:hover {
+.sheet-tab-trigger:hover {
+  color: var(--color-text-main);
   border-color: var(--color-primary);
   background-color: var(--dim-overlay);
+  transform: translateY(-1px);
+}
+
+.sheet-tab-trigger:disabled {
+  opacity: 0.5;
+  cursor: wait;
+  transform: none;
 }
 
 .sheet-tab-icon {
@@ -90,28 +108,85 @@
   flex-shrink: 0;
 }
 
-.sheet-tab-select {
-  background: transparent;
+.sheet-tab-name {
+  max-width: 170px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sheet-tab-caret {
+  opacity: 0.55;
+  flex-shrink: 0;
+  transition: transform 0.2s var(--ease-smooth);
+}
+
+.sheet-tab-caret.open {
+  transform: rotate(180deg);
+}
+
+.sheet-tab-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 100;
+  min-width: 220px;
+  padding: 6px;
+  border-radius: 14px;
+  border: 1px solid var(--border-light);
+  background: var(--glass-dropdown);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  box-shadow: var(--shadow-3);
+  animation: menu-pop 0.18s var(--ease-smooth);
+}
+
+.sheet-tab-menu-title {
+  font-size: 10px;
+  color: var(--color-text-dim);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 6px 11px 4px;
+}
+
+.sheet-tab-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 11px;
   border: none;
-  outline: none;
-  color: var(--color-text-main);
-  font-size: 12px;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: 12.5px;
   font-weight: 600;
   font-family: inherit;
   cursor: pointer;
-  height: 100%;
-  padding-right: 2px;
-  max-width: 180px;
+  transition: background 0.18s, color 0.18s;
+  text-align: left;
 }
 
-.sheet-tab-select:disabled {
-  opacity: 0.5;
-  cursor: wait;
+.sheet-tab-option:hover {
+  background: var(--hint-soft);
+  color: var(--color-text-main);
 }
 
-.sheet-tab-select option {
-  background: #1a1a24;
-  color: #fff;
+.sheet-tab-option.active {
+  background: rgba(255, 77, 141, 0.1);
+  color: var(--color-primary);
+}
+
+.sheet-tab-option-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sheet-tab-check {
+  flex-shrink: 0;
 }
 
 /* ─── Actions ─── */

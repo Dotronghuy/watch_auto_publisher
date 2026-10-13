@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import { Search, User, RefreshCw, Play, Square, Command, Layers } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import { Search, User, RefreshCw, Play, Square, Command, Layers, ChevronDown, Check } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import Swal from 'sweetalert2';
 import { useAuth } from '../context/AuthContext';
@@ -14,6 +14,8 @@ const Topbar = () => {
   const [sheetTabs, setSheetTabs] = useState([]);
   const [currentTab, setCurrentTab] = useState('');
   const [tabChanging, setTabChanging] = useState(false);
+  const [tabMenuOpen, setTabMenuOpen] = useState(false);
+  const tabPickerRef = useRef(null);
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -42,8 +44,23 @@ const Topbar = () => {
     loadTabs();
   }, []);
 
-  const handleTabChange = async (e) => {
-    const tab = e.target.value;
+  // Đóng menu khi bấm ra ngoài hoặc bấm Escape
+  useEffect(() => {
+    if (!tabMenuOpen) return;
+    const onDown = (e) => {
+      if (tabPickerRef.current && !tabPickerRef.current.contains(e.target)) setTabMenuOpen(false);
+      if (e.key === 'Escape') setTabMenuOpen(false);
+    };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onDown);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onDown);
+    };
+  }, [tabMenuOpen]);
+
+  const handleTabPick = async (tab) => {
+    setTabMenuOpen(false);
     if (!tab || tab === currentTab || tabChanging) return;
     setTabChanging(true);
     try {
@@ -104,18 +121,35 @@ const Topbar = () => {
 
       <div className="topbar-actions">
         {sheetTabs.length > 0 && (
-          <div className="sheet-tab-picker" title="Tab dữ liệu sản phẩm máy này đang đọc (chọn shop của mình)">
-            <Layers size={14} className="sheet-tab-icon" />
-            <select
-              className="sheet-tab-select"
-              value={currentTab}
-              onChange={handleTabChange}
+          <div className="sheet-tab-picker" ref={tabPickerRef}>
+            <button
+              type="button"
+              className="sheet-tab-trigger"
+              onClick={() => setTabMenuOpen(o => !o)}
+              title="Tab dữ liệu sản phẩm máy này đang đọc (chọn shop của mình)"
               disabled={tabChanging}
             >
-              {sheetTabs.map(t => (
-                <option key={t} value={t}>{t}</option>
-              ))}
-            </select>
+              <Layers size={14} className="sheet-tab-icon" />
+              <span className="sheet-tab-name">{currentTab || 'Chọn tab'}</span>
+              <ChevronDown size={13} className={`sheet-tab-caret ${tabMenuOpen ? 'open' : ''}`} />
+            </button>
+
+            {tabMenuOpen && (
+              <div className="sheet-tab-menu">
+                <div className="sheet-tab-menu-title">Tab dữ liệu (shop)</div>
+                {sheetTabs.map(t => (
+                  <button
+                    key={t}
+                    type="button"
+                    className={`sheet-tab-option ${t === currentTab ? 'active' : ''}`}
+                    onClick={() => handleTabPick(t)}
+                  >
+                    <span className="sheet-tab-option-name">{t}</span>
+                    {t === currentTab && <Check size={13} className="sheet-tab-check" />}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         )}
 
