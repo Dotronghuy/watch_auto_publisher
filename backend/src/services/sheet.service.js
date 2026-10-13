@@ -53,6 +53,28 @@ const getSheetId = () => {
   return process.env.CATALOG_SHEET_ID || DEFAULT_CATALOG_SHEET_ID;
 };
 
+// Tab Products mà máy này quản lý (mỗi shop/máy 1 tab riêng trong cùng 1 file Sheets).
+// Không khai báo → đọc tab đầu tiên như cũ (tương thích ngược).
+const getShopTab = () => {
+  try {
+    const settingsPath = path.join(__dirname, '../../config/settings.json');
+    if (fs.existsSync(settingsPath)) {
+      const settings = readJsonFileSync(settingsPath);
+      const tab = String(settings.shopTab || '').trim();
+      if (tab) return tab;
+    }
+  } catch (e) {}
+  return String(process.env.SHOP_TAB || '').trim();
+};
+
+// Gắn tên tab vào range A1 (vd: 'NickA'!A:AL). Tab có khoảng trắng/ký tự đặc biệt
+// phải đặt trong dấu nháy đơn, nháy đơn bên trong tên được nhân đôi.
+const withShopTab = (range) => {
+  const tab = getShopTab();
+  if (!tab) return range;
+  return `'${tab.replace(/'/g, "''")}'!${range}`;
+};
+
 export const getShopeeLinkFromProductInfo = (productInfo) => {
   if (!productInfo || typeof productInfo !== 'object') return '';
 
@@ -102,7 +124,7 @@ const loadProductInfoMap = async ({ force = false } = {}) => {
   productInfoLoadPromise = (async () => {
     const res = await sheets.spreadsheets.values.get({
       spreadsheetId: getSheetId(),
-      range: PRODUCT_SHEET_RANGE,
+      range: withShopTab(PRODUCT_SHEET_RANGE),
     });
     const bySku = buildProductInfoMap(res.data.values);
     if (bySku.size === 0) {
@@ -150,7 +172,7 @@ export const updateProductPostInfo = async (sku, postId) => {
   try {
     const res = await sheets.spreadsheets.values.get({
       spreadsheetId: getSheetId(),
-      range: 'A:C', // Mã sản phẩm nằm ở cột C
+      range: withShopTab('A:C'), // Mã sản phẩm nằm ở cột C
     });
 
     const rows = res.data.values;
@@ -171,7 +193,7 @@ export const updateProductPostInfo = async (sku, postId) => {
       // 1. Viết tiêu đề nếu chưa có (Ghi vào 2 cột AI và AJ)
       await sheets.spreadsheets.values.update({
         spreadsheetId: getSheetId(),
-        range: 'AI1:AJ1',
+        range: withShopTab('AI1:AJ1'),
         valueInputOption: 'USER_ENTERED',
         requestBody: { values: [['Post ID', 'Ngày đăng']] }
       });
@@ -180,7 +202,7 @@ export const updateProductPostInfo = async (sku, postId) => {
       const now = new Date().toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' });
       await sheets.spreadsheets.values.update({
         spreadsheetId: getSheetId(),
-        range: `AI${rowIndex}:AJ${rowIndex}`,
+        range: withShopTab(`AI${rowIndex}:AJ${rowIndex}`),
         valueInputOption: 'USER_ENTERED',
         requestBody: { values: [[postId, now]] }
       });
@@ -197,7 +219,7 @@ export const getAllProductsPostInfo = async () => {
   try {
     const res = await sheets.spreadsheets.values.get({
       spreadsheetId: getSheetId(),
-      range: 'A:AK',
+      range: withShopTab('A:AK'),
     });
 
     const rows = res.data.values;
@@ -215,7 +237,7 @@ export const getAllProductsPostInfo = async () => {
     if (cycleIndex === -1) {
       await sheets.spreadsheets.values.update({
         spreadsheetId: getSheetId(),
-        range: 'AK1',
+        range: withShopTab('AK1'),
         valueInputOption: 'USER_ENTERED',
         requestBody: { values: [['Chu kỳ đăng (phút)']] }
       });
@@ -270,7 +292,7 @@ export const syncProductCatalog = async () => {
   try {
     const res = await sheets.spreadsheets.values.get({
       spreadsheetId: getSheetId(),
-      range: PRODUCT_SHEET_RANGE,
+      range: withShopTab(PRODUCT_SHEET_RANGE),
     });
 
     const rows = res.data.values;
@@ -335,7 +357,7 @@ export const clearExpiredPostInfo = async (rowIndices) => {
   if (!rowIndices || rowIndices.length === 0) return;
   try {
     const data = rowIndices.map(rowIndex => ({
-      range: `AI${rowIndex}:AJ${rowIndex}`,
+      range: withShopTab(`AI${rowIndex}:AJ${rowIndex}`),
       values: [['', '']]
     }));
 
