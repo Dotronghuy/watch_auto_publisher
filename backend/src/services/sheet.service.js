@@ -31,6 +31,7 @@ const PRODUCT_INFO_CACHE_TTL_MS = Math.max(
 );
 let productInfoCache = {
   expiresAt: 0,
+  tab: null,
   bySku: new Map()
 };
 let productInfoLoadPromise = null;
@@ -112,10 +113,12 @@ const buildProductInfoMap = (rows) => {
 };
 
 const loadProductInfoMap = async ({ force = false } = {}) => {
+  const activeTab = getShopTab();
   if (
     !force
     && productInfoCache.bySku.size > 0
     && productInfoCache.expiresAt > Date.now()
+    && productInfoCache.tab === activeTab
   ) {
     return productInfoCache.bySku;
   }
@@ -132,6 +135,7 @@ const loadProductInfoMap = async ({ force = false } = {}) => {
     }
     productInfoCache = {
       expiresAt: Date.now() + PRODUCT_INFO_CACHE_TTL_MS,
+      tab: activeTab,
       bySku
     };
     return bySku;
@@ -144,7 +148,7 @@ const loadProductInfoMap = async ({ force = false } = {}) => {
 
 export const warmProductInfoCache = async () => {
   const bySku = await loadProductInfoMap();
-  console.log(`✅ Đã làm nóng cache Product: ${bySku.size} SKU.`);
+  console.log(`✅ Đã làm nóng cache Product: ${bySku.size} SKU (tab: ${getShopTab() || '(tab đầu tiên)'}).`);
   return bySku.size;
 };
 
@@ -301,6 +305,7 @@ export const syncProductCatalog = async () => {
     if (refreshedProductInfo.size > 0) {
       productInfoCache = {
         expiresAt: Date.now() + PRODUCT_INFO_CACHE_TTL_MS,
+        tab: getShopTab(),
         bySku: refreshedProductInfo
       };
     }
