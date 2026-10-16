@@ -31,13 +31,14 @@ if %errorlevel% equ 0 (
 )
 
 :: ============================================
-:: BUOC 1: Dong bo code moi nhat tu GitHub
+:: BUOC 1: Dong bo code moi nhat tu GitHub (bo qua voi ban ZIP)
 :: ============================================
-echo [1/6] Dang dong bo code moi nhat tu GitHub...
+echo [1/6] Dang kiem tra cap nhat code...
 if not exist ".git" (
-    echo    [LOI] Thu muc nay khong phai ban Git clone, khong the tu dong cap nhat.
-    pause
-    exit /b 1
+    echo    [OK] Ban dang dung ban ZIP - khong can Git/GitHub.
+    echo    Luu y: ban ZIP khong tu cap nhat. Muon co tinh nang moi, tai ban ZIP
+    echo    moi nhat tu Google Drive roi giai nen de len thu muc cu.
+    goto DONE_SYNC
 )
 
 where git >nul 2>&1
@@ -55,6 +56,8 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 echo    [OK] Code da dong bo thanh cong tu GitHub.
+
+:DONE_SYNC
 
 :: ============================================
 :: BUOC 2: Kiem tra va cai dat thu vien moi (neu co)

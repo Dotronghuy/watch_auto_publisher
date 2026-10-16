@@ -41,10 +41,14 @@ if %errorlevel% neq 0 (
 )
 
 :: ============================================
-:: BUOC 2: Kiem tra Git
+:: BUOC 2: Kiem tra Git (chi can voi ban Git clone, bo qua voi ban ZIP)
 :: ============================================
 echo.
 echo [2/5] Dang kiem tra Git...
+if not exist ".git" (
+    echo    [OK] Ban dang dung ban ZIP - khong can Git.
+    goto SKIP_GIT
+)
 where git >nul 2>&1
 if %errorlevel% neq 0 (
     echo.
@@ -68,6 +72,7 @@ if %errorlevel% neq 0 (
     for /f "tokens=*" %%i in ('git --version') do set GIT_VER=%%i
     echo    [OK] Git da duoc cai dat: %GIT_VER%
 )
+:SKIP_GIT
 
 :: ============================================
 :: BUOC 3: Tai va Cai dat Redis (Portable)
